@@ -1024,7 +1024,7 @@ fn build_iron_circuit() -> Result<Project> {
     // Nested Percussion Group -> Rhythm Group
     let mut perc_grp = Channel::new(ch_perc_grp, ChannelKind::Group, "Percussion");
     perc_grp.output = ChannelRef::Channel(ch_rhythm_grp);
-    perc_grp.strip.gain = 0.76;
+    perc_grp.strip.gain = 0.70;
     perc_grp.inserts = vec![
         fx(
             fx_perc_comp,
@@ -1055,7 +1055,7 @@ fn build_iron_circuit() -> Result<Project> {
     // Rhythm Group (Percussion Group + Fold Bass) -> Master
     let mut rhythm_grp = Channel::new(ch_rhythm_grp, ChannelKind::Group, "Rhythm");
     rhythm_grp.output = ChannelRef::Master;
-    rhythm_grp.strip.gain = 0.70;
+    rhythm_grp.strip.gain = 0.74;
     rhythm_grp.inserts = vec![
         fx(
             fx_rhythm_eq,
@@ -1220,7 +1220,7 @@ fn build_iron_circuit() -> Result<Project> {
     let mut c_fold = Channel::new(ch_fold, ChannelKind::Audio, "Fold Bass");
     c_fold.output = ChannelRef::Channel(ch_rhythm_grp);
     c_fold.strip = ChannelStrip {
-        gain: 0.54,
+        gain: 0.50,
         pan: 0.0,
     };
     c_fold.inserts = vec![

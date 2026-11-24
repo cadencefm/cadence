@@ -12,9 +12,20 @@
 //! - `Plate`: 2D circular bronze plate / bell / gong / cymbal following Weyl modal density
 //!   with natural radial-asymmetry doublet splittings and bell-to-edge strike weighting.
 
-use crate::dsp::math::{flush_denormal_f64, sanitize_sample_f64, sanitize_sample_rate};
+use crate::dsp::math::{
+    flush_denormal_f64, sanitize_clamp_f64, sanitize_sample_f64, sanitize_sample_rate,
+    DECAY_LN_60DB, LIN_FLOOR_F64, SMOOTH_SETTLE_EPS_F64,
+};
 use crate::rack::ResonatorMode;
 use std::f64::consts::{PI, TAU};
+
+/// Upper pole-radius stability ceiling in `f64` (`1.0 - 1e-7`, supporting exact `-60 dB`
+/// RT60 tails up to `~180 s` at `384 kHz` without truncating long decays at `192 kHz`).
+const MAX_POLE_RADIUS: f64 = 0.999_999_9;
+/// Minimum `1 - r²` floor guarding excitation normalization against rounding underflow.
+const MIN_POLE_ENERGY_FLOOR: f64 = 1e-12;
+/// Stereo-vs-mono channel equality threshold (`-240 dB`).
+const STEREO_MATCH_EPS: f64 = SMOOTH_SETTLE_EPS_F64;
 
 /// Number of parallel complex damped physical modes in [`ModalResonator`].
 pub const RESONATOR_MODES: usize = 32;
@@ -76,34 +87,21 @@ pub fn resonator_mode_descriptors(
 ) -> [ResonatorModeDescriptor; RESONATOR_MODES] {
     let sr = sanitize_sample_rate(sample_rate);
     let max_hz = (sr * 0.455).min(RESONATOR_AUDIBLE_MAX_HZ);
-    let f0 = if base_hz.is_finite() {
-        base_hz.clamp(
-            f64::from(RESONATOR_MIN_HZ),
-            max_hz.min(f64::from(RESONATOR_MAX_HZ)),
-        )
-    } else {
-        440.0
-    };
-    let struc = f64::from(if structure.is_finite() {
-        structure.clamp(0.0, 1.0)
-    } else {
-        0.5
-    });
-    let dec_ms = f64::from(if decay_ms.is_finite() {
-        decay_ms.clamp(RESONATOR_MIN_DECAY_MS, RESONATOR_MAX_DECAY_MS)
-    } else {
-        900.0
-    });
-    let bright = f64::from(if brightness.is_finite() {
-        brightness.clamp(0.0, 1.0)
-    } else {
-        0.65
-    });
-    let pos = f64::from(if position.is_finite() {
-        position.clamp(0.0, 1.0)
-    } else {
-        0.35
-    });
+    let f0 = sanitize_clamp_f64(
+        base_hz,
+        f64::from(RESONATOR_MIN_HZ),
+        max_hz.min(f64::from(RESONATOR_MAX_HZ)),
+        440.0,
+    );
+    let struc = sanitize_clamp_f64(f64::from(structure), 0.0, 1.0, 0.5);
+    let dec_ms = sanitize_clamp_f64(
+        f64::from(decay_ms),
+        f64::from(RESONATOR_MIN_DECAY_MS),
+        f64::from(RESONATOR_MAX_DECAY_MS),
+        900.0,
+    );
+    let bright = sanitize_clamp_f64(f64::from(brightness), 0.0, 1.0, 0.65);
+    let pos = sanitize_clamp_f64(f64::from(position), 0.0, 1.0, 0.35);
 
     let mut out = [ResonatorModeDescriptor::default(); RESONATOR_MODES];
     let damp_slope = -2.2 + 2.45 * bright;
@@ -192,6 +190,7 @@ pub struct ModalResonator {
     input_b: [f64; RESONATOR_MODES],
     gain: [f64; RESONATOR_MODES],
     active_count: usize,
+    stereo_diverged: bool,
 }
 
 impl Default for ModalResonator {
@@ -212,6 +211,7 @@ impl ModalResonator {
             input_b: [0.0; RESONATOR_MODES],
             gain: [0.0; RESONATOR_MODES],
             active_count: 0,
+            stereo_diverged: false,
         };
         bank.set_parameters(ResonatorMode::String, 440.0, 0.5, 900.0, 0.65, 0.35);
         bank
@@ -223,6 +223,7 @@ impl ModalResonator {
         self.sample_rate = sanitize_sample_rate(sample_rate);
         self.re = [[0.0; RESONATOR_MODES]; 2];
         self.im = [[0.0; RESONATOR_MODES]; 2];
+        self.stereo_diverged = false;
     }
 
     /// Recompute per-mode phasor rotation (`cos_r`, `sin_r`), energy-preserving input
@@ -255,9 +256,9 @@ impl ModalResonator {
                 continue;
             }
             // Exact -60 dB pole radius: 10^(-3 / (decay_s * sr)) = exp(-ln(1000) / (decay_s * sr)).
-            let r = (-6.907_755_278_982_137 / (d.decay_s * sr))
+            let r = (-DECAY_LN_60DB / (d.decay_s * sr))
                 .exp()
-                .clamp(0.0, 0.999_995);
+                .clamp(0.0, MAX_POLE_RADIUS);
             let w = TAU * d.freq_hz / sr;
             let (sin_w, cos_w) = w.sin_cos();
             self.cos_r[k] = r * cos_w;
@@ -266,8 +267,10 @@ impl ModalResonator {
             // `sqrt((1 - r^2) * (44_100 / sr))` keeps both constant-PSD noise excitation
             // (`Var ∝ b^2 * sr / (1 - r^2)`) and coherent/feedback resonant peak gain
             // (`|H(f_k)| = b / (1 - r)`) invariant across `24..192 kHz` and `15..8000 ms`.
-            self.input_b[k] =
-                ((1.0 - r * r).max(1e-9) * (RESONATOR_REF_SAMPLE_RATE / sr)).sqrt() * 2.4;
+            self.input_b[k] = ((1.0 - r * r).max(MIN_POLE_ENERGY_FLOOR)
+                * (RESONATOR_REF_SAMPLE_RATE / sr))
+                .sqrt()
+                * 2.4;
             self.gain[k] = d.gain;
             active_count = k + 1;
         }
@@ -279,11 +282,7 @@ impl ModalResonator {
     pub fn process_stereo(&mut self, input: [f64; 2], mix: f64) -> [f64; 2] {
         let dry_l = sanitize_sample_f64(input[0]);
         let dry_r = sanitize_sample_f64(input[1]);
-        let m = if mix.is_finite() {
-            mix.clamp(0.0, 1.0)
-        } else {
-            1.0
-        };
+        let m = sanitize_clamp_f64(mix, 0.0, 1.0, 1.0);
         let n = self.active_count;
         if n == 0 {
             return [dry_l * (1.0 - m), dry_r * (1.0 - m)];
@@ -291,12 +290,15 @@ impl ModalResonator {
         // Guard extreme feedback excitations without altering normal dynamic range.
         let x_l = dry_l.clamp(-8.0, 8.0);
         let x_r = dry_r.clamp(-8.0, 8.0);
-        let mono_in = (x_l - x_r).abs() < 1e-12;
+        let mono_in = (x_l - x_r).abs() < STEREO_MATCH_EPS;
+        if !mono_in {
+            self.stereo_diverged = true;
+        }
 
         let mut wet_l = 0.0_f64;
         let mut wet_r = 0.0_f64;
 
-        if mono_in && (self.re[0][0] - self.re[1][0]).abs() < 1e-12 {
+        if mono_in && !self.stereo_diverged {
             // Fast mono path: step channel 0 and mirror cleanly to channel 1 (2x speedup on mono drums/synths).
             for k in 0..n {
                 let c = self.cos_r[k];
@@ -313,6 +315,7 @@ impl ModalResonator {
             }
             wet_r = wet_l;
         } else {
+            let mut any_diff = !mono_in;
             for k in 0..n {
                 let c = self.cos_r[k];
                 let s = self.sin_r[k];
@@ -334,6 +337,16 @@ impl ModalResonator {
                 self.re[1][k] = nre1;
                 self.im[1][k] = nim1;
                 wet_r += nim1 * g;
+
+                if !any_diff
+                    && ((nre0 - nre1).abs() > STEREO_MATCH_EPS
+                        || (nim0 - nim1).abs() > STEREO_MATCH_EPS)
+                {
+                    any_diff = true;
+                }
+            }
+            if !any_diff {
+                self.stereo_diverged = false;
             }
         }
 
@@ -345,8 +358,8 @@ impl ModalResonator {
     pub fn quiet(&self) -> bool {
         let n = self.active_count;
         for k in 0..n {
-            if self.re[0][k].abs() + self.im[0][k].abs() >= 1e-6
-                || self.re[1][k].abs() + self.im[1][k].abs() >= 1e-6
+            if self.re[0][k].abs() + self.im[0][k].abs() >= LIN_FLOOR_F64
+                || self.re[1][k].abs() + self.im[1][k].abs() >= LIN_FLOOR_F64
             {
                 return false;
             }
@@ -602,5 +615,74 @@ mod tests {
                 "tonal-excited String drifted at sr={sr}: {db:.2} vs {ref_tonal_db:.2} dB"
             );
         }
+    }
+
+    #[test]
+    fn resonator_preserves_stereo_tail_and_192k_long_rt60() {
+        // 1. Stereo excitation tail must match two independent mono resonators on every sample
+        //    across mode-0 zero-crossings and all sample rates (fast-mono must never clobber R).
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            let mut stereo = ModalResonator::new(sr);
+            let mut ref_l = ModalResonator::new(sr);
+            let mut ref_r = ModalResonator::new(sr);
+            for r in [&mut stereo, &mut ref_l, &mut ref_r] {
+                r.set_parameters(ResonatorMode::Bar, 330.0, 0.4, 300.0, 0.7, 0.35);
+            }
+            let frames = (sr * 0.08) as usize;
+            let mut stereo_diff = 0.0_f64;
+            for i in 0..frames {
+                let (xl, xr) = match i {
+                    0 => (1.0, 0.0),
+                    5 => (0.0, -0.8),
+                    _ => (0.0, 0.0),
+                };
+                let y = stereo.process_stereo([xl, xr], 1.0);
+                let yl = ref_l.process_stereo([xl, xl], 1.0)[0];
+                let yr = ref_r.process_stereo([xr, xr], 1.0)[0];
+                assert!(
+                    (y[0] - yl).abs() < 1e-12 && (y[1] - yr).abs() < 1e-12,
+                    "sr={sr} frame={i}: stereo tail diverged from dual-mono ref ({y:?} vs [{yl}, {yr}])"
+                );
+                stereo_diff += (y[0] - y[1]).powi(2);
+            }
+            assert!(stereo_diff > 1.0, "sr={sr}: expected sustained stereo tail");
+        }
+
+        // 2. Maximum 8000 ms decay at 192 kHz must hit true ~8.0 s RT60 (-15.0 dB after 2.0 s),
+        //    not truncated by a low pole-radius ceiling (`0.999_995` capped RT60 to ~7.2 s -> -16.6 dB).
+        let sr = 192_000.0;
+        let f0 = 200.0; // Exact integer cycles inside a 25 ms DFT window (5 cycles).
+        let mut res = ModalResonator::new(sr);
+        res.set_parameters(
+            ResonatorMode::String,
+            f0,
+            0.0,
+            RESONATOR_MAX_DECAY_MS,
+            0.5,
+            0.5,
+        );
+        let win = (sr * 0.025) as usize;
+        let t_2s = (sr * 2.0) as usize;
+        let mut early_re = 0.0_f64;
+        let mut early_im = 0.0_f64;
+        let mut late_re = 0.0_f64;
+        let mut late_im = 0.0_f64;
+        for i in 0..(t_2s + win) {
+            let x = if i == 0 { 1.0 } else { 0.0 };
+            let y = res.process_stereo([x, x], 1.0)[0];
+            let ang = TAU * f0 * (i as f64) / sr;
+            if i < win {
+                early_re += y * ang.cos();
+                early_im += y * ang.sin();
+            } else if i >= t_2s {
+                late_re += y * ang.cos();
+                late_im += y * ang.sin();
+            }
+        }
+        let drop_db = crate::dsp::lin_to_db_f64(late_re.hypot(late_im) / early_re.hypot(early_im));
+        assert!(
+            (-15.15..=-14.85).contains(&drop_db),
+            "192 kHz 8000 ms RT60 expected -15.0 dB at 2.0 s, got {drop_db:.3} dB"
+        );
     }
 }

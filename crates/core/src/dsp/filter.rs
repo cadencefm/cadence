@@ -6,8 +6,8 @@
 use crate::dsp::biquad::{DcBlocker, TptOnePoleLpf};
 use crate::dsp::env::RhythmicEnv;
 use crate::dsp::math::{
-    flush_denormal_f64, lin_to_db_f64, sanitize_frame, sanitize_sample_f64, sanitize_sample_rate,
-    Smoother,
+    flush_denormal_f64, lin_to_db_f64, sanitize_clamp_f64, sanitize_frame, sanitize_sample_f64,
+    sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS, TAIL_SILENCE_FLOOR_F64,
 };
 use crate::dsp::saturate::soft_clip_drive_f64;
 use crate::filter_patterns::CompiledFilterPattern;
@@ -217,8 +217,8 @@ impl Svf {
     /// Whether both integrator states on both channels have decayed below silence (`1e-7`).
     #[inline]
     pub fn quiet(&self) -> bool {
-        const SILENCE: f64 = 1e-7;
-        self.ic1.iter().all(|v| v.abs() < SILENCE) && self.ic2.iter().all(|v| v.abs() < SILENCE)
+        self.ic1.iter().all(|v| v.abs() < TAIL_SILENCE_FLOOR_F64)
+            && self.ic2.iter().all(|v| v.abs() < TAIL_SILENCE_FLOOR_F64)
     }
 }
 
@@ -301,8 +301,10 @@ impl AcidLadder {
     /// Whether all 4 stages on both channels have decayed below silence (`1e-7`).
     #[inline]
     pub fn quiet(&self) -> bool {
-        const SILENCE: f64 = 1e-7;
-        self.s.iter().flatten().all(|v| v.abs() < SILENCE)
+        self.s
+            .iter()
+            .flatten()
+            .all(|v| v.abs() < TAIL_SILENCE_FLOOR_F64)
     }
 }
 
@@ -316,14 +318,10 @@ pub fn svf_transfer(
     sample_rate: f64,
 ) -> (f64, f64) {
     let sr = sanitize_sample_rate(sample_rate);
-    let fc = f64::from(cutoff_hz).clamp(20.0, sr * 0.45);
-    let f = sanitize_sample_f64(freq_hz).clamp(0.0, sr * 0.499);
+    let fc = sanitize_clamp_f64(f64::from(cutoff_hz), 20.0, sr * 0.45, 1_000.0);
+    let f = sanitize_clamp_f64(freq_hz, 0.0, sr * 0.499, 0.0);
     let u = (PI * f / sr).tan() / (PI * fc / sr).tan().max(1e-12);
-    let res = f64::from(if resonance.is_finite() {
-        resonance.clamp(0.0, 0.95)
-    } else {
-        0.0
-    });
+    let res = sanitize_clamp_f64(f64::from(resonance), 0.0, 0.95, 0.0);
     let k = 2.0 - 1.98 * res;
     let d_re = 1.0 - u * u;
     let d_im = k * u;
@@ -342,8 +340,8 @@ pub fn svf_transfer(
 #[inline]
 pub fn one_pole_lpf_transfer(cutoff_hz: f32, freq_hz: f64, sample_rate: f64) -> (f64, f64) {
     let sr = sanitize_sample_rate(sample_rate);
-    let fc = f64::from(cutoff_hz).clamp(20.0, sr * 0.45);
-    let f = sanitize_sample_f64(freq_hz).clamp(0.0, sr * 0.499);
+    let fc = sanitize_clamp_f64(f64::from(cutoff_hz), 20.0, sr * 0.45, 1_000.0);
+    let f = sanitize_clamp_f64(freq_hz, 0.0, sr * 0.499, 0.0);
     let u = (PI * f / sr).tan() / (PI * fc / sr).tan().max(1e-12);
     let denom = (1.0 + u * u).max(1e-24);
     (1.0 / denom, -u / denom)
@@ -359,14 +357,10 @@ pub fn acid_ladder_transfer(
     sample_rate: f64,
 ) -> (f64, f64) {
     let sr = sanitize_sample_rate(sample_rate);
-    let fc = f64::from(cutoff_hz).clamp(20.0, sr * 0.45);
-    let f = sanitize_sample_f64(freq_hz).clamp(0.0, sr * 0.499);
+    let fc = sanitize_clamp_f64(f64::from(cutoff_hz), 20.0, sr * 0.45, 1_000.0);
+    let f = sanitize_clamp_f64(freq_hz, 0.0, sr * 0.499, 0.0);
     let u = (PI * f / sr).tan() / (PI * fc / sr).tan().max(1e-12);
-    let res = f64::from(if resonance.is_finite() {
-        resonance.clamp(0.0, 0.95)
-    } else {
-        0.0
-    });
+    let res = sanitize_clamp_f64(f64::from(resonance), 0.0, 0.95, 0.0);
     let k = ACID_LADDER_K_SCALE * res;
     let u2 = u * u;
     let u4 = u2 * u2;
@@ -435,11 +429,7 @@ pub fn filter_mix_magnitude_db(
     freq_hz: f64,
     sample_rate: f64,
 ) -> f64 {
-    let m = f64::from(if mix.is_finite() {
-        mix.clamp(0.0, 1.0)
-    } else {
-        1.0
-    });
+    let m = sanitize_clamp_f64(f64::from(mix), 0.0, 1.0, 1.0);
     let (h_re, h_im) = filter_transfer(mode, cutoff_hz, resonance, freq_hz, sample_rate);
     let re = (1.0 - m) + m * h_re;
     let im = m * h_im;
@@ -476,7 +466,8 @@ impl RhythmicFilter {
     pub fn new(sample_rate: f64) -> Self {
         let sr = sanitize_sample_rate(sample_rate);
         let default = FilterPatch::default();
-        let cutoff_log = f64::from(default.cutoff_hz).clamp(20.0, sr * 0.45).ln();
+        let cutoff_log =
+            sanitize_clamp_f64(f64::from(default.cutoff_hz), 20.0, sr * 0.45, 1_000.0).ln();
         let mut f = Self {
             sample_rate: sr,
             mode: default.mode,
@@ -523,12 +514,28 @@ impl RhythmicFilter {
     }
 
     fn set_parameters_common(&mut self, patch: FilterPatch) {
-        let fc = f64::from(patch.cutoff_hz).clamp(20.0, self.sample_rate * 0.45);
+        let def = FilterPatch::default();
+        let fc = sanitize_clamp_f64(
+            f64::from(patch.cutoff_hz),
+            20.0,
+            self.sample_rate * 0.45,
+            f64::from(def.cutoff_hz),
+        );
         let cutoff_log = fc.ln();
-        let res = f64::from(patch.resonance).clamp(0.0, 0.95);
-        let drv = f64::from(patch.drive).clamp(0.0, 1.0);
-        let mix = f64::from(patch.mix).clamp(0.0, 1.0);
-        let amt = f64::from(patch.env_amount).clamp(-4.0, 4.0);
+        let res = sanitize_clamp_f64(
+            f64::from(patch.resonance),
+            0.0,
+            0.95,
+            f64::from(def.resonance),
+        );
+        let drv = sanitize_clamp_f64(f64::from(patch.drive), 0.0, 1.0, f64::from(def.drive));
+        let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
+        let amt = sanitize_clamp_f64(
+            f64::from(patch.env_amount),
+            -4.0,
+            4.0,
+            f64::from(def.env_amount),
+        );
         self.env_amount_ln2 = if amt.abs() < 1e-4 { 0.0 } else { amt * LN_2 };
 
         if !self.has_processed {
@@ -592,7 +599,7 @@ impl RhythmicFilter {
         } else {
             self.cutoff_log.current() + env_level * self.env_amount_ln2
         };
-        let fc = log_fc.exp().clamp(20.0, self.sample_rate * 0.45);
+        let fc = sanitize_clamp_f64(log_fc.exp(), 20.0, self.sample_rate * 0.45, 1_000.0);
         let res = self.resonance.current() as f32;
         let fading = !self.mode_xfade.is_settled();
         let is_svf = |m: FilterMode| !matches!(m, FilterMode::AcidLowPass | FilterMode::LowPass6);
@@ -627,7 +634,7 @@ impl RhythmicFilter {
         }
         self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
         let bypass_w = self.bypass_wet.next();
-        if bypassed && bypass_w <= 1e-4 {
+        if bypassed && bypass_w <= BYPASS_SETTLE_EPS {
             self.bypass_wet.snap(0.0);
             self.svf.reset();
             self.acid.reset();
@@ -989,6 +996,41 @@ mod tests {
                 let y = rf.process([x, x], false);
                 assert!(y[0].is_finite() && y[1].is_finite());
                 assert!(y[0].abs() < 2.5 && y[1].abs() < 2.5);
+            }
+        }
+    }
+
+    #[test]
+    fn filter_transfers_and_rhythmic_filter_sanitize_nan_parameters() {
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            for mode in [
+                FilterMode::LowPass,
+                FilterMode::HighPass,
+                FilterMode::BandPass,
+                FilterMode::AcidLowPass,
+                FilterMode::LowPass6,
+            ] {
+                let (re, im) = filter_transfer(mode, f32::NAN, f32::NAN, f64::NAN, sr);
+                assert!(re.is_finite() && im.is_finite(), "sr={sr} mode={mode:?}");
+                let mag_db =
+                    filter_mix_magnitude_db(mode, f32::NAN, f32::NAN, f32::NAN, 1_000.0, sr);
+                assert!(mag_db.is_finite(), "sr={sr} mode={mode:?}");
+            }
+
+            let mut rf = RhythmicFilter::new(sr);
+            rf.set_parameters(FilterPatch {
+                mode: FilterMode::LowPass,
+                cutoff_hz: f32::NAN,
+                resonance: f32::NAN,
+                drive: f32::NAN,
+                mix: f32::NAN,
+                env_amount: f32::NAN,
+                env_decay_ms: f32::NAN,
+                ..FilterPatch::default()
+            });
+            for _ in 0..128 {
+                let y = rf.process([0.5, -0.5], false);
+                assert!(y[0].is_finite() && y[1].is_finite());
             }
         }
     }

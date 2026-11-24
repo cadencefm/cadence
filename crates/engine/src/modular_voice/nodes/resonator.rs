@@ -6,8 +6,8 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    midi_to_hz, semitones_to_ratio_f64, smooth_step_f32, LogSmoother, ModalResonator,
-    RESONATOR_MAX_DECAY_MS, RESONATOR_MIN_DECAY_MS,
+    midi_to_hz, sanitize_clamp_f32, sanitize_clamp_f64, semitones_to_ratio_f64, smooth_step_f32,
+    LogSmoother, ModalResonator, RESONATOR_MAX_DECAY_MS, RESONATOR_MIN_DECAY_MS,
 };
 use cadence_core::rack::{
     ModuleKind, ModuleKindTag, ModuleParam, PitchTracking, ResonatorMode, ResonatorModule,
@@ -206,28 +206,45 @@ impl VoiceModule for ResonatorNode {
                 let sr = ctx.sample_rate;
                 let base_hz = match res.pitch_tracking {
                     PitchTracking::Fixed => {
-                        let semi = ctx.rack_tune
-                            + f64::from(res.tune_semitones)
-                            + f64::from(res.fine_cents) * 0.01
-                            + inputs.pitch_cv;
-                        (self.fixed_hz.current() * semitones_to_ratio_f64(semi.clamp(-96.0, 96.0)))
-                            .clamp(20.0, sr * 0.45)
+                        let semi = sanitize_clamp_f64(
+                            ctx.rack_tune
+                                + f64::from(res.tune_semitones)
+                                + f64::from(res.fine_cents) * 0.01
+                                + inputs.pitch_cv,
+                            -96.0,
+                            96.0,
+                            0.0,
+                        );
+                        sanitize_clamp_f64(
+                            self.fixed_hz.current() * semitones_to_ratio_f64(semi),
+                            20.0,
+                            sr * 0.45,
+                            440.0,
+                        )
                     }
-                    PitchTracking::Chromatic => midi_to_hz(
-                        (ctx.note_pitch
-                            + ctx.rack_tune
-                            + f64::from(res.tune_semitones)
-                            + f64::from(res.fine_cents) * 0.01
-                            + inputs.pitch_cv)
-                            .clamp(-64.0, 180.0),
-                    )
-                    .clamp(20.0, sr * 0.45),
+                    PitchTracking::Chromatic => {
+                        let midi = sanitize_clamp_f64(
+                            ctx.note_pitch
+                                + ctx.rack_tune
+                                + f64::from(res.tune_semitones)
+                                + f64::from(res.fine_cents) * 0.01
+                                + inputs.pitch_cv,
+                            -64.0,
+                            180.0,
+                            69.0,
+                        );
+                        sanitize_clamp_f64(midi_to_hz(midi), 20.0, sr * 0.45, 440.0)
+                    }
                 };
                 let eff_bright = if self.has_cv {
-                    (res.brightness + 0.5 * (inputs.cv_stereo[0] + inputs.cv_stereo[1]) as f32)
-                        .clamp(0.0, 1.0)
+                    sanitize_clamp_f32(
+                        res.brightness + 0.5 * (inputs.cv_stereo[0] + inputs.cv_stereo[1]) as f32,
+                        0.0,
+                        1.0,
+                        0.65,
+                    )
                 } else {
-                    res.brightness.clamp(0.0, 1.0)
+                    sanitize_clamp_f32(res.brightness, 0.0, 1.0, 0.65)
                 };
                 let decay_ms = self.decay.current() as f32;
                 let needs_update = !self.initialized

@@ -1934,3 +1934,79 @@ fn voice_retirement_preserves_sampler_env_predelay_lfo_chopped_quiet_and_legato_
         panic!("expected DriveNode at slot {drive_slot}");
     }
 }
+
+#[test]
+fn drive_node_parallel_mix_stays_phase_aligned_across_sample_rates() {
+    let bank: SampleBank = Vec::new();
+    // High-frequency sine VCO (MIDI 119 ~= 7902 Hz, right in the old comb-notch band at 44.1/48 kHz)
+    // through DriveNode(drive=0.0, mix=0.5, tone_hz=18000 Hz) must stay flat without a comb notch.
+    let dry_zone = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "Sine",
+                ModuleKind::Vco(VcoModule {
+                    waveform: Waveform::Sine,
+                    ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+    );
+    let par_zone = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "Sine",
+                ModuleKind::Vco(VcoModule {
+                    waveform: Waveform::Sine,
+                    ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(
+                2,
+                "ParDrive",
+                ModuleKind::Drive(DriveModule {
+                    mode: DriveMode::Tape,
+                    drive: 0.0,
+                    asymmetry: 0.0,
+                    tone_hz: 18_000.0,
+                    output_db: 0.0,
+                    mix: 0.5,
+                }),
+            ),
+            RackModule::new(3, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 2, 3, InPort::In, 1.0),
+        ],
+    );
+    let g_dry = compile_zone_graph(&dry_zone).unwrap();
+    let g_par = compile_zone_graph(&par_zone).unwrap();
+
+    for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+        let mut v_dry =
+            ModularVoice::new_boxed(&spec(&dry_zone, &g_dry, sr, 120.0), start(119, None));
+        let mut v_par =
+            ModularVoice::new_boxed(&spec(&par_zone, &g_par, sr, 120.0), start(119, None));
+        let warmup = (sr * 0.02) as usize;
+        let measure = (sr * 0.02) as usize;
+        let mut dry_sq = 0.0_f64;
+        let mut par_sq = 0.0_f64;
+        for i in 0..(warmup + measure) {
+            let yd = v_dry.next_frame(&bank, None);
+            let yp = v_par.next_frame(&bank, None);
+            if i >= warmup {
+                dry_sq += f64::from(yd[0]).powi(2);
+                par_sq += f64::from(yp[0]).powi(2);
+            }
+        }
+        let diff_db = cadence_core::dsp::lin_to_db_f64((par_sq / dry_sq).sqrt());
+        assert!(
+            diff_db > -1.5 && diff_db < 0.25,
+            "sr={sr}: parallel DriveNode combed 7.9 kHz sine to {diff_db:+.2} dB"
+        );
+    }
+}

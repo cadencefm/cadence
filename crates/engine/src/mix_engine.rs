@@ -2,8 +2,8 @@
 //! Prepared storage and fixed routing tables keep processing zero-alloc and
 //! independent of frontend, filesystem, and audio-device APIs.
 use cadence_core::dsp::{
-    apply_fader_gain, apply_pan_balance, apply_strip_gain, limiter_lookahead_frames,
-    one_pole_coeff_ms, one_pole_decay_ms, sanitize_frame, sanitize_sample, Chorus, Compressor,
+    apply_fader_gain, limiter_lookahead_frames, one_pole_coeff_ms, one_pole_decay_ms,
+    pan_stereo_balance, sanitize_frame, sanitize_sample, smooth_step_f32, Chorus, Compressor,
     Delay, DelayLine, Drive, Eq, Limiter, PeakHold, Reverb, RhythmicFilter, StereoEffect,
 };
 use cadence_core::mixer::{
@@ -138,6 +138,8 @@ struct ChannelPlan {
     sends: [SendPlan; MAX_SENDS],
     gain: f32,
     pan: f32,
+    cached_pan_bits: u32,
+    cached_pan_lr: [f32; 2],
     target_gain: f32,
     target_pan: f32,
     scale: f32,
@@ -159,6 +161,8 @@ impl Default for ChannelPlan {
             sends: [SendPlan::default(); MAX_SENDS],
             gain: 1.0,
             pan: 0.0,
+            cached_pan_bits: 0.0_f32.to_bits(),
+            cached_pan_lr: [1.0, 1.0],
             target_gain: 1.0,
             target_pan: 0.0,
             scale: 1.0,
@@ -170,6 +174,26 @@ impl Default for ChannelPlan {
 }
 
 impl ChannelPlan {
+    #[inline]
+    fn refresh_pan_cache(&mut self) {
+        let bits = self.pan.to_bits();
+        if bits != self.cached_pan_bits {
+            self.cached_pan_bits = bits;
+            self.cached_pan_lr = if self.pan == 0.0 {
+                [1.0, 1.0]
+            } else {
+                pan_stereo_balance(self.pan)
+            };
+        }
+    }
+
+    #[inline]
+    fn apply_cached_pan(self, input: [f32; 2]) -> [f32; 2] {
+        [
+            sanitize_sample(input[0]) * self.cached_pan_lr[0],
+            sanitize_sample(input[1]) * self.cached_pan_lr[1],
+        ]
+    }
     #[inline]
     fn output_slot(self) -> Option<usize> {
         self.output.map(usize::from)
@@ -882,6 +906,7 @@ impl MixerEngine {
             plan.meter = old.meter;
             plan.scale = old.scale;
         }
+        plan.refresh_pan_cache();
         let mut insert_count = 0usize;
         for device in inserts.iter().take(MAX_INSERTS) {
             if let Some(slot) = self
@@ -932,6 +957,7 @@ impl MixerEngine {
         for plan in &mut self.channels {
             plan.gain = plan.target_gain;
             plan.pan = plan.target_pan;
+            plan.refresh_pan_cache();
             plan.scale = plan.target_scale;
             for send in &mut plan.sends {
                 if send.target.is_some() {
@@ -1169,13 +1195,12 @@ impl MixerEngine {
     #[inline]
     fn strip(&self, channel: usize, input: [f32; 2]) -> [f32; 2] {
         let plan = self.channels[channel];
-        apply_strip_gain(
+        plan.apply_cached_pan(apply_fader_gain(
             input,
             plan.gain,
             plan.scale,
             self.factors[channel],
-            plan.pan,
-        )
+        ))
     }
 
     #[inline]
@@ -1261,7 +1286,7 @@ impl MixerEngine {
         // and channel strip panning never starves opposite-panned Returns.
         let (post_fader, output) = if plan.source_enabled {
             let pf = self.strip_fader(slot, processed);
-            (pf, apply_pan_balance(pf, plan.pan))
+            (pf, plan.apply_cached_pan(pf))
         } else {
             ([0.0; 2], [0.0; 2])
         };
@@ -1291,7 +1316,7 @@ impl MixerEngine {
             }
             let x = (duck.elapsed / duck.recovery_frames).clamp(0.0, 1.0) as f32;
             let target = 1.0 - duck.depth * (1.0 - x).powi(2);
-            duck.gain += (target - duck.gain) * self.envelope_smoothing;
+            smooth_step_f32(&mut duck.gain, target, self.envelope_smoothing);
             if duck.elapsed > duck.recovery_frames + self.sample_rate * 0.01 {
                 duck.gain = 1.0;
             }
@@ -1310,14 +1335,15 @@ impl MixerEngine {
             ) {
                 continue;
             }
-            channel.gain += (channel.target_gain - channel.gain) * sm;
-            channel.pan += (channel.target_pan - channel.pan) * sm;
-            channel.scale += (channel.target_scale - channel.scale) * sm;
+            smooth_step_f32(&mut channel.gain, channel.target_gain, sm);
+            smooth_step_f32(&mut channel.pan, channel.target_pan, sm);
+            channel.refresh_pan_cache();
+            smooth_step_f32(&mut channel.scale, channel.target_scale, sm);
             for send in &mut channel.sends {
                 if send.target.is_none() {
                     break;
                 }
-                send.amount += (send.target_amount - send.amount) * sm;
+                smooth_step_f32(&mut send.amount, send.target_amount, sm);
             }
         }
         let mut buses = [[0.0; 2]; MAX_MIXER_CHANNELS];

@@ -35,8 +35,9 @@ pub(super) const AUDIO_TAP_MASK: usize = AUDIO_TAP_CAPACITY - 1;
 /// Power-of-two stereo live audio input capture ring capacity (`262_144` frames ≈ 5.46 s @ 48 kHz).
 pub const AUDIO_CAPTURE_CAPACITY: usize = 1 << 18;
 pub(super) const AUDIO_CAPTURE_MASK: usize = AUDIO_CAPTURE_CAPACITY - 1;
-/// Power-of-two stereo software input monitor ring capacity (`8192` frames ≈ 170 ms @ 48 kHz).
-pub(super) const AUDIO_MONITOR_CAPACITY: usize = 1 << 13;
+/// Power-of-two stereo software input monitor ring capacity (`32_768` frames ≈ 170 ms @ 192 kHz,
+/// `85 ms @ 384 kHz`, 256 KiB heap-boxed).
+pub(super) const AUDIO_MONITOR_CAPACITY: usize = 1 << 15;
 pub(super) const AUDIO_MONITOR_MASK: usize = AUDIO_MONITOR_CAPACITY - 1;
 
 pub(super) fn pack_step_position(step: u64, frac: f64) -> u64 {

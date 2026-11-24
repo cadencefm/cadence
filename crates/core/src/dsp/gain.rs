@@ -10,7 +10,10 @@
 //!   console pan pot everywhere across `-1.0..=1.0`, used for stereo mixer strips
 //!   and buses.
 
-use crate::dsp::math::{db_to_lin, lin_to_db, sanitize_sample, sanitize_sample_f64, LIN_FLOOR_F32};
+use crate::dsp::math::{
+    db_to_lin, lin_to_db, sanitize_clamp_f64, sanitize_sample, sanitize_sample_f64, LIN_FLOOR_F32,
+    SMOOTH_SETTLE_EPS_F64,
+};
 use std::f64::consts::FRAC_PI_4;
 
 /// Upper fader stepping headroom in decibels (`+6.0 dB` studio console boost).
@@ -203,6 +206,38 @@ pub fn apply_strip_gain(input: [f32; 2], gain: f32, scale: f32, duck: f32, pan: 
     apply_pan_balance(apply_fader_gain(input, gain, scale, duck), pan)
 }
 
+/// Equal-power Mid/Side stereo width control for uncorrelated stereo fields (`f64`).
+///
+/// Scales the Side channel by `width ∈ [0.0, 2.0]` and applies the exact uncorrelated
+/// RMS normalization `sqrt(2 / (1 + width²))`:
+/// - `width = 1.0` -> exact unity pass-through `[L, R]` (`0.00 dB`).
+/// - `width = 0.0` -> equal-power mono sum `[(L + R) / sqrt(2), (L + R) / sqrt(2)]` (`0.00 dB` RMS).
+/// - All `width ∈ [0.0, 2.0]` preserve `Var(out_L) == Var(out_R) == σ²` for uncorrelated
+///   stereo sources such as FDN reverb outputs.
+#[inline]
+pub fn stereo_ms_width_uncorrelated_f64(stereo: [f64; 2], width: f64) -> [f64; 2] {
+    let l = sanitize_sample_f64(stereo[0]);
+    let r = sanitize_sample_f64(stereo[1]);
+    let w = sanitize_clamp_f64(width, 0.0, 2.0, 1.0);
+    if (w - 1.0).abs() <= SMOOTH_SETTLE_EPS_F64 {
+        return [l, r];
+    }
+    let mid = 0.5 * (l + r);
+    let side = 0.5 * (l - r) * w;
+    let norm = (2.0 / (1.0 + w * w)).sqrt();
+    [(mid + side) * norm, (mid - side) * norm]
+}
+
+/// Equal-power Mid/Side stereo width control for uncorrelated stereo fields (`f32`).
+#[inline]
+pub fn stereo_ms_width_uncorrelated(stereo: [f32; 2], width: f32) -> [f32; 2] {
+    let [l, r] = stereo_ms_width_uncorrelated_f64(
+        [f64::from(stereo[0]), f64::from(stereo[1])],
+        f64::from(width),
+    );
+    [l as f32, r as f32]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,5 +399,44 @@ mod tests {
         assert_eq!(hard_right, [0.0, 1.0]);
         let nan_safe = apply_strip_gain([f32::NAN, 0.5], 1.0, 1.0, 1.0, 0.0);
         assert_eq!(nan_safe, [0.0, 0.5]);
+    }
+
+    #[test]
+    fn stereo_ms_width_uncorrelated_preserves_rms_across_width_sweep() {
+        // Exact identity at width = 1.0, exact constant-power mono at width = 0.0.
+        assert_eq!(
+            stereo_ms_width_uncorrelated_f64([0.6, -0.2], 1.0),
+            [0.6, -0.2]
+        );
+        let mono = stereo_ms_width_uncorrelated_f64([1.0, 0.0], 0.0);
+        assert!((mono[0] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+        assert!((mono[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+        assert_eq!(
+            stereo_ms_width_uncorrelated_f64([0.4, -0.3], f64::NAN),
+            [0.4, -0.3]
+        );
+
+        // Two orthogonal unit-RMS sinusoids model uncorrelated stereo FDN taps.
+        let n = 4096usize;
+        for &w in &[0.0_f64, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0] {
+            let mut in_e = [0.0_f64; 2];
+            let mut out_e = [0.0_f64; 2];
+            for i in 0..n {
+                let l = (std::f64::consts::TAU * 13.0 * i as f64 / n as f64).sin();
+                let r = (std::f64::consts::TAU * 29.0 * i as f64 / n as f64).cos();
+                let y = stereo_ms_width_uncorrelated_f64([l, r], w);
+                in_e[0] += l * l;
+                in_e[1] += r * r;
+                out_e[0] += y[0] * y[0];
+                out_e[1] += y[1] * y[1];
+            }
+            for ch in 0..2 {
+                let diff_db = crate::dsp::lin_to_db_f64((out_e[ch] / in_e[ch]).sqrt());
+                assert!(
+                    diff_db.abs() < 0.01,
+                    "width={w} ch={ch}: uncorrelated RMS drifted by {diff_db:+.4} dB"
+                );
+            }
+        }
     }
 }

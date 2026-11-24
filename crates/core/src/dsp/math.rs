@@ -22,6 +22,15 @@ pub const SMOOTH_SETTLE_EPS_F32: f32 = 1e-6;
 /// Relative settle tolerance for double-precision 1-pole parameter smoothers (`-240 dB` at unity).
 pub const SMOOTH_SETTLE_EPS_F64: f64 = 1e-12;
 
+/// Tail silence floor (`-140 dB`, `1e-7`) for idling bypassed time-based effects and
+/// quiet filter/resonator tail detectors.
+pub const TAIL_SILENCE_FLOOR_F32: f32 = 1e-7;
+/// Double-precision tail silence floor (`-140 dB`, `1e-7`).
+pub const TAIL_SILENCE_FLOOR_F64: f64 = 1e-7;
+
+/// Bypass crossfade settle cutoff (`-80 dB`, `1e-4`), snapping `bypass_wet` cleanly to `0.0`.
+pub const BYPASS_SETTLE_EPS: f64 = 1e-4;
+
 /// Clamp a sample rate to a sane finite range (`1_000..=384_000 Hz`, defaulting to `48_000 Hz`).
 #[inline]
 pub fn sanitize_sample_rate(sample_rate: f64) -> f64 {
@@ -121,6 +130,30 @@ pub fn sanitize_sample_f64(x: f64) -> f64 {
 #[inline]
 pub fn sanitize_frame(frame: [f32; 2]) -> [f32; 2] {
     [sanitize_sample(frame[0]), sanitize_sample(frame[1])]
+}
+
+/// Sanitize and clamp an `f32` parameter into `[lo, hi]`, replacing non-finite
+/// inputs (`NaN`, `±Inf`) with `fallback.clamp(lo, hi)`.
+#[inline]
+pub fn sanitize_clamp_f32(x: f32, lo: f32, hi: f32, fallback: f32) -> f32 {
+    let hi = hi.max(lo);
+    if x.is_finite() {
+        x.clamp(lo, hi)
+    } else {
+        fallback.clamp(lo, hi)
+    }
+}
+
+/// Sanitize and clamp an `f64` parameter into `[lo, hi]`, replacing non-finite
+/// inputs (`NaN`, `±Inf`) with `fallback.clamp(lo, hi)`.
+#[inline]
+pub fn sanitize_clamp_f64(x: f64, lo: f64, hi: f64, fallback: f64) -> f64 {
+    let hi = hi.max(lo);
+    if x.is_finite() {
+        x.clamp(lo, hi)
+    } else {
+        fallback.clamp(lo, hi)
+    }
 }
 
 /// Flush subnormal/tiny values (`|x| < 1e-24`) and non-finite numbers to `0.0`.
@@ -910,5 +943,29 @@ mod tests {
                 "smooth_step_f64 stalled toward 18000 at sr={sr}"
             );
         }
+    }
+
+    #[test]
+    fn sanitize_clamp_guards_non_finite_and_out_of_range_inputs() {
+        assert_eq!(sanitize_clamp_f32(0.5, 0.0, 1.0, 0.25), 0.5);
+        assert_eq!(sanitize_clamp_f32(-5.0, 0.0, 1.0, 0.25), 0.0);
+        assert_eq!(sanitize_clamp_f32(5.0, 0.0, 1.0, 0.25), 1.0);
+        assert_eq!(sanitize_clamp_f32(f32::NAN, 0.0, 1.0, 0.25), 0.25);
+        assert_eq!(sanitize_clamp_f32(f32::INFINITY, 0.0, 1.0, 2.0), 1.0);
+        assert_eq!(sanitize_clamp_f32(f32::NEG_INFINITY, 0.0, 1.0, -2.0), 0.0);
+
+        assert_eq!(sanitize_clamp_f64(440.0, 20.0, 20_000.0, 1_000.0), 440.0);
+        assert_eq!(
+            sanitize_clamp_f64(f64::NAN, 20.0, 20_000.0, 1_000.0),
+            1_000.0
+        );
+        assert_eq!(
+            sanitize_clamp_f64(f64::INFINITY, 20.0, 20_000.0, 1_000.0),
+            1_000.0
+        );
+        assert_eq!(
+            sanitize_clamp_f64(f64::NEG_INFINITY, 20.0, 20_000.0, 5.0),
+            20.0
+        );
     }
 }

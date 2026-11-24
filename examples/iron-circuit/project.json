@@ -10060,7 +10060,7 @@
           "id": 3
         },
         "strip": {
-          "gain": 0.54,
+          "gain": 0.5,
           "pan": 0.0
         },
         "inserts": [
@@ -10278,7 +10278,7 @@
           "id": 3
         },
         "strip": {
-          "gain": 0.76,
+          "gain": 0.7,
           "pan": 0.0
         },
         "inserts": [
@@ -10325,7 +10325,7 @@
           "kind": "master"
         },
         "strip": {
-          "gain": 0.7,
+          "gain": 0.74,
           "pan": 0.0
         },
         "inserts": [

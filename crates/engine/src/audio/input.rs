@@ -1,7 +1,7 @@
 //! Lock-free, zero-allocation CPAL audio input capture, live stereo metering,
 //! and drift-tolerant software input monitoring.
 use super::shared::*;
-use cadence_core::dsp::{one_pole_decay_ms, sanitize_sample};
+use cadence_core::dsp::{one_pole_decay_ms, sanitize_sample, sanitize_sample_rate};
 use cadence_core::runtime::{
     AudioInputMode, AudioInputStatus, CapturePhase, InputMonitorMode, MAX_AUDIO_SAMPLE_RATE,
     MIN_AUDIO_SAMPLE_RATE,
@@ -51,9 +51,32 @@ impl InputSample for i32 {
 
 const INPUT_HOLD_SECONDS: f64 = 1.5;
 const INPUT_CLIP_THRESHOLD: f32 = 0.9999;
-const MONITOR_RAMP_STEP: f32 = 1.0 / 64.0;
-const MONITOR_HIGH_WATER: u64 = 2048;
-const MONITOR_TARGET_DEPTH: u64 = 256;
+/// Click-free software monitor fade time (`1.5 ms`), scaled by output sample rate.
+const MONITOR_RAMP_SEC: f64 = 0.0015;
+/// Drift-guard high-water latency threshold (`45 ms`) in input frames.
+const MONITOR_HIGH_WATER_SEC: f64 = 0.045;
+/// Post-trim target ring depth (`6 ms`) in input frames.
+const MONITOR_TARGET_DEPTH_SEC: f64 = 0.006;
+/// Minimum input-buffer multiple allowed before triggering the clock-drift guard.
+const MONITOR_HIGH_WATER_BUFFER_MULT: u64 = 3;
+/// Minimum high-water and target depths in frames for ultra-low sample rates / tiny callbacks.
+const MONITOR_MIN_HIGH_WATER_FRAMES: u64 = 512;
+const MONITOR_MIN_TARGET_DEPTH_FRAMES: u64 = 64;
+
+/// Compute `(high_water, target_depth)` in input frames scaled cleanly to `(in_sr, in_buf)`
+/// and bounded inside `AUDIO_MONITOR_CAPACITY`.
+#[inline]
+pub(super) fn monitor_watermarks(in_sr: f64, in_buf: u64) -> (u64, u64) {
+    let sr = sanitize_sample_rate(in_sr);
+    let max_high_water = (AUDIO_MONITOR_CAPACITY * 3 / 4) as u64;
+    let high_water = ((sr * MONITOR_HIGH_WATER_SEC).round() as u64)
+        .max(in_buf.saturating_mul(MONITOR_HIGH_WATER_BUFFER_MULT))
+        .clamp(MONITOR_MIN_HIGH_WATER_FRAMES, max_high_water);
+    let target_depth = ((sr * MONITOR_TARGET_DEPTH_SEC).round() as u64)
+        .max(in_buf)
+        .clamp(MONITOR_MIN_TARGET_DEPTH_FRAMES, high_water / 2);
+    (high_water, target_depth)
+}
 
 /// Strictly RT-safe, zero-allocation state owned by the audio input callback thread.
 pub(super) struct InputMeterState {
@@ -352,13 +375,31 @@ impl InputMonitorDrain {
             return [0.0, 0.0];
         }
 
+        let out_sr = sanitize_sample_rate(output_sample_rate);
+        let ramp_step = (1.0 / (out_sr * MONITOR_RAMP_SEC).round().max(1.0)) as f32;
+        let in_sr_raw = shared.input_sample_rate.load(Ordering::Relaxed);
+        let in_sr_f = if in_sr_raw >= MIN_AUDIO_SAMPLE_RATE {
+            f64::from(in_sr_raw.min(MAX_AUDIO_SAMPLE_RATE))
+        } else {
+            out_sr
+        };
+        let step = if in_sr_raw >= MIN_AUDIO_SAMPLE_RATE && output_sample_rate > 0.0 {
+            (in_sr_f / out_sr).clamp(0.25, 4.0)
+        } else {
+            1.0
+        };
+        let in_buf = u64::from(shared.input_buffer_frames.load(Ordering::Relaxed));
+        let out_buf_in =
+            (f64::from(shared.buffer_frames.load(Ordering::Relaxed)) * step).ceil() as u64;
+        let (high_water, target_depth) = monitor_watermarks(in_sr_f, in_buf.max(out_buf_in));
+
         let mut read = shared.monitor_read.load(Ordering::Relaxed);
         let write = shared.monitor_write.load(Ordering::Acquire);
         let avail = write.wrapping_sub(read);
 
         // Guard against clock drift between separate input & output audio hardware.
-        if avail > MONITOR_HIGH_WATER {
-            read = write.wrapping_sub(MONITOR_TARGET_DEPTH);
+        if avail > high_water {
+            read = write.wrapping_sub(target_depth);
             self.primed = false;
             self.frac = 0.0;
         }
@@ -374,20 +415,13 @@ impl InputMonitorDrain {
                 self.frac = 0.0;
             } else {
                 shared.monitor_read.store(read, Ordering::Release);
-                self.active_gain = (self.active_gain - MONITOR_RAMP_STEP).max(0.0);
+                self.active_gain = (self.active_gain - ramp_step).max(0.0);
                 return [
                     self.next_frame[0] * self.active_gain,
                     self.next_frame[1] * self.active_gain,
                 ];
             }
         }
-
-        let in_sr = shared.input_sample_rate.load(Ordering::Relaxed);
-        let step = if in_sr >= MIN_AUDIO_SAMPLE_RATE && output_sample_rate > 0.0 {
-            (f64::from(in_sr) / output_sample_rate).clamp(0.25, 4.0)
-        } else {
-            1.0
-        };
 
         let mut starved = false;
         while self.frac >= 1.0 {
@@ -413,9 +447,9 @@ impl InputMonitorDrain {
         }
 
         if want_monitor && !starved {
-            self.active_gain = (self.active_gain + MONITOR_RAMP_STEP).min(1.0);
+            self.active_gain = (self.active_gain + ramp_step).min(1.0);
         } else {
-            self.active_gain = (self.active_gain - MONITOR_RAMP_STEP).max(0.0);
+            self.active_gain = (self.active_gain - ramp_step).max(0.0);
             if !want_monitor && self.active_gain <= 0.0 {
                 let latest = shared.monitor_write.load(Ordering::Acquire);
                 shared.monitor_read.store(latest, Ordering::Release);

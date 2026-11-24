@@ -2999,26 +2999,28 @@ fn input_monitor_drain_modes_resampling_drift_guard_and_ramp_out() {
         "resampled live monitor must carry audible input signal: peak={peak}"
     );
 
-    // 3. Clock-drift guard trims excess buffered monitor frames when depth exceeds high-water mark.
+    // 3. Clock-drift guard trims excess buffered monitor frames when depth exceeds high-water mark,
+    //    preserving at least one input callback buffer (`target_depth`) to prevent immediate underrun.
     shared
         .input_monitor_mode
         .store(InputMonitorMode::On.to_u8(), Ordering::Release);
     for _ in 0..4 {
         process_input_slice(&mut in_state, &shared, &tone_44k, 2, 44_100);
     }
+    let (high_water, target_depth) = crate::audio::input::monitor_watermarks(44_100.0, 1024);
     let queued_before = shared
         .monitor_write
         .load(Ordering::Acquire)
         .wrapping_sub(shared.monitor_read.load(Ordering::Relaxed));
-    assert!(queued_before > 2048);
+    assert!(queued_before > high_water);
     let _ = drain.next_frame(&shared, 48_000.0);
     let queued_after = shared
         .monitor_write
         .load(Ordering::Acquire)
         .wrapping_sub(shared.monitor_read.load(Ordering::Relaxed));
     assert!(
-        queued_after <= 300,
-        "drift guard must trim excess monitor latency back to target depth: got {queued_after}"
+        queued_after <= target_depth && queued_after + 4 >= target_depth,
+        "drift guard must trim excess monitor latency back to target depth ({target_depth}): got {queued_after}"
     );
 
     // 4. Switching monitoring Off ramps smoothly down to zero (no instant click).
@@ -3044,6 +3046,132 @@ fn input_monitor_drain_modes_resampling_drift_guard_and_ramp_out() {
         max_step < 0.25,
         "monitor ramp-out should be smooth: max_step={max_step}"
     );
+}
+
+#[test]
+fn input_monitor_drain_scales_watermarks_and_ramp_for_high_sr_and_large_buffers() {
+    use crate::audio::input::{
+        monitor_watermarks, process_input_slice, InputMeterState, InputMonitorDrain,
+    };
+    use cadence_core::runtime::InputMonitorMode;
+
+    // At 192 kHz with 1024-frame callbacks (5.33 ms/callback), two stacked callbacks (2048 frames)
+    // must NOT trip the drift guard, and draining 1024 frames after a drift trim must not underrun.
+    for (sr, buf_frames) in [
+        (44_100u32, 256usize),
+        (48_000, 256),
+        (96_000, 512),
+        (192_000, 1024),
+        (192_000, 2048),
+    ] {
+        let shared = Shared::new_arc();
+        shared
+            .input_monitor_mode
+            .store(InputMonitorMode::On.to_u8(), Ordering::Release);
+        let mut in_state = InputMeterState::new(sr);
+        let mut drain = InputMonitorDrain::new();
+        let (high_water, target_depth) = monitor_watermarks(f64::from(sr), buf_frames as u64);
+        assert!(
+            high_water >= (buf_frames as u64) * 3,
+            "sr={sr} buf={buf_frames}: high_water={high_water} must exceed 3x callback size"
+        );
+        assert!(
+            target_depth >= buf_frames as u64,
+            "sr={sr} buf={buf_frames}: target_depth={target_depth} must cover at least one callback"
+        );
+
+        let chunk: Vec<f32> = (0..buf_frames)
+            .flat_map(|i| {
+                let s =
+                    (std::f64::consts::TAU * 440.0 * i as f64 / f64::from(sr)).sin() as f32 * 0.5;
+                [s, -s]
+            })
+            .collect();
+
+        // Push 2 callbacks of jitter (2 * buf_frames <= high_water): must NOT trim or drop frames.
+        process_input_slice(&mut in_state, &shared, &chunk, 2, sr);
+        process_input_slice(&mut in_state, &shared, &chunk, 2, sr);
+        let write_before = shared.monitor_write.load(Ordering::Acquire);
+        let _ = drain.next_frame(&shared, f64::from(sr));
+        let queued = write_before.wrapping_sub(shared.monitor_read.load(Ordering::Relaxed));
+        assert!(
+            queued >= (buf_frames * 2 - 4) as u64,
+            "sr={sr} buf={buf_frames}: normal 2-buffer jitter falsely triggered drift trim (queued={queued})"
+        );
+
+        // Overflow past high_water -> drift guard trims cleanly to target_depth and sustains one full callback.
+        while shared
+            .monitor_write
+            .load(Ordering::Acquire)
+            .wrapping_sub(shared.monitor_read.load(Ordering::Relaxed))
+            <= high_water
+        {
+            process_input_slice(&mut in_state, &shared, &chunk, 2, sr);
+        }
+        let mut min_abs_tail = 0.0_f32;
+        for i in 0..buf_frames {
+            let y = drain.next_frame(&shared, f64::from(sr));
+            assert!(y[0].is_finite() && y[1].is_finite());
+            if i + 32 >= buf_frames {
+                min_abs_tail = min_abs_tail.max(y[0].abs()).max(y[1].abs());
+            }
+        }
+        assert!(
+            min_abs_tail > 0.05,
+            "sr={sr} buf={buf_frames}: monitor underran within one callback after drift trim"
+        );
+    }
+
+    // Asymmetric output buffer & 4:1 downsampling (e.g. 48k/256 mic -> 48k/2048 DAC, or
+    // 192k/512 input -> 48k/512 output) must size high_water/target_depth for `out_buf * step`.
+    for (in_sr, in_buf, out_sr, out_buf) in [
+        (48_000u32, 256usize, 48_000.0_f64, 2048usize),
+        (192_000u32, 512usize, 48_000.0_f64, 512usize),
+    ] {
+        let shared = Shared::new_arc();
+        shared
+            .buffer_frames
+            .store(out_buf as u32, Ordering::Release);
+        shared
+            .input_monitor_mode
+            .store(InputMonitorMode::On.to_u8(), Ordering::Release);
+        let mut in_state = InputMeterState::new(in_sr);
+        let mut drain = InputMonitorDrain::new();
+        let step = (f64::from(in_sr) / out_sr).clamp(0.25, 4.0);
+        let out_buf_in = (out_buf as f64 * step).ceil() as u64;
+        let (high_water, target_depth) =
+            monitor_watermarks(f64::from(in_sr), (in_buf as u64).max(out_buf_in));
+        assert!(target_depth >= out_buf_in);
+
+        let chunk: Vec<f32> = (0..in_buf)
+            .flat_map(|i| {
+                let s = (std::f64::consts::TAU * 440.0 * i as f64 / f64::from(in_sr)).sin() as f32
+                    * 0.5;
+                [s, -s]
+            })
+            .collect();
+        while shared
+            .monitor_write
+            .load(Ordering::Acquire)
+            .wrapping_sub(shared.monitor_read.load(Ordering::Relaxed))
+            <= high_water
+        {
+            process_input_slice(&mut in_state, &shared, &chunk, 2, in_sr);
+        }
+        // Draining one full synchronous output callback after drift trim must not starve.
+        let mut tail_peak = 0.0_f32;
+        for i in 0..out_buf {
+            let y = drain.next_frame(&shared, out_sr);
+            assert!(y[0].is_finite() && y[1].is_finite());
+            if i + 32 >= out_buf {
+                tail_peak = tail_peak.max(y[0].abs()).max(y[1].abs());
+            }
+        }
+        assert!(
+            tail_peak > 0.05,
+            "in={in_sr}/{in_buf} out={out_sr}/{out_buf}: starved mid-callback after drift trim"
+        );
+    }
 }
 
 #[test]

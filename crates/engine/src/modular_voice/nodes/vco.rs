@@ -6,9 +6,9 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    midi_to_hz, mix_seed, pan_mono_equal_power_f64, phase_wrap, semitones_to_ratio_f64,
-    smooth_step_f32, step_vco_bank, step_vco_bank_fm_2x, unison_gain_comp, unison_offsets,
-    Halfband2x, LogSmoother, VcoStepParams, XorShift32, MAX_UNISON,
+    midi_to_hz, mix_seed, pan_mono_equal_power_f64, phase_wrap, sanitize_clamp_f64,
+    semitones_to_ratio_f64, smooth_step_f32, step_vco_bank, step_vco_bank_fm_2x, unison_gain_comp,
+    unison_offsets, Halfband2x, LogSmoother, VcoStepParams, XorShift32, MAX_UNISON,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking, VcoModule};
 use std::f64::consts::SQRT_2;
@@ -288,7 +288,7 @@ impl VoiceModule for VcoNode {
             };
         }
         let base_hz = self.cached_base_hz;
-        let pw = (f64::from(vco.pulse_width) + inputs.pw_cv).clamp(0.02, 0.98);
+        let pw = sanitize_clamp_f64(f64::from(vco.pulse_width) + inputs.pw_cv, 0.02, 0.98, 0.5);
         let unison_count = usize::from(vco.unison_voices.clamp(1, MAX_UNISON as u8));
         let level = f64::from(vco.level) * unison_gain_comp(unison_count);
 
