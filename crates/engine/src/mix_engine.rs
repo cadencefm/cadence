@@ -79,14 +79,14 @@ impl MeterState {
                 self.input[channel],
                 hold_frames,
                 hold_decay,
-                1e-6,
+                PeakHold::DEFAULT_ZERO_FLOOR,
             );
             self.output_hold[channel].observe(
                 after,
                 self.output[channel],
                 hold_frames,
                 hold_decay,
-                1e-6,
+                PeakHold::DEFAULT_ZERO_FLOOR,
             );
 
             self.input_max[channel] = self.input_max[channel].max(before);
@@ -488,6 +488,13 @@ impl MixerEngine {
     #[inline]
     pub(crate) fn total_output_latency_frames(&self) -> usize {
         self.total_output_latency
+    }
+
+    /// Current Master decayed stereo output peaks (300 ms release, observing the exact
+    /// final summed DAC/WAV output including audition preview and software input monitor).
+    #[inline]
+    pub(crate) fn master_output_peaks(&self) -> [f32; 2] {
+        self.channels[MASTER].meter.output
     }
 
     /// Number of effect slots that currently hold an allocated stereo `Delay` buffer.
@@ -1337,6 +1344,7 @@ impl MixerEngine {
         let plan = self.channels[slot];
         let input = buses[index];
         let processed = self.inserts(slot, input);
+        let inserts_non_finite = !processed[0].is_finite() || !processed[1].is_finite();
         // Aux sends tap post-fader, pre-strip-pan so stereo sources stay stereo
         // and channel strip panning never starves opposite-panned Returns.
         let (post_fader, output) = if plan.source_enabled {
@@ -1353,6 +1361,9 @@ impl MixerEngine {
             self.hold_frames,
             self.hold_decay,
         );
+        if inserts_non_finite {
+            self.channels[slot].meter.clipped = true;
+        }
         // Reuse the channel's single PDC delay line (holding sanitized post-fader, pre-pan audio)
         // to tap both Return-aligned sends and main output before writing once.
         let safe_pf = sanitize_frame(post_fader);
@@ -1510,6 +1521,7 @@ impl MixerEngine {
                 continue;
             }
             let processed = self.inserts(slot, input);
+            let inserts_non_finite = !processed[0].is_finite() || !processed[1].is_finite();
             let output = if !plan.muted && (!self.wet_only || plan.solo) {
                 self.strip(slot, processed)
             } else {
@@ -1518,6 +1530,9 @@ impl MixerEngine {
             self.channels[slot]
                 .meter
                 .observe(input, output, false, decay, hold_frames, hold_decay);
+            if inserts_non_finite {
+                self.channels[slot].meter.clipped = true;
+            }
             let safe_out = sanitize_frame(output);
             let aligned = self.apply_pdc(index, plan.pdc_delay, safe_out);
             master[0] += aligned[0];
@@ -1525,6 +1540,7 @@ impl MixerEngine {
         }
 
         let processed = self.inserts(MASTER, master);
+        let inserts_non_finite = !processed[0].is_finite() || !processed[1].is_finite();
         let strip_out = if self.channels[MASTER].muted {
             [0.0; 2]
         } else {
@@ -1549,7 +1565,7 @@ impl MixerEngine {
             hold_frames,
             hold_decay,
         );
-        if aux_non_finite {
+        if inserts_non_finite || aux_non_finite {
             self.channels[MASTER].meter.clipped = true;
         }
 

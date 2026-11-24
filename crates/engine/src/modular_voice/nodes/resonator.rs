@@ -158,6 +158,11 @@ impl VoiceModule for ResonatorNode {
         if ctx.eff_retarget {
             let bidx = usize::from(self.bank_idx);
             state.next_res_bank = state.next_res_bank.max(bidx + 1);
+            if let Some(bank) = state.resonator_banks.get_mut(bidx) {
+                if bank.set_sample_rate(ctx.sample_rate) {
+                    self.initialized = false;
+                }
+            }
             self.has_cv = ctx.has_cv;
             self.fixed_hz.set_target(f64::from(res.fixed_hz));
             self.decay.set_target(f64::from(res.decay_ms));

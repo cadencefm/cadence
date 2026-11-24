@@ -739,6 +739,9 @@ pub struct PeakHold {
 }
 
 impl PeakHold {
+    /// Default `-120 dBFS` linear meter floor below which held peaks snap cleanly to `0.0`.
+    pub const DEFAULT_ZERO_FLOOR: f32 = 1e-6;
+
     #[inline]
     pub const fn new() -> Self {
         Self {

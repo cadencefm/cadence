@@ -18,6 +18,9 @@ pub const COMPRESSOR_KNEE_DB: f32 = 6.0;
 pub const LIMITER_KNEE_DB: f32 = 2.0;
 /// Lookahead window of Cadence's brickwall `Limiter` (1.5 ms).
 pub const LIMITER_LOOKAHEAD_SEC: f64 = 0.0015;
+/// Gain-reduction floor in dB below which smoothed GR snaps cleanly to `0.0`
+/// (shared by [`Compressor`] and [`Limiter`]).
+const GR_DB_SILENCE_FLOOR: f64 = 1e-6;
 
 /// Lookahead delay in samples for [`Limiter`] at `sample_rate` Hz (single source of
 /// truth shared with `EffectDevice::latency_frames`).
@@ -216,7 +219,7 @@ impl Compressor {
             self.release_decay
         };
         self.gr_db = coeff * self.gr_db + (1.0 - coeff) * target_gr_db;
-        if self.gr_db < 1e-6 {
+        if self.gr_db < GR_DB_SILENCE_FLOOR {
             self.gr_db = 0.0;
         }
         self.current_gr_db = if bypassed { 0.0 } else { self.gr_db as f32 };
@@ -499,7 +502,7 @@ impl Limiter {
                 self.gr_db = req_gr_db;
             }
         }
-        if self.gr_db < 1e-5 {
+        if self.gr_db < GR_DB_SILENCE_FLOOR {
             self.gr_db = 0.0;
         }
         self.current_gr_db = if bypassed { 0.0 } else { self.gr_db as f32 };

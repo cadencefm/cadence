@@ -112,6 +112,7 @@ impl VoiceModule for NoiseNode {
         }
 
         if ctx.eff_retarget {
+            self.gen.set_sample_rate(ctx.sample_rate);
             self.hp.set_target(f64::from(noise.highpass_hz));
             self.lp.set_target(f64::from(noise.lowpass_hz));
             if !ctx.eff_legato {

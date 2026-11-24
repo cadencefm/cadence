@@ -95,6 +95,7 @@ impl VoiceModule for LoFiNode {
         }
 
         if ctx.eff_retarget {
+            self.proc.set_sample_rate(ctx.sample_rate);
             self.rate.set_target(f64::from(lofi.rate_hz));
             if !ctx.eff_legato {
                 self.rate.snap_to_target();

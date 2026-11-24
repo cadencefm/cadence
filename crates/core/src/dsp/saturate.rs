@@ -670,7 +670,7 @@ impl Drive {
         self.asymmetry.snap(self.asymmetry.target());
         self.output_gain.snap(self.output_gain.target());
         self.mix.snap(self.mix.target());
-        self.tone_hz.snap(f64::from(self.last_patch.tone_hz));
+        self.tone_hz.snap_to_target();
         let tone = self.tone_hz.current();
         self.tone_lpf.set_cutoff(self.sample_rate, tone);
         self.cached_tone_bits = tone.to_bits();

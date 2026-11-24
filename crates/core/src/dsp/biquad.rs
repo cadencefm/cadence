@@ -421,14 +421,23 @@ impl DcBlocker {
     pub const CUTOFF_HZ: f64 = 12.0;
 
     pub fn new(sample_rate: f64) -> Self {
-        let sr = sanitize_sample_rate(sample_rate);
-        let r = (-TAU * Self::CUTOFF_HZ / sr).exp();
-        Self {
-            r,
-            norm: (1.0 + r) * 0.5,
+        let mut blocker = Self {
+            r: 0.0,
+            norm: 0.5,
             x1: [0.0; 2],
             y1: [0.0; 2],
-        }
+        };
+        blocker.set_sample_rate(sample_rate);
+        blocker
+    }
+
+    /// Update DC-blocker pole coefficient for `sample_rate` (Hz) without clearing state.
+    #[inline]
+    pub fn set_sample_rate(&mut self, sample_rate: f64) {
+        let sr = sanitize_sample_rate(sample_rate);
+        let r = (-TAU * Self::CUTOFF_HZ / sr).exp();
+        self.r = r;
+        self.norm = (1.0 + r) * 0.5;
     }
 
     #[inline]
@@ -751,6 +760,25 @@ mod tests {
         assert!(stages.iter().all(|c| !c.active));
         eq.set_parameters(nan_patch);
         let y = eq.process([0.5, -0.25], false);
+        assert!(y[0].is_finite() && y[1].is_finite());
+    }
+
+    #[test]
+    fn dc_blocker_set_sample_rate_updates_pole_without_clearing_state() {
+        let mut dc = DcBlocker::new(48_000.0);
+        let r48 = dc.r;
+        let _ = dc.process_stereo([0.5, -0.25]);
+        assert!(!dc.quiet());
+        dc.set_sample_rate(96_000.0);
+        assert!(
+            dc.r > r48 && dc.r < 1.0,
+            "96 kHz DC blocker pole must move closer to unity"
+        );
+        assert!(
+            !dc.quiet(),
+            "set_sample_rate must preserve live filter state"
+        );
+        let y = dc.process_stereo([0.5, -0.25]);
         assert!(y[0].is_finite() && y[1].is_finite());
     }
 }

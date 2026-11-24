@@ -2892,3 +2892,64 @@ fn out_pan_preserves_constant_stereo_power_for_mono_and_stereo_sources() {
         "Out.spread=1.0 must double Side: side_0={side_0}, side_1={side_1}"
     );
 }
+
+#[test]
+fn out_node_clamps_gain_db_to_spot_bounds_and_sanitizes_nan() {
+    use cadence_core::rack::{OUT_MAX_GAIN_DB, OUT_MIN_GAIN_DB};
+    let sr = 48_000.0;
+    let bank = Vec::new();
+    let measure_peak = |gain_db: f32| -> f32 {
+        let mut z = build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "VCO",
+                    ModuleKind::Vco(VcoModule {
+                        waveform: Waveform::Sine,
+                        pitch_tracking: PitchTracking::Fixed,
+                        fixed_hz: 220.0,
+                        level: 0.5,
+                        ..VcoModule::default()
+                    }),
+                ),
+                RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+        );
+        let g = compile_zone_graph(&z).unwrap();
+        // Inject raw out-of-range / NaN gain_db directly into the runtime zone after graph compile.
+        if let ModuleKind::Out(ref mut out) = z.modules[1].kind {
+            out.gain_db = gain_db;
+        }
+        let mut v = ModularVoice::new_boxed(&spec(&z, &g, sr, 120.0), start(60, None));
+        let mut peak = 0.0_f32;
+        for i in 0..4800 {
+            let f = v.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+            if i >= 2400 {
+                peak = peak.max(f[0].abs());
+            }
+        }
+        peak
+    };
+
+    let peak_max = measure_peak(OUT_MAX_GAIN_DB);
+    let peak_over = measure_peak(OUT_MAX_GAIN_DB + 40.0);
+    let peak_min = measure_peak(OUT_MIN_GAIN_DB);
+    let peak_under = measure_peak(OUT_MIN_GAIN_DB - 40.0);
+    let peak_zero = measure_peak(0.0);
+    let peak_nan = measure_peak(f32::NAN);
+
+    assert!(
+        (peak_over - peak_max).abs() < 1e-5,
+        "gain_db above OUT_MAX_GAIN_DB must clamp to max ({peak_over} vs {peak_max})"
+    );
+    assert!(
+        (peak_under - peak_min).abs() < 1e-5,
+        "gain_db below OUT_MIN_GAIN_DB must clamp to min ({peak_under} vs {peak_min})"
+    );
+    assert!(
+        (peak_nan - peak_zero).abs() < 1e-5,
+        "NaN gain_db must sanitize to 0.0 dB ({peak_nan} vs {peak_zero})"
+    );
+}
