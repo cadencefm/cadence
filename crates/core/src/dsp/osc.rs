@@ -3,7 +3,7 @@
 //! and 2× polyphase-halfband oversampled through-zero linear FM.
 
 use crate::dsp::gain::pan_mono_equal_power;
-use crate::dsp::math::{sanitize_sample_f64, semitones_to_ratio_f64};
+use crate::dsp::math::{sanitize_sample_f64, semitones_to_ratio_f64, NYQUIST_SAFE_RATIO};
 use crate::dsp::saturate::Halfband2x;
 use crate::rack::Waveform;
 use std::f64::consts::TAU;
@@ -219,7 +219,7 @@ pub fn step_vco_bank(
     unison_pan: &[[f64; 2]; MAX_UNISON],
 ) -> [f64; 2] {
     let count = params.unison_count.clamp(1, MAX_UNISON);
-    let nyq_cap = params.sample_rate * 0.45;
+    let nyq_cap = params.sample_rate * NYQUIST_SAFE_RATIO;
     if count == 1 {
         let dt = params.base_hz.min(nyq_cap) / params.sample_rate;
         let val = oscillator_sample(params.waveform, phases[0], dt, params.pw) * params.level;
@@ -256,7 +256,7 @@ pub fn step_vco_bank_fm_2x(
     fm_cycles: f64,
 ) -> [f64; 2] {
     let count = params.unison_count.clamp(1, MAX_UNISON);
-    let nyq_cap = params.sample_rate * 0.45;
+    let nyq_cap = params.sample_rate * NYQUIST_SAFE_RATIO;
     let (fm_even, fm_odd) = os.upsample_mono(fm_cycles);
     let dfm0 = fm_even - *prev_fm_2x;
     let dfm1 = fm_odd - fm_even;

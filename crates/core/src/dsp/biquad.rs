@@ -7,9 +7,9 @@
 //! never drift from heard audio.
 
 use crate::dsp::math::{
-    flush_denormal_f64, lin_to_db_f64, one_pole_coeff_ms, sanitize_clamp_f32, sanitize_frame,
-    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS,
-    TAIL_SILENCE_FLOOR_F64,
+    clamp_freq_hz, flush_denormal_f64, lin_to_db_f64, mix_stereo_f64, one_pole_coeff_ms,
+    sanitize_clamp_f32, sanitize_frame, sanitize_sample, sanitize_sample_f64, sanitize_sample_rate,
+    BypassFader, BypassStep, SMOOTH_SETTLE_EPS_F64, TAIL_SILENCE_FLOOR_F64,
 };
 use crate::mixer::EqPatch;
 use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
@@ -48,7 +48,7 @@ impl BiquadCoeffs {
     /// 12 dB/oct RBJ Cookbook high-pass filter.
     pub fn highpass(sample_rate: f64, freq_hz: f64, q: f64) -> Self {
         let sr = sanitize_sample_rate(sample_rate);
-        let f = sanitize_sample_f64(freq_hz).clamp(10.0, sr * 0.45);
+        let f = clamp_freq_hz(freq_hz, 10.0, sr, 10.0);
         let q = sanitize_sample_f64(q).max(0.1);
         let w0 = TAU * f / sr;
         let cos_w0 = w0.cos();
@@ -72,7 +72,7 @@ impl BiquadCoeffs {
         }
         let sr = sanitize_sample_rate(sample_rate);
         let a = 10.0_f64.powf(gain_db / 40.0);
-        let f = sanitize_sample_f64(freq_hz).clamp(20.0, sr * 0.45);
+        let f = clamp_freq_hz(freq_hz, 20.0, sr, 20.0);
         let w0 = TAU * f / sr;
         let cos_w0 = w0.cos();
         let alpha = w0.sin() * 0.5 * 2.0_f64.sqrt();
@@ -96,7 +96,7 @@ impl BiquadCoeffs {
         }
         let sr = sanitize_sample_rate(sample_rate);
         let a = 10.0_f64.powf(gain_db / 40.0);
-        let f = sanitize_sample_f64(freq_hz).clamp(20.0, sr * 0.45);
+        let f = clamp_freq_hz(freq_hz, 20.0, sr, 20.0);
         let q = sanitize_sample_f64(q).max(0.1);
         let w0 = TAU * f / sr;
         let cos_w0 = w0.cos();
@@ -120,7 +120,7 @@ impl BiquadCoeffs {
         }
         let sr = sanitize_sample_rate(sample_rate);
         let a = 10.0_f64.powf(gain_db / 40.0);
-        let f = sanitize_sample_f64(freq_hz).clamp(20.0, sr * 0.45);
+        let f = clamp_freq_hz(freq_hz, 20.0, sr, 20.0);
         let w0 = TAU * f / sr;
         let cos_w0 = w0.cos();
         let alpha = w0.sin() * 0.5 * 2.0_f64.sqrt();
@@ -229,7 +229,7 @@ impl StereoBiquad {
     pub fn process(&mut self, input: [f64; 2]) -> [f64; 2] {
         let x = [sanitize_sample_f64(input[0]), sanitize_sample_f64(input[1])];
         let diff = self.current.max_diff(self.target);
-        if diff <= 1e-12 {
+        if diff <= SMOOTH_SETTLE_EPS_F64 {
             self.current = self.target;
             if !self.current.active {
                 self.z1 = [0.0; 2];
@@ -287,7 +287,7 @@ impl TptOnePoleLpf {
     #[inline]
     pub fn set_cutoff(&mut self, sample_rate: f64, cutoff_hz: f64) {
         let sr = sanitize_sample_rate(sample_rate);
-        let fc = sanitize_sample_f64(cutoff_hz).clamp(5.0, sr * 0.45);
+        let fc = clamp_freq_hz(cutoff_hz, 5.0, sr, 5.0);
         let g = (PI * fc / sr).tan();
         self.g_coeff = g / (1.0 + g);
     }
@@ -329,7 +329,7 @@ impl TptOnePoleLpf {
     #[inline]
     pub fn magnitude(cutoff_hz: f64, freq_hz: f64, sample_rate: f64) -> f64 {
         let sr = sanitize_sample_rate(sample_rate);
-        let fc = sanitize_sample_f64(cutoff_hz).clamp(5.0, sr * 0.45);
+        let fc = clamp_freq_hz(cutoff_hz, 5.0, sr, 5.0);
         let f = sanitize_sample_f64(freq_hz).clamp(0.0, sr * 0.499_999);
         let u = (PI * f / sr).tan() / (PI * fc / sr).tan().max(1e-12);
         1.0 / (1.0 + u * u).sqrt()
@@ -389,7 +389,7 @@ impl TptOnePoleHpf {
     #[inline]
     pub fn magnitude(cutoff_hz: f64, freq_hz: f64, sample_rate: f64) -> f64 {
         let sr = sanitize_sample_rate(sample_rate);
-        let fc = sanitize_sample_f64(cutoff_hz).clamp(5.0, sr * 0.45);
+        let fc = clamp_freq_hz(cutoff_hz, 5.0, sr, 5.0);
         let f = sanitize_sample_f64(freq_hz).clamp(0.0, sr * 0.499_999);
         let u = (PI * f / sr).tan() / (PI * fc / sr).tan().max(1e-12);
         u / (1.0 + u * u).sqrt()
@@ -523,8 +523,7 @@ pub struct Eq {
     low: StereoBiquad,
     mid: StereoBiquad,
     high: StereoBiquad,
-    bypass_wet: Smoother,
-    was_active: bool,
+    bypass: BypassFader,
 }
 
 impl Eq {
@@ -538,11 +537,15 @@ impl Eq {
             low: StereoBiquad::new(sr),
             mid: StereoBiquad::new(sr),
             high: StereoBiquad::new(sr),
-            bypass_wet: Smoother::new(1.0, 1.5, sr),
-            was_active: false,
+            bypass: BypassFader::new(sr),
         };
         eq.set_parameters(EqPatch::default());
         eq
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_idle(&self) -> bool {
+        self.bypass.is_idle()
     }
 
     pub fn reset(&mut self) {
@@ -550,9 +553,8 @@ impl Eq {
         self.low.reset();
         self.mid.reset();
         self.high.reset();
-        self.bypass_wet.snap(1.0);
+        self.bypass.reset();
         self.has_processed = false;
-        self.was_active = false;
     }
 
     pub fn set_parameters(&mut self, patch: EqPatch) {
@@ -578,38 +580,28 @@ impl Eq {
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
-        if bypassed && !self.was_active {
-            self.bypass_wet.snap(0.0);
-            return dry;
-        }
-        self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
-        let wet_mix = self.bypass_wet.next();
-        if bypassed && wet_mix <= BYPASS_SETTLE_EPS {
-            self.bypass_wet.snap(0.0);
-            self.hpf.reset();
-            self.low.reset();
-            self.mid.reset();
-            self.high.reset();
-            self.was_active = false;
-            return dry;
-        }
-        self.was_active = true;
+        let wet_mix = match self.bypass.step(bypassed) {
+            BypassStep::Idle => return dry,
+            BypassStep::SettledBypass => {
+                self.hpf.reset();
+                self.low.reset();
+                self.mid.reset();
+                self.high.reset();
+                self.bypass.mark_idle();
+                return dry;
+            }
+            BypassStep::Active(w) => w,
+        };
 
-        let mut s = [f64::from(dry[0]), f64::from(dry[1])];
+        let dry64 = [f64::from(dry[0]), f64::from(dry[1])];
+        let mut s = dry64;
         s = self.hpf.process(s);
         s = self.low.process(s);
         s = self.mid.process(s);
         s = self.high.process(s);
 
-        if wet_mix >= 1.0 - BYPASS_SETTLE_EPS {
-            [s[0] as f32, s[1] as f32]
-        } else {
-            let dry_mix = 1.0 - wet_mix;
-            [
-                (f64::from(dry[0]) * dry_mix + s[0] * wet_mix) as f32,
-                (f64::from(dry[1]) * dry_mix + s[1] * wet_mix) as f32,
-            ]
-        }
+        let out = mix_stereo_f64(dry64, s, wet_mix);
+        [out[0] as f32, out[1] as f32]
     }
 }
 
@@ -737,11 +729,14 @@ mod tests {
         }
 
         // Bypass settles cleanly and resets stale IIR state.
+        assert!(!eq.is_idle());
         for _ in 0..1000 {
             let y = eq.process([0.0, 0.0], true);
             assert!(y[0].is_finite() && y[1].is_finite());
         }
+        assert!(eq.is_idle());
         assert_eq!(eq.process([0.4, -0.4], true), [0.4, -0.4]);
+        assert!(eq.is_idle());
 
         // NaN parameters sanitize cleanly: HPF stays bypassed and response remains flat/finite.
         let nan_patch = EqPatch {

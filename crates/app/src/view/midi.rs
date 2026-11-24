@@ -592,7 +592,7 @@ impl App {
             .config
             .audio_buffer_size
             .or_else(|| (buffer_frames > 0).then_some(buffer_frames))
-            .unwrap_or_else(default_auto_buffer_frames);
+            .unwrap_or_else(|| default_auto_buffer_frames(latency_sr));
         let buffer_value = match self.config.audio_buffer_size {
             Some(frames) => format_buffer_latency(frames, latency_sr),
             None => format!(

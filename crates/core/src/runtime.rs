@@ -204,7 +204,7 @@ pub struct AudioInputTelemetry {
 
 impl AudioInputTelemetry {
     /// Estimated total round-trip recording latency in milliseconds (input buffer + output buffer
-    /// + manual user trim), or `None` when input sample rate is unknown.
+    /// + mixer PDC latency + manual user trim), or `None` when input sample rate is unknown.
     pub fn round_trip_latency_ms(
         self,
         output_health: AudioHealth,
@@ -222,8 +222,9 @@ impl AudioInputTelemetry {
         let out_ms = output_health
             .buffer_latency_ms(output_sample_rate)
             .unwrap_or(0.0);
+        let pdc_ms = output_health.pdc_latency_ms(output_sample_rate);
         let trim = if trim_ms.is_finite() { trim_ms } else { 0.0 };
-        Some(in_ms + out_ms + trim)
+        Some(in_ms + out_ms + pdc_ms + trim)
     }
 
     /// Estimated total round-trip latency converted to capture frames (signed; positive trims
@@ -242,13 +243,28 @@ impl AudioInputTelemetry {
     }
 }
 
-/// Default automatic buffer frame size when user config leaves `audio_buffer_size` unset.
+/// Default automatic buffer frame size scaled to `sample_rate` Hz when user config leaves
+/// `audio_buffer_size` unset (`1×` `< 72 kHz`, `2×` `72..150 kHz`, `4×` `150..300 kHz`,
+/// `8×` `>= 300 kHz`), clamped to `[MIN_AUDIO_BUFFER_FRAMES, MAX_AUDIO_BUFFER_FRAMES]`.
 #[inline]
-pub const fn default_auto_buffer_frames() -> u32 {
-    if cfg!(debug_assertions) {
-        1024
+pub const fn default_auto_buffer_frames(sample_rate: u32) -> u32 {
+    let base: u32 = if cfg!(debug_assertions) { 1024 } else { 512 };
+    let mult: u32 = if sample_rate >= 300_000 {
+        8
+    } else if sample_rate >= 150_000 {
+        4
+    } else if sample_rate >= 72_000 {
+        2
     } else {
-        512
+        1
+    };
+    let scaled = base.saturating_mul(mult);
+    if scaled < MIN_AUDIO_BUFFER_FRAMES {
+        MIN_AUDIO_BUFFER_FRAMES
+    } else if scaled > MAX_AUDIO_BUFFER_FRAMES {
+        MAX_AUDIO_BUFFER_FRAMES
+    } else {
+        scaled
     }
 }
 
@@ -345,6 +361,8 @@ pub struct AudioHealth {
     pub xrun_count: u64,
     /// Active hardware callback buffer size in frames (`0` when unknown or silent).
     pub buffer_frames: u32,
+    /// Total mixer output Plugin Delay Compensation (PDC) latency in frames.
+    pub pdc_latency_frames: u32,
     /// Active hardware output channel count (`0` when silent).
     pub channels: u16,
     /// Active hardware sample bit depth (`16`, `32`, `64`, or `0` when silent).
@@ -365,6 +383,14 @@ impl AudioHealth {
             return None;
         }
         Some(self.buffer_frames as f32 * 1000.0 / sample_rate as f32)
+    }
+
+    /// Mixer Plugin Delay Compensation (PDC) latency in milliseconds for a given `sample_rate`.
+    pub fn pdc_latency_ms(self, sample_rate: u32) -> f32 {
+        if self.pdc_latency_frames == 0 || sample_rate == 0 {
+            return 0.0;
+        }
+        self.pdc_latency_frames as f32 * 1000.0 / sample_rate as f32
     }
 
     /// Compact human-readable sample format label (e.g. `"32-bit float"`, `"16-bit int"`).
@@ -685,5 +711,113 @@ impl MidiMessage {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_auto_buffer_frames_scales_with_sample_rate_and_clamps_bounds() {
+        let base = if cfg!(debug_assertions) { 1024 } else { 512 };
+        for (sr, expected_mult) in [
+            (0u32, 1u32),
+            (44_100, 1),
+            (48_000, 1),
+            (71_999, 1),
+            (72_000, 2),
+            (88_200, 2),
+            (96_000, 2),
+            (149_999, 2),
+            (150_000, 4),
+            (176_400, 4),
+            (192_000, 4),
+            (299_999, 4),
+            (300_000, 8),
+            (384_000, 8),
+        ] {
+            let expected =
+                (base * expected_mult).clamp(MIN_AUDIO_BUFFER_FRAMES, MAX_AUDIO_BUFFER_FRAMES);
+            let actual = default_auto_buffer_frames(sr);
+            assert_eq!(actual, expected, "sr={sr}");
+            assert!(
+                (MIN_AUDIO_BUFFER_FRAMES..=MAX_AUDIO_BUFFER_FRAMES).contains(&actual),
+                "sr={sr}: {actual} out of supported range"
+            );
+        }
+    }
+
+    #[test]
+    fn round_trip_latency_includes_input_output_pdc_and_trim_across_sample_rates() {
+        for sr in [44_100u32, 48_000, 96_000, 192_000] {
+            let input_buf = 256u32;
+            let output_buf = 512u32;
+            let pdc_frames = ((f64::from(sr) * 0.0015).round() as u32) * 2;
+            let trim_ms = 1.5_f32;
+
+            let tel = AudioInputTelemetry {
+                sample_rate: sr,
+                buffer_frames: input_buf,
+                ..AudioInputTelemetry::default()
+            };
+            let health_no_pdc = AudioHealth {
+                buffer_frames: output_buf,
+                pdc_latency_frames: 0,
+                ..AudioHealth::default()
+            };
+            let health_with_pdc = AudioHealth {
+                buffer_frames: output_buf,
+                pdc_latency_frames: pdc_frames,
+                ..AudioHealth::default()
+            };
+
+            let ms_no_pdc = tel
+                .round_trip_latency_ms(health_no_pdc, sr, trim_ms)
+                .expect("valid sample rate");
+            let ms_with_pdc = tel
+                .round_trip_latency_ms(health_with_pdc, sr, trim_ms)
+                .expect("valid sample rate");
+            let expected_pdc_ms = pdc_frames as f32 * 1000.0 / sr as f32;
+            assert!(
+                ((ms_with_pdc - ms_no_pdc) - expected_pdc_ms).abs() < 1e-4,
+                "sr={sr}: pdc delta mismatch: got {}, expected {expected_pdc_ms}",
+                ms_with_pdc - ms_no_pdc
+            );
+
+            let expected_total_frames = (f64::from(input_buf + output_buf + pdc_frames)
+                + f64::from(trim_ms) * f64::from(sr) / 1000.0)
+                .round() as isize;
+            assert_eq!(
+                tel.round_trip_latency_frames(health_with_pdc, sr, trim_ms),
+                expected_total_frames,
+                "sr={sr}: round_trip_latency_frames mismatch"
+            );
+        }
+
+        // Unknown input sample rate returns None / 0 frames, and non-finite trim is sanitized to 0.
+        let unknown = AudioInputTelemetry::default();
+        assert_eq!(
+            unknown.round_trip_latency_ms(AudioHealth::default(), 48_000, 0.0),
+            None
+        );
+        assert_eq!(
+            unknown.round_trip_latency_frames(AudioHealth::default(), 48_000, 0.0),
+            0
+        );
+        let tel_48 = AudioInputTelemetry {
+            sample_rate: 48_000,
+            buffer_frames: 240,
+            ..AudioInputTelemetry::default()
+        };
+        let health_48 = AudioHealth {
+            buffer_frames: 480,
+            pdc_latency_frames: 72,
+            ..AudioHealth::default()
+        };
+        let ms_nan = tel_48
+            .round_trip_latency_ms(health_48, 48_000, f32::NAN)
+            .unwrap();
+        assert!((ms_nan - (792.0 * 1000.0 / 48_000.0)).abs() < 1e-4);
     }
 }

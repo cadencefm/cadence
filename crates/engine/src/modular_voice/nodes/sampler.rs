@@ -1,11 +1,12 @@
 //! Modular stereo sample-player voice node backed by [`SamplerParams`] and [`SamplerCursor`].
 
 use super::{
-    NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks, VoiceModule, SILENCE_FLOOR,
+    NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks, VoiceModule, TRIG_THRESHOLD,
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
     decay_coeff_60db_ms, semitones_to_ratio_f64, smooth_step_f32, smooth_step_f64, SamplerCursor,
+    FAST_RELEASE_MS, TAIL_SILENCE_FLOOR_F64,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, SampleLoopMode, SamplerParams};
 
@@ -36,7 +37,7 @@ impl SamplerNode {
             cursor: SamplerCursor::new(params.sample_start, false),
             releasing: false,
             release_gain: 1.0,
-            release_coeff: decay_coeff_60db_ms(10.0, sample_rate),
+            release_coeff: decay_coeff_60db_ms(FAST_RELEASE_MS, sample_rate),
             coarse_smooth: f64::from(params.coarse_semitones),
             prev_trig: 0.0,
             has_trig_in: false,
@@ -89,6 +90,7 @@ impl VoiceModule for SamplerNode {
     #[inline]
     fn on_trigger(&mut self, ctx: &TriggerCtx, _state: &mut TriggerState<'_>) {
         let smp = self.target;
+        self.release_coeff = decay_coeff_60db_ms(FAST_RELEASE_MS, ctx.sample_rate);
         if ctx.eff_legato {
             self.current.root_midi = smp.root_midi;
             self.current.sample_start = smp.sample_start;
@@ -106,7 +108,6 @@ impl VoiceModule for SamplerNode {
             self.cursor = SamplerCursor::new(smp.sample_start, !ctx.has_trig_in);
             self.releasing = false;
             self.release_gain = 1.0;
-            self.release_coeff = decay_coeff_60db_ms(10.0, ctx.sample_rate);
             self.coarse_smooth = f64::from(smp.coarse_semitones);
             self.prev_trig = 0.0;
             self.has_trig_in = ctx.has_trig_in;
@@ -132,7 +133,7 @@ impl VoiceModule for SamplerNode {
     fn process(&mut self, inputs: &NodeInputs, ctx: &mut ProcessCtx<'_>) -> [f64; 2] {
         let smp = self.current;
         if self.has_trig_in {
-            if self.prev_trig < 0.5 && inputs.trig_in >= 0.5 {
+            if self.prev_trig < TRIG_THRESHOLD && inputs.trig_in >= TRIG_THRESHOLD {
                 self.cursor.retrigger(smp.sample_start);
                 self.releasing = false;
                 self.release_gain = 1.0;
@@ -186,7 +187,7 @@ impl VoiceModule for SamplerNode {
         if self.releasing {
             gain *= self.release_gain;
             self.release_gain *= self.release_coeff;
-            if self.release_gain < SILENCE_FLOOR {
+            if self.release_gain < TAIL_SILENCE_FLOOR_F64 {
                 self.release_gain = 0.0;
                 self.cursor.stop();
             }

@@ -1,17 +1,16 @@
 //! Physical 32-mode modal resonator voice node referencing the voice's heap-hosted bank pool.
 
 use super::{
-    write_copy_module_normalized, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks,
-    VoiceModule,
+    resolve_tracked_pitch_hz, write_copy_module_normalized, NodeInputs, ProcessCtx, TrackedPitch,
+    TriggerCtx, TriggerState, VoiceLocks, VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    midi_to_hz, sanitize_clamp_f32, sanitize_clamp_f64, semitones_to_ratio_f64, smooth_step_f32,
-    LogSmoother, ModalResonator, RESONATOR_MAX_DECAY_MS, RESONATOR_MIN_DECAY_MS,
+    sanitize_clamp_f32, smooth_step_f32, LogSmoother, ModalResonator, NYQUIST_SAFE_RATIO,
+    RESONATOR_MAX_DECAY_MS, RESONATOR_MAX_HZ, RESONATOR_MIN_DECAY_MS, RESONATOR_MIN_HZ,
 };
 use cadence_core::rack::{
-    ModuleKind, ModuleKindTag, ModuleParam, PitchTracking, ResonatorMode, ResonatorModule,
-    MAX_RESONATORS_PER_ZONE,
+    ModuleKind, ModuleKindTag, ModuleParam, ResonatorMode, ResonatorModule, MAX_RESONATORS_PER_ZONE,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -29,6 +28,8 @@ pub(in crate::modular_voice) struct ResonatorNode {
     applied_brightness: f32,
     applied_position: f32,
     initialized: bool,
+    #[cfg(test)]
+    param_update_count: u32,
 }
 
 impl ResonatorNode {
@@ -52,13 +53,26 @@ impl ResonatorNode {
             applied_brightness: -1.0,
             applied_position: -1.0,
             initialized: false,
+            #[cfg(test)]
+            param_update_count: 0,
         }
     }
-    /// Maximum of the current smoothed decay and target decay in milliseconds
-    /// for post-gate resonator tail sizing (handles legato decay changes).
+
+    /// Maximum of the current smoothed decay and sanitized target decay in milliseconds
+    /// for post-gate resonator tail sizing (handles legato and continuous decay changes).
     #[inline]
     pub(in crate::modular_voice) fn max_tail_decay_ms(&self) -> f64 {
-        self.decay.current().max(f64::from(self.target.decay_ms))
+        self.decay.current().max(self.decay.target())
+    }
+
+    #[cfg(test)]
+    pub(in crate::modular_voice) fn applied_f0_hz(&self) -> f64 {
+        self.applied_f0_hz
+    }
+
+    #[cfg(test)]
+    pub(in crate::modular_voice) fn param_update_count(&self) -> u32 {
+        self.param_update_count
     }
 }
 
@@ -152,7 +166,6 @@ impl VoiceModule for ResonatorNode {
                 self.decay.snap_to_target();
                 self.initialized = false;
             }
-            state.max_res_decay_ms = state.max_res_decay_ms.max(self.max_tail_decay_ms());
             return;
         }
 
@@ -170,7 +183,6 @@ impl VoiceModule for ResonatorNode {
             f64::from(RESONATOR_MIN_DECAY_MS),
             f64::from(RESONATOR_MAX_DECAY_MS),
         );
-        state.max_res_decay_ms = state.max_res_decay_ms.max(self.max_tail_decay_ms());
         self.has_cv = ctx.has_cv;
         self.applied_mode = res.mode;
         self.applied_f0_hz = 0.0;
@@ -179,6 +191,10 @@ impl VoiceModule for ResonatorNode {
         self.applied_brightness = -1.0;
         self.applied_position = -1.0;
         self.initialized = false;
+        #[cfg(test)]
+        {
+            self.param_update_count = 0;
+        }
     }
 
     #[inline]
@@ -204,38 +220,21 @@ impl VoiceModule for ResonatorNode {
         if let Some(bank) = ctx.resonator_banks.get_mut(usize::from(self.bank_idx)) {
             if !self.initialized || ctx.control_tick {
                 let sr = ctx.sample_rate;
-                let base_hz = match res.pitch_tracking {
-                    PitchTracking::Fixed => {
-                        let semi = sanitize_clamp_f64(
-                            ctx.rack_tune
-                                + f64::from(res.tune_semitones)
-                                + f64::from(res.fine_cents) * 0.01
-                                + inputs.pitch_cv,
-                            -96.0,
-                            96.0,
-                            0.0,
-                        );
-                        sanitize_clamp_f64(
-                            self.fixed_hz.current() * semitones_to_ratio_f64(semi),
-                            20.0,
-                            sr * 0.45,
-                            440.0,
-                        )
-                    }
-                    PitchTracking::Chromatic => {
-                        let midi = sanitize_clamp_f64(
-                            ctx.note_pitch
-                                + ctx.rack_tune
-                                + f64::from(res.tune_semitones)
-                                + f64::from(res.fine_cents) * 0.01
-                                + inputs.pitch_cv,
-                            -64.0,
-                            180.0,
-                            69.0,
-                        );
-                        sanitize_clamp_f64(midi_to_hz(midi), 20.0, sr * 0.45, 440.0)
-                    }
-                };
+                let max_hz = (sr * NYQUIST_SAFE_RATIO).min(f64::from(RESONATOR_MAX_HZ));
+                let base_hz = resolve_tracked_pitch_hz(
+                    TrackedPitch {
+                        mode: res.pitch_tracking,
+                        fixed_hz: self.fixed_hz.current(),
+                        note_pitch: ctx.note_pitch,
+                        rack_tune: ctx.rack_tune,
+                        tune_semitones: res.tune_semitones,
+                        fine_cents: res.fine_cents,
+                        pitch_cv: inputs.pitch_cv,
+                    },
+                    f64::from(RESONATOR_MIN_HZ),
+                    max_hz,
+                    440.0,
+                );
                 let eff_bright = if self.has_cv {
                     sanitize_clamp_f32(
                         res.brightness + 0.5 * (inputs.cv_stereo[0] + inputs.cv_stereo[1]) as f32,
@@ -271,6 +270,10 @@ impl VoiceModule for ResonatorNode {
                     self.applied_brightness = eff_bright;
                     self.applied_position = res.position;
                     self.initialized = true;
+                    #[cfg(test)]
+                    {
+                        self.param_update_count = self.param_update_count.saturating_add(1);
+                    }
                 }
             }
             bank.process_stereo(inputs.in_audio, f64::from(res.mix))

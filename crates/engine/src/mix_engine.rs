@@ -121,6 +121,7 @@ struct SendPlan {
     target: Option<u8>,
     amount: f32,
     target_amount: f32,
+    pdc_delay: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -394,6 +395,9 @@ impl EffectSlot {
     }
 }
 
+/// Maximum concurrent pending PDC-aligned duck triggers per duck state (zero-alloc).
+const DUCK_PENDING_CAPACITY: usize = 4;
+
 #[derive(Clone, Copy)]
 struct DuckState {
     id: Option<u64>,
@@ -404,6 +408,9 @@ struct DuckState {
     recovery_frames: f64,
     elapsed: f64,
     gain: f32,
+    pdc_delay: u32,
+    pending_delays: [u32; DUCK_PENDING_CAPACITY],
+    pending_len: u8,
 }
 
 impl Default for DuckState {
@@ -416,6 +423,9 @@ impl Default for DuckState {
             recovery_frames: 1.0,
             elapsed: f64::INFINITY,
             gain: 1.0,
+            pdc_delay: 0,
+            pending_delays: [0; DUCK_PENDING_CAPACITY],
+            pending_len: 0,
         }
     }
 }
@@ -427,6 +437,7 @@ pub(crate) struct MixerEngine {
     group_order: [usize; MAX_MIXER_CHANNELS],
     group_count: usize,
     ducks: [DuckState; MAX_DUCKS],
+    total_output_latency: usize,
     sample_rate: f64,
     envelope_smoothing: f32,
     factors: [f32; MAX_CHANNELS],
@@ -457,6 +468,7 @@ impl MixerEngine {
             group_order: [0; MAX_MIXER_CHANNELS],
             group_count: 0,
             ducks: [DuckState::default(); MAX_DUCKS],
+            total_output_latency: 0,
             sample_rate: sr,
             envelope_smoothing: one_pole_coeff_ms(1.0, sr) as f32,
             factors: [1.0; MAX_CHANNELS],
@@ -469,6 +481,13 @@ impl MixerEngine {
         mixer.prepare_delays(score);
         mixer.adopt(score, true);
         mixer
+    }
+
+    /// Total cumulative output Plugin Delay Compensation (PDC) latency in frames
+    /// (`max_master_in + master_insert_latency`).
+    #[inline]
+    pub(crate) fn total_output_latency_frames(&self) -> usize {
+        self.total_output_latency
     }
 
     /// Number of effect slots that currently hold an allocated stereo `Delay` buffer.
@@ -786,6 +805,7 @@ impl MixerEngine {
             }
             branch_lat[g_idx] = max_in.saturating_add(insert_lat[g_idx]);
         }
+        let mut return_max_send = [0usize; MAX_MIXER_CHANNELS];
         for r_idx in 0..chan_count {
             let r_slot = MAX_INSTRUMENTS + r_idx;
             if self.channels[r_slot].role != ChannelRole::Return {
@@ -800,7 +820,20 @@ impl MixerEngine {
                     max_send = max_send.max(lat);
                 }
             }
-            branch_lat[r_idx] = max_send.saturating_add(insert_lat[r_idx]);
+            return_max_send[r_idx] = max_send;
+            for (c_idx, &lat) in branch_lat.iter().enumerate().take(chan_count) {
+                let c_slot = MAX_INSTRUMENTS + c_idx;
+                if !self.channels[c_slot].role.is_bus_source() {
+                    continue;
+                }
+                let max_cap = self.pdc_lines[c_idx].capacity();
+                for send in &mut self.channels[c_slot].sends {
+                    if send.target == r_tag {
+                        send.pdc_delay = return_max_send[r_idx].saturating_sub(lat).min(max_cap);
+                    }
+                }
+            }
+            branch_lat[r_idx] = return_max_send[r_idx].saturating_add(insert_lat[r_idx]);
         }
         let mut max_master_in = 0usize;
         for (c_idx, &lat) in branch_lat.iter().enumerate().take(chan_count) {
@@ -822,10 +855,25 @@ impl MixerEngine {
             }
             let max_cap = self.pdc_lines[c_idx].capacity();
             self.channels[c_slot].pdc_delay = self.channels[c_slot].pdc_delay.min(max_cap);
-            if boundary || self.channels[c_slot].pdc_delay == 0 {
+            let any_send_pdc = self.channels[c_slot]
+                .sends
+                .iter()
+                .any(|s| s.target.is_some() && s.pdc_delay > 0);
+            let slot_changed = previous[c_slot].channel != self.channels[c_slot].channel;
+            if boundary || slot_changed || (self.channels[c_slot].pdc_delay == 0 && !any_send_pdc) {
                 self.pdc_lines[c_idx].reset();
             }
         }
+        for line in self.pdc_lines.iter_mut().skip(chan_count) {
+            line.reset();
+        }
+        let mut master_insert_lat = 0usize;
+        for &eff_slot in self.channels[MASTER].inserts.iter().flatten() {
+            if let Some(effect) = self.effects.get(usize::from(eff_slot)) {
+                master_insert_lat = master_insert_lat.saturating_add(effect.latency_frames());
+            }
+        }
+        self.total_output_latency = max_master_in.saturating_add(master_insert_lat);
 
         let previous_ducks = self.ducks;
         self.ducks.fill(DuckState::default());
@@ -837,6 +885,13 @@ impl MixerEngine {
             else {
                 continue;
             };
+            let pdc_delay = if target == MASTER {
+                self.total_output_latency
+            } else if (MAX_INSTRUMENTS..MASTER).contains(&target) {
+                branch_lat[target - MAX_INSTRUMENTS]
+            } else {
+                0
+            };
             let mut state = DuckState {
                 id: Some(definition.id),
                 source_part: definition.source_part,
@@ -844,12 +899,15 @@ impl MixerEngine {
                 depth: definition.depth,
                 recovery_frames: (f64::from(definition.recovery_ms) * 0.001 * self.sample_rate)
                     .max(1.0),
+                pdc_delay: pdc_delay.min(u32::MAX as usize) as u32,
                 ..DuckState::default()
             };
             if !boundary {
                 if let Some(old) = previous_ducks.iter().find(|e| e.id == state.id) {
                     state.elapsed = old.elapsed;
                     state.gain = old.gain;
+                    state.pending_delays = old.pending_delays;
+                    state.pending_len = old.pending_len;
                 }
             }
             self.ducks[index] = state;
@@ -944,6 +1002,7 @@ impl MixerEngine {
                     target: target_tag,
                     amount: prev_amount,
                     target_amount: send.amount,
+                    pdc_delay: 0,
                 };
                 send_count += 1;
             }
@@ -1030,14 +1089,15 @@ impl MixerEngine {
                             } else {
                                 send.amount
                             };
-                            let cur_amount = prev_sends
+                            let (cur_amount, pdc_delay) = prev_sends
                                 .iter()
                                 .find(|s| s.target == target_tag)
-                                .map_or(value, |s| s.amount);
+                                .map_or((value, 0), |s| (s.amount, s.pdc_delay));
                             plan.sends[send_count] = SendPlan {
                                 target: target_tag,
                                 amount: cur_amount,
                                 target_amount: value,
+                                pdc_delay,
                             };
                             send_count += 1;
                         }
@@ -1086,6 +1146,8 @@ impl MixerEngine {
         for duck in &mut self.ducks {
             duck.elapsed = f64::INFINITY;
             duck.gain = 1.0;
+            duck.pending_delays = [0; DUCK_PENDING_CAPACITY];
+            duck.pending_len = 0;
         }
         self.factors.fill(1.0);
         self.clear_meters(None);
@@ -1204,24 +1266,6 @@ impl MixerEngine {
     }
 
     #[inline]
-    fn sends(
-        &self,
-        channel: usize,
-        output: [f32; 2],
-        returns: &mut [[f32; 2]; MAX_MIXER_CHANNELS],
-    ) {
-        let plan = self.channels[channel];
-        for send in &plan.sends {
-            if let Some(target) = send.target.map(usize::from) {
-                if target < MAX_MIXER_CHANNELS && send.amount > 0.0 {
-                    returns[target][0] += output[0] * send.amount;
-                    returns[target][1] += output[1] * send.amount;
-                }
-            }
-        }
-    }
-
-    #[inline]
     fn apply_pdc(&mut self, channel_idx: usize, delay_frames: usize, output: [f32; 2]) -> [f32; 2] {
         if delay_frames == 0 {
             return output;
@@ -1239,7 +1283,18 @@ impl MixerEngine {
     pub(crate) fn trigger_part(&mut self, part: u64) {
         for duck in &mut self.ducks {
             if duck.id.is_some() && duck.source_part == part {
-                duck.elapsed = 0.0;
+                if duck.pdc_delay == 0 {
+                    duck.elapsed = 0.0;
+                } else {
+                    let len = usize::from(duck.pending_len).min(DUCK_PENDING_CAPACITY);
+                    if len < DUCK_PENDING_CAPACITY {
+                        duck.pending_delays[len] = duck.pdc_delay;
+                        duck.pending_len = (len + 1) as u8;
+                    } else {
+                        duck.pending_delays.copy_within(1..DUCK_PENDING_CAPACITY, 0);
+                        duck.pending_delays[DUCK_PENDING_CAPACITY - 1] = duck.pdc_delay;
+                    }
+                }
             }
         }
     }
@@ -1298,9 +1353,51 @@ impl MixerEngine {
             self.hold_frames,
             self.hold_decay,
         );
-        self.sends(slot, sanitize_frame(post_fader), returns);
-        let safe_out = sanitize_frame(output);
-        let aligned = self.apply_pdc(index, plan.pdc_delay, safe_out);
+        // Reuse the channel's single PDC delay line (holding sanitized post-fader, pre-pan audio)
+        // to tap both Return-aligned sends and main output before writing once.
+        let safe_pf = sanitize_frame(post_fader);
+        let any_send_pdc = plan
+            .sends
+            .iter()
+            .any(|s| s.target.is_some() && s.pdc_delay > 0);
+        let needs_pdc_write = plan.pdc_delay > 0 || any_send_pdc;
+        let delayed_pf = if let Some(line) = self.pdc_lines.get_mut(index) {
+            for send in &plan.sends {
+                let Some(target) = send.target.map(usize::from) else {
+                    break;
+                };
+                if target < MAX_MIXER_CHANNELS && send.amount > 0.0 {
+                    let tapped = if send.pdc_delay == 0 {
+                        safe_pf
+                    } else {
+                        line.read_integer(send.pdc_delay)
+                    };
+                    returns[target][0] += tapped[0] * send.amount;
+                    returns[target][1] += tapped[1] * send.amount;
+                }
+            }
+            let main_pf = if plan.pdc_delay == 0 {
+                safe_pf
+            } else {
+                line.read_integer(plan.pdc_delay)
+            };
+            if needs_pdc_write {
+                line.write(safe_pf);
+            }
+            main_pf
+        } else {
+            for send in &plan.sends {
+                let Some(target) = send.target.map(usize::from) else {
+                    break;
+                };
+                if target < MAX_MIXER_CHANNELS && send.amount > 0.0 {
+                    returns[target][0] += safe_pf[0] * send.amount;
+                    returns[target][1] += safe_pf[1] * send.amount;
+                }
+            }
+            safe_pf
+        };
+        let aligned = plan.apply_cached_pan(delayed_pf);
         self.route_output(plan, aligned, buses, master);
     }
 
@@ -1325,6 +1422,26 @@ impl MixerEngine {
                 if target_slot < MAX_CHANNELS {
                     self.factors[target_slot] *= duck.gain;
                 }
+            }
+            // Advance pending PDC-aligned duck countdowns after evaluating this frame so
+            // a delay of `N` frames arms `elapsed = 0.0` on exact frame `N`.
+            let mut triggered = false;
+            let mut i = 0usize;
+            let mut len = usize::from(duck.pending_len).min(DUCK_PENDING_CAPACITY);
+            while i < len {
+                if duck.pending_delays[i] <= 1 {
+                    triggered = true;
+                    len -= 1;
+                    duck.pending_delays.copy_within(i + 1..len + 1, i);
+                    duck.pending_delays[len] = 0;
+                } else {
+                    duck.pending_delays[i] -= 1;
+                    i += 1;
+                }
+            }
+            duck.pending_len = len as u8;
+            if triggered {
+                duck.elapsed = 0.0;
             }
         }
         let sm = self.smoothing;

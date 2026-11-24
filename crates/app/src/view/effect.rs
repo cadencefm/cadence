@@ -10,7 +10,7 @@ use cadence_core::dsp::{
     db_to_lin_f64, drive_transfer_sample, eq_response_db, filter_mix_magnitude_db, lin_to_db_f64,
     log_to_norm, norm_to_log, octaves_to_ratio_f32, reverb_hf_rt60_envelope, reverb_rt60_envelope,
     sanitize_sample_rate, soft_knee_gr_db_f64, RhythmicEnv, TptOnePoleLpf, COMPRESSOR_KNEE_DB,
-    LIMITER_KNEE_DB,
+    LIMITER_KNEE_DB, NYQUIST_SAFE_RATIO,
 };
 use cadence_core::material::Id;
 use cadence_core::mixer::{
@@ -231,7 +231,7 @@ fn effective_sr(sample_rate: u32) -> f64 {
 
 fn freq_high_hz(sr: f64) -> f32 {
     let sr = sanitize_sample_rate(sr);
-    (sr * 0.45).clamp(4_000.0, 20_000.0) as f32
+    (sr * NYQUIST_SAFE_RATIO).clamp(4_000.0, 20_000.0) as f32
 }
 
 fn sample_eq_curve(patch: &EqPatch, sr: f64) -> Vec<f32> {
@@ -347,7 +347,7 @@ pub fn build_filter_visual(
 ) -> EffectVisualView {
     let sr = sanitize_sample_rate(sr);
     let high_hz = freq_high_hz(sr);
-    let max_cutoff_hz = (sr * 0.45) as f32;
+    let max_cutoff_hz = (sr * NYQUIST_SAFE_RATIO) as f32;
     let effective_base = mod_patch.unwrap_or(patch);
     let curve_db = sample_filter_curve(patch, sr);
     let mut swept_cutoff_hz = mod_cutoff_hz.map(|hz| hz.clamp(FREQ_MIN_HZ, max_cutoff_hz));

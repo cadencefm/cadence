@@ -7,9 +7,10 @@
 mod nodes;
 
 use cadence_core::dsp::{
-    decay_coeff_60db_ms, flush_denormal_f64, fm_depth_from_amount, glide_coeff_ms,
-    one_pole_coeff_ms, sanitize_sample, sanitize_sample_rate, smooth_step_f32, smooth_step_f64,
-    soft_knee_guard_f64, AdsrStage, ModalResonator,
+    control_stride_mask, decay_coeff_60db_ms, flush_denormal_f64, fm_depth_from_amount,
+    glide_coeff_ms, one_pole_coeff_ms, sanitize_sample, sanitize_sample_rate, smooth_step_f32,
+    smooth_step_f64, soft_knee_guard_f64, AdsrStage, ModalResonator, CHOKE_MS, FAST_RELEASE_MS,
+    TAIL_SILENCE_FLOOR_F64,
 };
 pub use cadence_core::rack::SamplerParams;
 use cadence_core::rack::{
@@ -23,16 +24,19 @@ use cadence_core::rack::{
 use cadence_core::rack::{LfoShape, ResonatorMode, SamplerModule};
 use cadence_core::runtime::SampleBank;
 use cadence_core::sampler::SampleData;
-use nodes::{
-    ModuleNode, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks, SILENCE_FLOOR,
-};
+use nodes::{ModuleNode, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks};
 use std::sync::Arc;
 
-const CONTROL_FRAMES: u32 = 16;
+const VOICE_CONTROL_RATE_HZ: f64 = 3_000.0;
 const FEEDBACK_SOFT_KNEE: f64 = 4.0;
 const DEFAULT_TAIL_TIMEOUT_SEC: f64 = 2.0;
-const MAX_RESONATOR_TAIL_SEC: f64 = 12.0;
-const RESONATOR_TAIL_SAFETY_MULT: f64 = 1.4;
+/// Upper fallback cap for stuck/self-oscillating resonator tails (`28 s` covers bright
+/// modes up to `12 s` RT60 decaying below `-120 dB` with excitation headroom; normal
+/// tails retire early as soon as `ModalResonator::quiet()` triggers).
+const MAX_RESONATOR_TAIL_SEC: f64 = 28.0;
+/// Multiplier from base resonator `decay_ms` to fallback tail timeout (`1.455x` max
+/// brightness stretch × `2.0x` for `-120 dB` quiet threshold + headroom).
+const RESONATOR_TAIL_SAFETY_MULT: f64 = 3.2;
 
 /// Maximum number of inline per-voice P-locks tracked without heap allocation.
 pub const MAX_VOICE_LOCKS: usize = 32;
@@ -206,8 +210,11 @@ pub struct ModularVoice {
     rack_tune: f64,
     target_rack_tune: f64,
     smoothing: f64,
-    control_count: u32,
+    control_counter: u32,
+    control_mask: u32,
     tail_frames: u32,
+    tail_elapsed_frames: u32,
+    has_resonator: bool,
 
     // Fallback gate/choke envelope used when a zone has no lifetime Env modules.
     fallback_env: f64,
@@ -274,11 +281,14 @@ impl ModularVoice {
             rack_tune: 0.0,
             target_rack_tune: 0.0,
             smoothing: one_pole_coeff_ms(5.0, sr),
-            control_count: 0,
+            control_counter: 0,
+            control_mask: control_stride_mask(sr, VOICE_CONTROL_RATE_HZ),
             tail_frames: (sr * DEFAULT_TAIL_TIMEOUT_SEC) as u32,
+            tail_elapsed_frames: 0,
+            has_resonator: false,
             fallback_env: 0.0,
             fallback_releasing: false,
-            fallback_release_coeff: decay_coeff_60db_ms(10.0, sr),
+            fallback_release_coeff: decay_coeff_60db_ms(FAST_RELEASE_MS, sr),
             sampler_only: false,
             sampler_only_one_shot: false,
             any_sampler_has_trig_in: false,
@@ -531,6 +541,7 @@ impl ModularVoice {
         let sr = sanitize_sample_rate(sample_rate).clamp(8_000.0, 384_000.0);
         let same_topology = self.active && self.matches_topology(graph);
         self.sample_rate = sr;
+        self.control_mask = control_stride_mask(sr, VOICE_CONTROL_RATE_HZ);
         self.bpm = if bpm.is_finite() {
             bpm.clamp(20.0, 300.0)
         } else {
@@ -764,10 +775,11 @@ impl ModularVoice {
         self.age = 0;
         self.gate_frames = start.gate_frames;
         self.tail_frames = (sr * DEFAULT_TAIL_TIMEOUT_SEC) as u32;
-        self.control_count = 0;
+        self.tail_elapsed_frames = 0;
+        self.control_counter = 0;
         self.fallback_env = 1.0;
         self.fallback_releasing = false;
-        self.fallback_release_coeff = decay_coeff_60db_ms(10.0, sr);
+        self.fallback_release_coeff = decay_coeff_60db_ms(FAST_RELEASE_MS, sr);
 
         let clock = if start.clock_seconds.is_finite() {
             start.clock_seconds.max(0.0)
@@ -795,7 +807,6 @@ impl ModularVoice {
         let mut tstate = TriggerState {
             resonator_banks: &mut self.resonator_banks,
             next_res_bank: 0,
-            max_res_decay_ms: 0.0,
         };
         for s in 0..op_count {
             let acid_vel_amount = if ops[s].kind == ModuleKindTag::Env {
@@ -822,31 +833,16 @@ impl ModularVoice {
             };
             self.nodes[s].on_trigger(&tctx, &mut tstate);
         }
-        let triggered_max_res_decay_ms = tstate.max_res_decay_ms;
-        if triggered_max_res_decay_ms > 0.0 {
-            let max_tail_res_decay_ms = if self.lifetime_env_count == 0 && !self.sampler_only {
-                // Fallback gate attenuates `Out` directly; no resonator sits post-gate.
-                0.0
-            } else if self.lifetime_env_count > 0
+        self.has_resonator = tstate.next_res_bank > 0;
+        let max_tail_res_decay_ms = if self.has_resonator {
+            let use_post_gate_only = self.lifetime_env_count > 0
                 && !(self.sampler_only && !self.any_sampler_has_trig_in)
-                && self.all_env_gates_closed()
-            {
-                let mut best = 0.0_f64;
-                for &slot in &self.post_gate_tail_slots[..self.post_gate_tail_count] {
-                    if let Some(ModuleNode::Resonator(res)) = self.nodes.get(usize::from(slot)) {
-                        best = best.max(res.max_tail_decay_ms());
-                    }
-                }
-                best
-            } else {
-                triggered_max_res_decay_ms
-            };
-            if max_tail_res_decay_ms > 0.0 {
-                let res_tail_sec = (max_tail_res_decay_ms * 0.001 * RESONATOR_TAIL_SAFETY_MULT)
-                    .clamp(DEFAULT_TAIL_TIMEOUT_SEC, MAX_RESONATOR_TAIL_SEC);
-                self.tail_frames = self.tail_frames.max((sr * res_tail_sec) as u32);
-            }
-        }
+                && self.all_env_gates_closed();
+            self.max_tail_resonator_decay_ms(use_post_gate_only)
+        } else {
+            0.0
+        };
+        self.tail_frames = self.compute_tail_frames(max_tail_res_decay_ms);
     }
 
     /// Retarget an active voice cleanly in-place (preserving glide, phases, filter
@@ -961,7 +957,7 @@ impl ModularVoice {
         self.released = true;
         self.fallback_releasing = true;
         let sr = self.sample_rate;
-        let rel_coeff = decay_coeff_60db_ms(10.0, sr);
+        let rel_coeff = decay_coeff_60db_ms(FAST_RELEASE_MS, sr);
         self.fallback_release_coeff = rel_coeff;
         for node in &mut self.nodes[..self.op_count] {
             node.on_force_release(sr, rel_coeff);
@@ -974,7 +970,7 @@ impl ModularVoice {
             return;
         }
         let sr = sanitize_sample_rate(sample_rate);
-        let choke_coeff = decay_coeff_60db_ms(3.5, sr);
+        let choke_coeff = decay_coeff_60db_ms(CHOKE_MS, sr);
         self.released = true;
         self.fallback_releasing = true;
         self.fallback_release_coeff = choke_coeff;
@@ -1039,16 +1035,16 @@ impl ModularVoice {
 
         if self.fallback_releasing {
             self.fallback_env *= self.fallback_release_coeff;
-            if self.fallback_env < SILENCE_FLOOR {
+            if self.fallback_env < TAIL_SILENCE_FLOOR_F64 {
                 self.fallback_env = 0.0;
             }
         }
 
-        let control_tick = self.control_count == 0;
+        let control_tick = self.control_counter == 0;
         if control_tick {
             self.update_control_rate_states();
         }
-        self.control_count = (self.control_count + 1) % CONTROL_FRAMES;
+        self.control_counter = self.control_counter.wrapping_add(1) & self.control_mask;
 
         let op_count = self.op_count;
         let cable_count = self.cable_count;
@@ -1087,7 +1083,7 @@ impl ModularVoice {
         let out = [raw_out[0] as f32, raw_out[1] as f32];
 
         self.age = self.age.saturating_add(1);
-        self.update_voice_lifetime();
+        self.update_voice_lifetime(control_tick);
 
         if !out[0].is_finite() || !out[1].is_finite() {
             self.active = false;
@@ -1107,7 +1103,41 @@ impl ModularVoice {
     }
 
     #[inline]
-    fn update_voice_lifetime(&mut self) {
+    fn max_tail_resonator_decay_ms(&self, use_post_gate_only: bool) -> f64 {
+        if self.lifetime_env_count == 0 && !self.sampler_only {
+            // Fallback gate attenuates `Out` directly; no resonator sits post-gate.
+            return 0.0;
+        }
+        let mut best = 0.0_f64;
+        if use_post_gate_only {
+            for &slot in &self.post_gate_tail_slots[..self.post_gate_tail_count] {
+                if let Some(ModuleNode::Resonator(res)) = self.nodes.get(usize::from(slot)) {
+                    best = best.max(res.max_tail_decay_ms());
+                }
+            }
+        } else {
+            for node in &self.nodes[..self.op_count] {
+                if let ModuleNode::Resonator(res) = node {
+                    best = best.max(res.max_tail_decay_ms());
+                }
+            }
+        }
+        best
+    }
+
+    #[inline]
+    fn compute_tail_frames(&self, max_res_decay_ms: f64) -> u32 {
+        let tail_sec = if max_res_decay_ms > 0.0 {
+            (max_res_decay_ms * 0.001 * RESONATOR_TAIL_SAFETY_MULT)
+                .clamp(DEFAULT_TAIL_TIMEOUT_SEC, MAX_RESONATOR_TAIL_SEC)
+        } else {
+            DEFAULT_TAIL_TIMEOUT_SEC
+        };
+        (self.sample_rate * tail_sec) as u32
+    }
+
+    #[inline]
+    fn update_voice_lifetime(&mut self, control_tick: bool) {
         let envs_done = if self.lifetime_env_count > 0 {
             self.lifetime_envs[..self.lifetime_env_count]
                 .iter()
@@ -1135,18 +1165,31 @@ impl ModularVoice {
             envs_done || (auto_finish_on_samplers && samplers_done)
         } else if self.sampler_only {
             if self.any_sampler_has_trig_in {
-                samplers_done && self.released && self.fallback_env <= SILENCE_FLOOR
+                samplers_done && self.released && self.fallback_env <= TAIL_SILENCE_FLOOR_F64
             } else {
                 samplers_done
             }
         } else {
-            self.fallback_releasing && self.fallback_env <= SILENCE_FLOOR
+            self.fallback_releasing && self.fallback_env <= TAIL_SILENCE_FLOOR_F64
         };
 
         if !sources_done {
             return;
         }
 
+        if self.has_resonator
+            && (self.tail_elapsed_frames == 0 || control_tick || self.tail_frames <= 1)
+        {
+            let use_post_gate_only = envs_done && self.all_env_gates_closed();
+            let budget =
+                self.compute_tail_frames(self.max_tail_resonator_decay_ms(use_post_gate_only));
+            let needed = budget.saturating_sub(self.tail_elapsed_frames);
+            if needed > self.tail_frames {
+                self.tail_frames = needed;
+            }
+        }
+
+        self.tail_elapsed_frames = self.tail_elapsed_frames.saturating_add(1);
         self.tail_frames = self.tail_frames.saturating_sub(1);
         if self.tail_frames == 0 || self.tails_quiet(envs_done) {
             self.active = false;

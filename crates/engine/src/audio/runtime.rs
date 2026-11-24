@@ -12,19 +12,36 @@ use cadence_core::rack::{compile_zone_graph, ModuleKind, RackPatch, RackZone, Sa
 use cadence_core::runtime::{
     default_auto_buffer_frames, AudioErrorCode, AudioInputRequest, AudioInputStatus,
     AudioInventory, AudioStreamRequest, CaptureArmSpec, CapturePhase, EffectMeter,
-    MAX_AUDIO_BUFFER_FRAMES, MIN_AUDIO_BUFFER_FRAMES, MIN_AUDIO_SAMPLE_RATE,
+    MAX_AUDIO_BUFFER_FRAMES, MAX_AUDIO_SAMPLE_RATE, MIN_AUDIO_BUFFER_FRAMES, MIN_AUDIO_SAMPLE_RATE,
 };
 #[cfg(feature = "audio")]
-use cadence_core::runtime::{AudioDeviceInfo, MAX_AUDIO_SAMPLE_RATE, STANDARD_SAMPLE_RATES};
+use cadence_core::runtime::{AudioDeviceInfo, STANDARD_SAMPLE_RATES};
 use std::sync::atomic::{fence, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-pub(super) const OVERLOAD_FADE_MAX_FRAMES: usize = 128;
-const OVERLOAD_CONSECUTIVE_LIMIT: u32 = 5;
+/// Pre-allocated stereo frame capacity for the overload fade-out tail ring (`1024` frames).
+pub(super) const OVERLOAD_FADE_BUF_CAPACITY: usize = 1024;
+/// Click-free overload tail fade-out duration (`~2.67 ms`: `128` fr @ 48 kHz, `~512` fr @ 192 kHz).
+const OVERLOAD_FADE_SEC: f64 = 0.00267;
+/// Minimum consecutive overruns required alongside [`OVERLOAD_SUSTAINED_SEC`].
+const OVERLOAD_MIN_CONSECUTIVE: u32 = 3;
+/// Cumulative overrun audio-time threshold (`50 ms`) before tripping the circuit breaker.
+const OVERLOAD_SUSTAINED_SEC: f64 = 0.050;
 const OVERLOAD_SEVERE_MULTIPLIER: u32 = 4;
 const OVERLOAD_ACTIVE_PEAK_THRESHOLD: f32 = 1e-4;
+/// Smoothing time constant (`120 ms`) for callback CPU load EMA.
+const WATCHDOG_EMA_TAU_SEC: f64 = 0.12;
+
+/// Compute the click-free overload fade-out length in frames scaled to `sample_rate` Hz,
+/// bounded by [`OVERLOAD_FADE_BUF_CAPACITY`].
+#[cfg_attr(not(feature = "audio"), allow(dead_code))]
+#[inline]
+pub(super) fn overload_fade_frames(sample_rate: u32) -> usize {
+    let sr = f64::from(sample_rate.clamp(MIN_AUDIO_SAMPLE_RATE, MAX_AUDIO_SAMPLE_RATE));
+    ((sr * OVERLOAD_FADE_SEC).round() as usize).clamp(16, OVERLOAD_FADE_BUF_CAPACITY)
+}
 
 /// Detected OS audio device, stream format, or hardware availability change.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -130,8 +147,9 @@ pub(super) struct CallbackWatchdog {
     peak_hold_secs: f64,
     initialized: bool,
     consecutive_overruns: u32,
+    overrun_secs: f64,
     was_tripped: bool,
-    tail_stereo: [[f32; 2]; OVERLOAD_FADE_MAX_FRAMES],
+    tail_stereo: Box<[[f32; 2]]>,
 }
 
 #[cfg_attr(not(feature = "audio"), allow(dead_code))]
@@ -143,8 +161,9 @@ impl CallbackWatchdog {
             peak_hold_secs: 0.0,
             initialized: false,
             consecutive_overruns: 0,
+            overrun_secs: 0.0,
             was_tripped: false,
-            tail_stereo: [[0.0; 2]; OVERLOAD_FADE_MAX_FRAMES],
+            tail_stereo: vec![[0.0; 2]; OVERLOAD_FADE_BUF_CAPACITY].into_boxed_slice(),
         }
     }
 
@@ -162,7 +181,7 @@ impl CallbackWatchdog {
             self.peak_hold_secs = 1.0;
             self.initialized = true;
         } else {
-            let alpha = (1.0 - (-budget_secs / 0.12).exp()).clamp(0.05, 0.5);
+            let alpha = (1.0 - (-budget_secs / WATCHDOG_EMA_TAU_SEC).exp()).clamp(1e-4, 1.0);
             self.ema_load += (ratio - self.ema_load) * alpha;
             if ratio >= self.peak_load {
                 self.peak_load = ratio;
@@ -196,12 +215,16 @@ impl CallbackWatchdog {
         if elapsed > budget {
             shared.xrun_count.fetch_add(1, Ordering::Relaxed);
             self.consecutive_overruns = self.consecutive_overruns.saturating_add(1);
+            self.overrun_secs += budget.as_secs_f64();
         } else {
             self.consecutive_overruns = 0;
+            self.overrun_secs = 0.0;
         }
         let severe_stall =
             active_audio && elapsed > budget.saturating_mul(OVERLOAD_SEVERE_MULTIPLIER);
-        self.consecutive_overruns >= OVERLOAD_CONSECUTIVE_LIMIT || severe_stall
+        let sustained_overload = self.consecutive_overruns >= OVERLOAD_MIN_CONSECUTIVE
+            && self.overrun_secs >= OVERLOAD_SUSTAINED_SEC;
+        sustained_overload || severe_stall
     }
 }
 
@@ -278,10 +301,12 @@ pub(super) fn render_output_slice_with_elapsed<T: OutputSample>(
     if watchdog.was_tripped {
         watchdog.was_tripped = false;
         watchdog.consecutive_overruns = 0;
+        watchdog.overrun_secs = 0.0;
     }
 
     let was_playing = shared.playing.load(Ordering::Relaxed);
-    let tail_start = frames.saturating_sub(OVERLOAD_FADE_MAX_FRAMES);
+    let fade_frames = overload_fade_frames(sample_rate).min(watchdog.tail_stereo.len());
+    let tail_start = frames.saturating_sub(fade_frames);
     let mut block_peak = 0.0_f32;
 
     for frame_idx in 0..frames {
@@ -290,7 +315,9 @@ pub(super) fn render_output_slice_with_elapsed<T: OutputSample>(
         let cr = sanitize_sample(right).clamp(-1.0, 1.0);
         block_peak = block_peak.max(cl.abs()).max(cr.abs());
         if frame_idx >= tail_start {
-            watchdog.tail_stereo[frame_idx - tail_start] = [cl, cr];
+            if let Some(slot) = watchdog.tail_stereo.get_mut(frame_idx - tail_start) {
+                *slot = [cl, cr];
+            }
         }
         let offset = frame_idx * channels;
         write_stereo_frame(&mut data[offset..offset + channels], cl, cr);
@@ -305,7 +332,7 @@ pub(super) fn render_output_slice_with_elapsed<T: OutputSample>(
         || shared.playing.load(Ordering::Relaxed)
         || block_peak > OVERLOAD_ACTIVE_PEAK_THRESHOLD;
     if watchdog.observe_block(elapsed, budget, active_audio, shared) {
-        let ramp_len = frames.min(OVERLOAD_FADE_MAX_FRAMES);
+        let ramp_len = frames.min(fade_frames);
         for (i, &[l, r]) in watchdog.tail_stereo.iter().take(ramp_len).enumerate() {
             let frame_idx = tail_start + i;
             let offset = frame_idx * channels;
@@ -326,6 +353,7 @@ pub(super) fn render_output_slice_with_elapsed<T: OutputSample>(
         shared.overload_tripped.store(true, Ordering::Release);
         watchdog.was_tripped = true;
         watchdog.consecutive_overruns = 0;
+        watchdog.overrun_secs = 0.0;
     }
 }
 
@@ -334,9 +362,10 @@ pub(super) fn render_output_slice_with_elapsed<T: OutputSample>(
 pub(super) fn resolve_target_buffer_frames(
     requested: Option<u32>,
     range: Option<(u32, u32)>,
+    sample_rate: u32,
 ) -> Option<u32> {
     let target = requested
-        .unwrap_or_else(default_auto_buffer_frames)
+        .unwrap_or_else(|| default_auto_buffer_frames(sample_rate))
         .clamp(MIN_AUDIO_BUFFER_FRAMES, MAX_AUDIO_BUFFER_FRAMES);
     range.map(|(min, max)| {
         let lo = min.min(max);
@@ -1667,12 +1696,13 @@ fn channel_preference_rank(channels: u16) -> u16 {
 fn select_buffer_size(
     supported: cpal::SupportedBufferSize,
     requested: Option<u32>,
+    sample_rate: u32,
 ) -> (cpal::BufferSize, u32) {
     let range = match supported {
         cpal::SupportedBufferSize::Range { min, max } => Some((min, max)),
         cpal::SupportedBufferSize::Unknown => None,
     };
-    match resolve_target_buffer_frames(requested, range) {
+    match resolve_target_buffer_frames(requested, range, sample_rate) {
         Some(frames) => (cpal::BufferSize::Fixed(frames), frames),
         None => (cpal::BufferSize::Default, 0),
     }
@@ -1821,7 +1851,7 @@ fn resolve_output_stream(
         );
     }
     let (buffer_size, buffer_frames) =
-        select_buffer_size(*supported.buffer_size(), request.buffer_frames);
+        select_buffer_size(*supported.buffer_size(), request.buffer_frames, sample_rate);
     let config = cpal::StreamConfig {
         channels,
         sample_rate: cpal::SampleRate(sample_rate),

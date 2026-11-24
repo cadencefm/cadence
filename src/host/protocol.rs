@@ -271,6 +271,8 @@ fn audio_health_json(snapshot: &AudioSnapshot, audio: Option<&AudioRuntime>) -> 
         "sample_rate": snapshot.sample_rate,
         "buffer_frames": h.buffer_frames,
         "buffer_latency_ms": h.buffer_latency_ms(snapshot.sample_rate),
+        "pdc_latency_frames": h.pdc_latency_frames,
+        "pdc_latency_ms": h.pdc_latency_ms(snapshot.sample_rate),
         "channels": h.channels,
         "bit_depth": h.bit_depth,
         "format": h.format_label(),

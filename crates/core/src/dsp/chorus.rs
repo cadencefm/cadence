@@ -7,11 +7,11 @@
 use crate::dsp::biquad::TptOnePoleLpf;
 use crate::dsp::delay::DelayLine;
 use crate::dsp::math::{
-    sanitize_clamp_f64, sanitize_frame, sanitize_sample_f64, sanitize_sample_rate, Smoother,
-    BYPASS_SETTLE_EPS,
+    mix_stereo_f64, sanitize_clamp_f64, sanitize_frame, sanitize_sample_f64, sanitize_sample_rate,
+    BypassFader, BypassStep, Smoother,
 };
 use crate::mixer::ChorusPatch;
-use std::f64::consts::{FRAC_PI_2, PI, TAU};
+use std::f64::consts::{FRAC_PI_2, TAU};
 
 const MAX_CHORUS_SECONDS: f64 = 0.064;
 const BBD_TONE_HZ: f64 = 8_500.0;
@@ -58,7 +58,7 @@ impl QuadratureLfo {
         let a = self.phase * TAU;
         let spread = sanitize_sample_f64(width).clamp(0.0, 1.0) * FRAC_PI_2;
         let v1 = [a.sin(), (a + spread).sin()];
-        let v2 = [(a + PI).sin(), (a + PI + spread).sin()];
+        let v2 = [-v1[0], -v1[1]];
         let inc = sanitize_sample_f64(rate_hz).clamp(0.0, 40.0) / self.sample_rate;
         self.phase = (self.phase + inc).rem_euclid(1.0);
         (v1, v2)
@@ -76,10 +76,10 @@ pub struct Chorus {
     depth: Smoother,
     width: Smoother,
     mix: Smoother,
-    bypass_wet: Smoother,
+    bypass: BypassFader,
     tone_lpf: TptOnePoleLpf,
+    last_patch: ChorusPatch,
     has_processed: bool,
-    was_active: bool,
 }
 
 impl Chorus {
@@ -95,10 +95,10 @@ impl Chorus {
             depth: Smoother::new(f64::from(default.depth), 5.0, sr),
             width: Smoother::new(f64::from(default.width), 5.0, sr),
             mix: Smoother::new(f64::from(default.mix), 5.0, sr),
-            bypass_wet: Smoother::new(1.0, 1.5, sr),
+            bypass: BypassFader::new(sr),
             tone_lpf: TptOnePoleLpf::new(sr, BBD_TONE_HZ),
+            last_patch: default,
             has_processed: false,
-            was_active: false,
         };
         ch.set_parameters(default);
         ch
@@ -106,7 +106,7 @@ impl Chorus {
 
     #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
-        !self.was_active
+        self.bypass.is_idle()
     }
 
     pub fn reset(&mut self) {
@@ -117,9 +117,8 @@ impl Chorus {
         self.depth.snap(self.depth.target());
         self.width.snap(self.width.target());
         self.mix.snap(self.mix.target());
-        self.bypass_wet.snap(1.0);
+        self.bypass.reset();
         self.has_processed = false;
-        self.was_active = false;
     }
 
     pub fn set_parameters(&mut self, patch: ChorusPatch) {
@@ -128,6 +127,16 @@ impl Chorus {
         let depth = sanitize_clamp_f64(f64::from(patch.depth), 0.0, 1.0, f64::from(def.depth));
         let width = sanitize_clamp_f64(f64::from(patch.width), 0.0, 1.0, f64::from(def.width));
         let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
+        let sanitized = ChorusPatch {
+            rate_hz: rate as f32,
+            depth: depth as f32,
+            width: width as f32,
+            mix: mix as f32,
+        };
+        if self.has_processed && sanitized == self.last_patch {
+            return;
+        }
+        self.last_patch = sanitized;
         if !self.has_processed {
             self.rate_hz.snap(rate);
             self.depth.snap(depth);
@@ -144,21 +153,17 @@ impl Chorus {
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
-        if bypassed && !self.was_active {
-            self.bypass_wet.snap(0.0);
-            return dry;
-        }
-        self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
-        let bypass_w = self.bypass_wet.next();
-        if bypassed && bypass_w <= BYPASS_SETTLE_EPS {
-            self.bypass_wet.snap(0.0);
-            // O(1) validity reset prevents stale bursts when un-bypassed later.
-            self.line.reset();
-            self.tone_lpf.reset();
-            self.was_active = false;
-            return dry;
-        }
-        self.was_active = true;
+        let bypass_w = match self.bypass.step(bypassed) {
+            BypassStep::Idle => return dry,
+            BypassStep::SettledBypass => {
+                // O(1) validity reset prevents stale bursts when un-bypassed later.
+                self.line.reset();
+                self.tone_lpf.reset();
+                self.bypass.mark_idle();
+                return dry;
+            }
+            BypassStep::Active(w) => w,
+        };
 
         self.line.write(dry);
         let rate = self.rate_hz.next();
@@ -176,17 +181,23 @@ impl Chorus {
         let d_r1 = (base_ms + v1[1] * swing_ms) * ms_to_samp;
         let d_r2 = (base_ms + 3.2 + v2[1] * swing_ms * 0.7) * ms_to_samp;
 
-        let wet_l = 0.5 * f64::from(self.line.read_cubic(d_l1)[0] + self.line.read_cubic(d_l2)[0]);
-        let wet_r = 0.5 * f64::from(self.line.read_cubic(d_r1)[1] + self.line.read_cubic(d_r2)[1]);
+        let wet_l = 0.5
+            * f64::from(
+                self.line.read_cubic_channel(d_l1, 0) + self.line.read_cubic_channel(d_l2, 0),
+            );
+        let wet_r = 0.5
+            * f64::from(
+                self.line.read_cubic_channel(d_r1, 1) + self.line.read_cubic_channel(d_r2, 1),
+            );
         let toned = self.tone_lpf.process_stereo([wet_l, wet_r]);
 
         // True (1 - mix) * dry + mix * wet law (zero dry bleed at 100% wet, flat bass at 50% mix!).
-        let eff_wet = mix * bypass_w;
-        let eff_dry = 1.0 - eff_wet;
-        [
-            (f64::from(dry[0]) * eff_dry + toned[0] * eff_wet) as f32,
-            (f64::from(dry[1]) * eff_dry + toned[1] * eff_wet) as f32,
-        ]
+        let out = mix_stereo_f64(
+            [f64::from(dry[0]), f64::from(dry[1])],
+            toned,
+            mix * bypass_w,
+        );
+        [out[0] as f32, out[1] as f32]
     }
 }
 
@@ -315,6 +326,32 @@ mod tests {
             });
             let y = ch.process([0.5, -0.5], false);
             assert!(y[0].is_finite() && y[1].is_finite());
+        }
+    }
+
+    #[test]
+    fn quadrature_lfo_voice_two_matches_exact_antiphase_across_sample_rates() {
+        use std::f64::consts::PI;
+
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            for width in [0.0, 0.35, 0.7, 1.0] {
+                let mut lfo = QuadratureLfo::new(sr);
+                let spread = width * FRAC_PI_2;
+                for _ in 0..512 {
+                    let phase = lfo.phase();
+                    let a = phase * TAU;
+                    let expected_v1 = eval_quadrature(phase, width);
+                    let expected_v2 = [(a + PI).sin(), (a + PI + spread).sin()];
+                    let (v1, v2) = lfo.next(1.75, width);
+                    assert_eq!(v1, expected_v1);
+                    assert_eq!(v2, [-v1[0], -v1[1]]);
+                    assert!(
+                        (v2[0] - expected_v2[0]).abs() < 1e-14
+                            && (v2[1] - expected_v2[1]).abs() < 1e-14,
+                        "sr={sr} width={width}: v2={v2:?} vs expected={expected_v2:?}"
+                    );
+                }
+            }
         }
     }
 }

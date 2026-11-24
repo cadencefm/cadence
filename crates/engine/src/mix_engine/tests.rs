@@ -1232,3 +1232,310 @@ fn mixer_smoothers_settle_exactly_without_subnormal_stalls_and_cache_pan_weights
         );
     }
 }
+
+#[test]
+fn return_send_pdc_aligns_mismatched_senders_inside_return_and_at_master_across_sample_rates() {
+    use cadence_core::mixer::LimiterPatch;
+
+    for sr in [44_100u32, 48_000, 96_000, 192_000] {
+        let lookahead = limiter_lookahead_frames(f64::from(sr));
+
+        // 1. Direct Return alignment:
+        //    Ch1 (with Limiter, sends L impulse) + Ch2 (dry, sends R impulse) -> Return 4 -> Master.
+        //    Verify BOTH impulses arrive on the exact same frame inside Return 4 (wet-only) AND at Master!
+        let mut score = stereo_score();
+        score
+            .mixer
+            .channel_mut(1)
+            .unwrap()
+            .inserts
+            .push(EffectDevice {
+                id: 501,
+                name: "Ch1 Limiter".into(),
+                bypassed: false,
+                kind: EffectKind::Limiter(LimiterPatch::default()),
+            });
+        score.mixer.channel_mut(1).unwrap().sends = vec![ChannelSend {
+            target: 4,
+            amount: 1.0,
+        }];
+        score.mixer.channel_mut(2).unwrap().sends = vec![ChannelSend {
+            target: 4,
+            amount: 1.0,
+        }];
+        // Solo Return 4 to inspect Return bus output in isolation.
+        score
+            .mixer
+            .flags
+            .set_channel_solo(ChannelRef::Channel(4), true)
+            .unwrap();
+        score.validate().unwrap();
+
+        let mut wet_mix = MixerEngine::new(&score, sr);
+        wet_mix.update_controls(&score, 0.0, 0.0);
+        wet_mix.snap_smoothers();
+        assert_eq!(wet_mix.total_output_latency_frames(), lookahead);
+
+        let mut ret_ch1_frame = None;
+        let mut ret_ch2_frame = None;
+        assert_no_heap_operations(|| {
+            wet_mix.update_controls(&score, 0.0, 0.0);
+            for frame in 0..(lookahead * 3) {
+                let mut s = [[0.0; 2]; MAX_INSTRUMENTS];
+                if frame == 0 {
+                    s[0] = [0.25, 0.0]; // Ch1 (limited) on Left
+                    s[1] = [0.0, 0.25]; // Ch2 (dry, send-PDC aligned) on Right
+                }
+                let y = wet_mix.process(&s, [0.0; 2]);
+                if ret_ch1_frame.is_none() && y[0].abs() > 0.1 {
+                    ret_ch1_frame = Some(frame);
+                }
+                if ret_ch2_frame.is_none() && y[1].abs() > 0.1 {
+                    ret_ch2_frame = Some(frame);
+                }
+            }
+        });
+        assert_eq!(
+            ret_ch1_frame,
+            Some(lookahead),
+            "sr={sr}: limited sender arrival inside Return"
+        );
+        assert_eq!(
+            ret_ch2_frame, ret_ch1_frame,
+            "sr={sr}: dry sender must align with limited sender inside Return (zero comb filtering)"
+        );
+
+        // 2. Full Master mix + Ch2 routed through Group 3 (main pdc_delay=0, send pdc_delay=lookahead)
+        //    and Return 4 ALSO carrying a Limiter (total latency = 2 * lookahead).
+        //    Dry Ch1, Dry Ch2 (via Group), and Return (Ch1 + Ch2) must all land on exact frame `2 * lookahead`!
+        let mut full_score = stereo_score();
+        full_score
+            .mixer
+            .channel_mut(1)
+            .unwrap()
+            .inserts
+            .push(EffectDevice {
+                id: 502,
+                name: "Ch1 Lim".into(),
+                bypassed: false,
+                kind: EffectKind::Limiter(LimiterPatch::default()),
+            });
+        full_score.mixer.channel_mut(1).unwrap().sends = vec![ChannelSend {
+            target: 4,
+            amount: 0.5,
+        }];
+        full_score.mixer.channel_mut(2).unwrap().output = ChannelRef::Channel(3);
+        full_score.mixer.channel_mut(2).unwrap().sends = vec![ChannelSend {
+            target: 4,
+            amount: 0.5,
+        }];
+        full_score
+            .mixer
+            .channel_mut(4)
+            .unwrap()
+            .inserts
+            .push(EffectDevice {
+                id: 503,
+                name: "Ret Lim".into(),
+                bypassed: false,
+                kind: EffectKind::Limiter(LimiterPatch::default()),
+            });
+        full_score.validate().unwrap();
+
+        let mut full_mix = MixerEngine::new(&full_score, sr);
+        full_mix.update_controls(&full_score, 0.0, 0.0);
+        full_mix.snap_smoothers();
+        assert_eq!(full_mix.total_output_latency_frames(), lookahead * 2);
+
+        let mut master_peaks_l = Vec::with_capacity(16);
+        let mut master_peaks_r = Vec::with_capacity(16);
+        assert_no_heap_operations(|| {
+            // Re-running adopt(false) and update_controls must preserve send.pdc_delay and pdc_lines.
+            full_mix.adopt(&full_score, false);
+            full_mix.update_controls(&full_score, 0.0, 0.0);
+            for frame in 0..(lookahead * 4) {
+                let mut s = [[0.0; 2]; MAX_INSTRUMENTS];
+                if frame == 0 {
+                    s[0] = [0.2, 0.0]; // Ch1 (dry 0.2 + ret 0.1 = 0.3 on L)
+                    s[1] = [0.0, 0.2]; // Ch2 (dry 0.2 via Group + ret 0.1 = 0.3 on R)
+                }
+                let y = full_mix.process(&s, [0.0; 2]);
+                if y[0].abs() > 0.05 {
+                    master_peaks_l.push((frame, y[0]));
+                }
+                if y[1].abs() > 0.05 {
+                    master_peaks_r.push((frame, y[1]));
+                }
+            }
+        });
+        assert_eq!(
+            master_peaks_l.len(),
+            1,
+            "sr={sr}: Ch1 dry + wet must coalesce into a single Master impulse: {master_peaks_l:?}"
+        );
+        assert_eq!(
+            master_peaks_r.len(),
+            1,
+            "sr={sr}: Ch2 (Group) dry + wet must coalesce into a single Master impulse: {master_peaks_r:?}"
+        );
+        assert_eq!(master_peaks_l[0].0, lookahead * 2, "sr={sr}");
+        assert_eq!(master_peaks_r[0].0, lookahead * 2, "sr={sr}");
+        close(master_peaks_l[0].1, 0.3);
+        close(master_peaks_r[0].1, 0.3);
+    }
+}
+
+#[test]
+fn sidechain_duck_pdc_aligns_gain_dip_with_delayed_target_across_sample_rates() {
+    use cadence_core::mixer::LimiterPatch;
+
+    for sr in [44_100u32, 48_000, 96_000, 192_000] {
+        let lookahead = limiter_lookahead_frames(f64::from(sr));
+
+        // 1. Channel 2 (target) carries a Limiter (`lookahead` frames), while Channel 1 (sidechain
+        //    kick source) has no inserts (so Ch1 receives `pdc_delay = lookahead`).
+        //    Triggering part 7 on frame 0 with a Kick impulse on Ch1 Left and steady tone on Ch2 Right
+        //    must align the Kick arrival frame and the first Duck attenuation frame identically!
+        let mut score = stereo_score();
+        score
+            .mixer
+            .channel_mut(2)
+            .unwrap()
+            .inserts
+            .push(EffectDevice {
+                id: 601,
+                name: "Bass Limiter".into(),
+                bypassed: false,
+                kind: EffectKind::Limiter(LimiterPatch::default()),
+            });
+        score.mixer.ducks.push(Duck {
+            id: 1,
+            name: "Kick Pump".into(),
+            source_part: 7,
+            target: ChannelRef::Channel(2),
+            depth: 0.8,
+            recovery_ms: 80.0,
+        });
+        score.validate().unwrap();
+
+        let mut mix = MixerEngine::new(&score, sr);
+        mix.update_controls(&score, 0.0, 0.0);
+        mix.snap_smoothers();
+        assert_eq!(mix.total_output_latency_frames(), lookahead);
+
+        // Warm up Channel 2's Limiter with steady 0.25 DC on Right so steady-state output is 0.25.
+        let mut steady = [[0.0; 2]; MAX_INSTRUMENTS];
+        steady[1] = [0.0, 0.25];
+        for _ in 0..(lookahead * 4) {
+            let _ = mix.process(&steady, [0.0; 2]);
+        }
+
+        let mut kick_peak_frame = None;
+        let mut first_duck_frame = None;
+        let mut min_duck_level = 1.0_f32;
+        assert_no_heap_operations(|| {
+            mix.trigger_part(7);
+            for frame in 0..(lookahead * 3) {
+                let mut s = steady;
+                if frame == 0 {
+                    s[0] = [0.25, 0.0]; // Kick impulse on Left
+                }
+                // Exercise non-boundary adopt mid-countdown to verify pending delays survive.
+                if frame == lookahead / 2 {
+                    mix.adopt(&score, false);
+                }
+                let y = mix.process(&s, [0.0; 2]);
+                if kick_peak_frame.is_none() && y[0].abs() > 0.1 {
+                    kick_peak_frame = Some(frame);
+                }
+                if first_duck_frame.is_none() && y[1] < 0.2495 {
+                    first_duck_frame = Some(frame);
+                }
+                min_duck_level = min_duck_level.min(y[1]);
+            }
+        });
+        assert_eq!(
+            kick_peak_frame,
+            Some(lookahead),
+            "sr={sr}: Kick impulse must land at lookahead={lookahead}"
+        );
+        assert_eq!(
+            first_duck_frame, kick_peak_frame,
+            "sr={sr}: Duck dip must begin on exact same Master output sample as Kick impulse"
+        );
+        assert!(
+            min_duck_level < 0.15,
+            "sr={sr}: Duck must attenuate target channel strongly: min={min_duck_level}"
+        );
+
+        // 2. Master duck with Limiters on both Ch1 and Master -> `total_output_latency = 2 * lookahead`.
+        let mut master_score = stereo_score();
+        master_score
+            .mixer
+            .channel_mut(1)
+            .unwrap()
+            .inserts
+            .push(EffectDevice {
+                id: 602,
+                name: "Ch1 Lim".into(),
+                bypassed: false,
+                kind: EffectKind::Limiter(LimiterPatch::default()),
+            });
+        master_score.mixer.master.inserts.push(EffectDevice {
+            id: 603,
+            name: "Master Lim".into(),
+            bypassed: false,
+            kind: EffectKind::Limiter(LimiterPatch::default()),
+        });
+        master_score.mixer.ducks.push(Duck {
+            id: 2,
+            name: "Master Pump".into(),
+            source_part: 9,
+            target: ChannelRef::Master,
+            depth: 0.75,
+            recovery_ms: 80.0,
+        });
+        master_score.validate().unwrap();
+
+        let mut mmix = MixerEngine::new(&master_score, sr);
+        mmix.update_controls(&master_score, 0.0, 0.0);
+        mmix.snap_smoothers();
+        assert_eq!(mmix.total_output_latency_frames(), lookahead * 2);
+
+        for _ in 0..(lookahead * 5) {
+            let _ = mmix.process(&steady, [0.0; 2]);
+        }
+        let mut master_kick_frame = None;
+        let mut master_duck_frame = None;
+        mmix.trigger_part(9);
+        for frame in 0..(lookahead * 4) {
+            let mut s = steady;
+            if frame == 0 {
+                s[0] = [0.25, 0.0];
+            }
+            let y = mmix.process(&s, [0.0; 2]);
+            if master_kick_frame.is_none() && y[0].abs() > 0.1 {
+                master_kick_frame = Some(frame);
+            }
+            if master_duck_frame.is_none() && y[1] < 0.2495 {
+                master_duck_frame = Some(frame);
+            }
+        }
+        assert_eq!(master_kick_frame, Some(lookahead * 2), "sr={sr}");
+        assert_eq!(
+            master_duck_frame, master_kick_frame,
+            "sr={sr}: Master duck must align with cumulative max_master_in + master_insert_lat"
+        );
+
+        // 3. Overflowing pending ring (>4 queued triggers) drops oldest without panic, and reset() clears pending.
+        for _ in 0..8 {
+            mmix.trigger_part(9);
+        }
+        mmix.reset();
+        for _ in 0..(lookahead * 5) {
+            let _ = mmix.process(&steady, [0.0; 2]);
+        }
+        let after_reset = mmix.process(&steady, [0.0; 2]);
+        close(after_reset[1], 0.25);
+    }
+}

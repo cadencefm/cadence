@@ -257,6 +257,7 @@ fn gpu_renders_midi_deck_settings_and_help_dark_and_light() {
         overloaded: false,
         failed: false,
         error_code: AudioErrorCode::None,
+        ..AudioHealth::default()
     };
     healthy_snap.input = AudioInputTelemetry {
         status: AudioInputStatus::Running,
@@ -329,6 +330,7 @@ fn gpu_renders_midi_deck_settings_and_help_dark_and_light() {
         overloaded: true,
         failed: false,
         error_code: AudioErrorCode::OverloadCircuitBreaker,
+        ..AudioHealth::default()
     };
     overload_snap.input.capture_phase = CapturePhase::Armed;
     overload_snap.input.clipped = true;
@@ -374,6 +376,7 @@ fn gpu_renders_midi_deck_settings_and_help_dark_and_light() {
         overloaded: false,
         failed: true,
         error_code: AudioErrorCode::DeviceUnavailable,
+        ..AudioHealth::default()
     };
     app.observe_snapshot(&failed_snap);
     app.press_keys("j").unwrap(); // Focus Restart Audio row

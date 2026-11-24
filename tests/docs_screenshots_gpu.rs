@@ -1158,6 +1158,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             overloaded: false,
             failed: false,
             error_code: AudioErrorCode::None,
+            ..AudioHealth::default()
         };
         snap.input = AudioInputTelemetry {
             status: AudioInputStatus::Running,

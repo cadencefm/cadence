@@ -1975,7 +1975,7 @@ fn audio_engine_next_frame_is_strictly_zero_heap_alloc_under_triggers_chokes_and
 #[test]
 fn callback_watchdog_overload_fades_silences_latches_and_recovers_on_play_and_reset() {
     use crate::audio::runtime::{
-        render_output_slice_with_elapsed, CallbackWatchdog, OVERLOAD_FADE_MAX_FRAMES,
+        overload_fade_frames, render_output_slice_with_elapsed, CallbackWatchdog,
     };
     use cadence_core::mixer::{DelayPatch, EffectKind, ReverbPatch};
     use cadence_core::runtime::{AudioErrorCode, AudioStreamStatus};
@@ -2082,7 +2082,7 @@ fn callback_watchdog_overload_fades_silences_latches_and_recovers_on_play_and_re
                 || budget.mul_f64(1.4),
             );
         }
-        let fade_start = (frames - OVERLOAD_FADE_MAX_FRAMES) * channels;
+        let fade_start = (frames - overload_fade_frames(sr)) * channels;
         for f in (fade_start..buf.len() - channels).step_by(channels) {
             let dl = (buf[f + channels] - buf[f]).abs();
             let dr = (buf[f + channels + 1] - buf[f + 1]).abs();
@@ -2715,30 +2715,34 @@ fn buffer_size_clamping_device_matching_inventory_panic_silence_and_change_summa
         default_auto_buffer_frames, AudioStreamRequest, AudioStreamStatus,
     };
 
-    // 1. Buffer size resolution and hardware range clamping.
-    let auto = default_auto_buffer_frames();
+    // 1. Buffer size resolution and hardware range clamping (including high-SR auto scaling).
+    let auto_48 = default_auto_buffer_frames(48_000);
     assert_eq!(
-        resolve_target_buffer_frames(None, Some((64, 2048))),
-        Some(auto)
+        resolve_target_buffer_frames(None, Some((64, 2048)), 48_000),
+        Some(auto_48)
     );
     assert_eq!(
-        resolve_target_buffer_frames(None, Some((64, 256))),
+        resolve_target_buffer_frames(None, Some((64, 8192)), 192_000),
+        Some(default_auto_buffer_frames(192_000))
+    );
+    assert_eq!(
+        resolve_target_buffer_frames(None, Some((64, 256)), 48_000),
         Some(256)
     );
     assert_eq!(
-        resolve_target_buffer_frames(Some(64), Some((128, 1024))),
+        resolve_target_buffer_frames(Some(64), Some((128, 1024)), 48_000),
         Some(128)
     );
     assert_eq!(
-        resolve_target_buffer_frames(Some(4096), Some((128, 1024))),
+        resolve_target_buffer_frames(Some(4096), Some((128, 1024)), 48_000),
         Some(1024)
     );
     // Inverted hardware range bounds are handled safely without panic.
     assert_eq!(
-        resolve_target_buffer_frames(Some(512), Some((1024, 128))),
+        resolve_target_buffer_frames(Some(512), Some((1024, 128)), 48_000),
         Some(512)
     );
-    assert_eq!(resolve_target_buffer_frames(Some(256), None), None);
+    assert_eq!(resolve_target_buffer_frames(Some(256), None, 48_000), None);
 
     // 2. Device matching prefers exact match over case-insensitive substring.
     let devices = ["Built-in Output", "Scarlett 2i2 USB", "Scarlett 2i2"];
@@ -2829,7 +2833,7 @@ fn buffer_size_clamping_device_matching_inventory_panic_silence_and_change_summa
 #[test]
 fn input_routing_metering_clip_clear_and_capture_ring_overflow() {
     use crate::audio::input::{process_input_slice, InputMeterState};
-    use crate::audio::shared::AUDIO_CAPTURE_CAPACITY;
+    use crate::audio::shared::{AUDIO_CAPTURE_CAPACITY, INPUT_DIGITAL_SILENCE_SEC};
     use cadence_core::runtime::{AudioInputMode, AudioInputStatus, CapturePhase};
 
     let shared = Shared::new_arc();
@@ -2927,23 +2931,45 @@ fn input_routing_metering_clip_clear_and_capture_ring_overflow() {
     process_input_slice(&mut state, &shared, &burst, 2, 48_000);
     assert_eq!(shared.capture_dropped.load(Ordering::Relaxed), 6);
 
-    // 5. Sustained bit-for-bit 0.0 callbacks trigger `digital_silence` after 24 blocks,
-    //    and a single non-zero sample clears it immediately.
-    shared.reset_input_stream_state();
-    state.clear();
-    let zeros = vec![0.0_f32; 64];
-    for _ in 0..23 {
-        process_input_slice(&mut state, &shared, &zeros, 2, 48_000);
+    // 5. Sustained bit-for-bit 0.0 audio triggers `digital_silence` after 0.25 s across sample
+    //    rates and callback sizes, and a single non-zero sample clears it immediately.
+    for (sr, block_frames) in [
+        (44_100u32, 256usize),
+        (48_000, 64),
+        (96_000, 256),
+        (192_000, 512),
+    ] {
+        shared.reset_input_stream_state();
+        state.clear();
+        let threshold_frames = (f64::from(sr) * INPUT_DIGITAL_SILENCE_SEC).round() as usize;
+        let zeros = vec![0.0_f32; block_frames * 2];
+        let mut fed = 0usize;
+        while fed + block_frames < threshold_frames {
+            process_input_slice(&mut state, &shared, &zeros, 2, sr);
+            fed += block_frames;
+        }
+        assert!(
+            !shared.read_input_telemetry().digital_silence,
+            "sr={sr} block={block_frames}: must not flag digital_silence before 0.25 s ({fed}/{threshold_frames} frames)"
+        );
+        // Feed the remaining frames to cross the 0.25 s boundary.
+        let rem = threshold_frames.saturating_sub(fed);
+        let rem_zeros = vec![0.0_f32; rem * 2];
+        process_input_slice(&mut state, &shared, &rem_zeros, 2, sr);
+        assert!(
+            shared.read_input_telemetry().digital_silence,
+            "sr={sr} block={block_frames}: must flag digital_silence once >= 0.25 s of zeros arrive"
+        );
+        shared
+            .input_mode
+            .store(AudioInputMode::Stereo.to_u8(), Ordering::Release);
+        let noise_floor = vec![1e-5_f32, 0.0];
+        process_input_slice(&mut state, &shared, &noise_floor, 2, sr);
+        assert!(
+            !shared.read_input_telemetry().digital_silence,
+            "sr={sr}: single non-zero sample must clear digital_silence immediately"
+        );
     }
-    assert!(!shared.read_input_telemetry().digital_silence);
-    process_input_slice(&mut state, &shared, &zeros, 2, 48_000);
-    assert!(shared.read_input_telemetry().digital_silence);
-    shared
-        .input_mode
-        .store(AudioInputMode::Stereo.to_u8(), Ordering::Release);
-    let noise_floor = vec![1e-5_f32, 0.0];
-    process_input_slice(&mut state, &shared, &noise_floor, 2, 48_000);
-    assert!(!shared.read_input_telemetry().digital_silence);
 }
 
 #[test]
@@ -3523,4 +3549,242 @@ fn mono_portamento_glides_across_detached_rests_after_voice_retirement_and_clear
         pitch1,
         "transport seek/clear_all must clear mono portamento pitch memory"
     );
+}
+
+#[test]
+fn watchdog_ema_time_based_overload_sr_scaled_fade_and_engine_pdc_telemetry() {
+    use crate::audio::runtime::{
+        overload_fade_frames, render_output_slice_with_elapsed, CallbackWatchdog,
+        OVERLOAD_FADE_BUF_CAPACITY,
+    };
+    use cadence_core::dsp::limiter_lookahead_frames;
+    use cadence_core::mixer::{EffectKind, LimiterPatch};
+    use cadence_core::runtime::AudioInputTelemetry;
+
+    // 1. Overload fade frame count scales proportionally with sample rate and stays within buffer capacity.
+    assert_eq!(overload_fade_frames(48_000), 128);
+    assert_eq!(overload_fade_frames(96_000), 256);
+    assert!((overload_fade_frames(192_000) as isize - 512).abs() <= 2);
+    assert_eq!(overload_fade_frames(384_000), OVERLOAD_FADE_BUF_CAPACITY);
+
+    // 2. CallbackWatchdog EMA step response stays sample-rate- and buffer-size-invariant
+    //    between 48 kHz / 512 frames and 192 kHz / 64 frames (120 ms tau -> ~63.2% at 120 ms).
+    let measure_step_ema = |sr: u32, frames: usize| -> f32 {
+        let score = rack_project(vec![Step::default(); 16], RackPatch::default_synth())
+            .compile()
+            .unwrap();
+        let shared = Shared::new_arc();
+        let mut engine = Engine::new(score, Vec::new(), sr, Arc::clone(&shared));
+        let mut watchdog = CallbackWatchdog::new();
+        let mut buf = vec![0.0_f32; frames * 2];
+        let budget = Duration::from_secs_f64(frames as f64 / f64::from(sr));
+
+        // Seed EMA at 0.0 on first callback.
+        render_output_slice_with_elapsed(
+            &mut engine,
+            &mut watchdog,
+            &shared,
+            &mut buf,
+            2,
+            sr,
+            || Duration::ZERO,
+        );
+        // Run 120 ms of callbacks at 80% budget load -> EMA should reach 0.8 * (1 - 1/e) ~= 0.5057.
+        let blocks = (0.120 / budget.as_secs_f64()).round() as usize;
+        for _ in 0..blocks {
+            render_output_slice_with_elapsed(
+                &mut engine,
+                &mut watchdog,
+                &shared,
+                &mut buf,
+                2,
+                sr,
+                || budget.mul_f64(0.8),
+            );
+        }
+        shared.read_health().cpu_load
+    };
+
+    let ema_48k = measure_step_ema(48_000, 512);
+    let ema_192k_64 = measure_step_ema(192_000, 64);
+    let expected_ema = 0.8 * (1.0 - (-1.0_f32).exp());
+    assert!(
+        (ema_48k - expected_ema).abs() < 0.03,
+        "48k/512 EMA={ema_48k}, expected ~{expected_ema}"
+    );
+    assert!(
+        (ema_192k_64 - expected_ema).abs() < 0.03,
+        "192k/64 EMA={ema_192k_64}, expected ~{expected_ema}"
+    );
+    assert!(
+        (ema_48k - ema_192k_64).abs() < 0.03,
+        "EMA drifted across sample rate / buffer size: 48k={ema_48k} vs 192k/64={ema_192k_64}"
+    );
+
+    // 3. Time-based sustained overload at 192 kHz / 64 frames (0.333 ms/callback):
+    //    10 consecutive overruns (3.33 ms) must NOT false-trip, while >= 50 ms sustained MUST trip.
+    //    Also verify 192 kHz overload fade-out ramps smoothly over ~512 frames with zero heap ops.
+    let mut rack = RackPatch::default_synth();
+    amp_env_mut(&mut rack).sustain = 1.0;
+    let score_192 = rack_project(vec![note(1); 16], rack).compile().unwrap();
+    let shared_192 = Shared::new_arc();
+    shared_192.playing.store(true, Ordering::Release);
+    let mut eng_192 = Engine::new(
+        score_192.clone(),
+        Vec::new(),
+        192_000,
+        Arc::clone(&shared_192),
+    );
+    let mut wd_192 = CallbackWatchdog::new();
+    let mut buf_64 = vec![0.0_f32; 64 * 2];
+    let budget_64 = Duration::from_secs_f64(64.0 / 192_000.0);
+    for _ in 0..10 {
+        render_output_slice_with_elapsed(
+            &mut eng_192,
+            &mut wd_192,
+            &shared_192,
+            &mut buf_64,
+            2,
+            192_000,
+            || budget_64.mul_f64(1.3),
+        );
+    }
+    assert!(
+        !shared_192.read_health().overloaded,
+        "10 brief overruns (3.3 ms) at 192 kHz / 64 fr must not false-trip"
+    );
+    for _ in 0..145 {
+        render_output_slice_with_elapsed(
+            &mut eng_192,
+            &mut wd_192,
+            &shared_192,
+            &mut buf_64,
+            2,
+            192_000,
+            || budget_64.mul_f64(1.3),
+        );
+    }
+    assert!(
+        shared_192.read_health().overloaded,
+        "sustained >= 50 ms of overruns at 192 kHz / 64 fr must trip overload circuit breaker"
+    );
+
+    // Verify 192 kHz large-block overload fade uses SR-scaled ~512-frame Hann ramp with zero heap ops.
+    let shared_fade = Shared::new_arc();
+    shared_fade.playing.store(true, Ordering::Release);
+    let mut eng_fade = Engine::new(score_192, Vec::new(), 192_000, Arc::clone(&shared_fade));
+    let mut wd_fade = CallbackWatchdog::new();
+    let fade_frames = overload_fade_frames(192_000);
+    let block_192 = 1024usize;
+    let mut buf_192 = vec![0.0_f32; block_192 * 2];
+    let budget_192 = Duration::from_secs_f64(block_192 as f64 / 192_000.0);
+    for _ in 0..4 {
+        render_output_slice_with_elapsed(
+            &mut eng_fade,
+            &mut wd_fade,
+            &shared_fade,
+            &mut buf_192,
+            2,
+            192_000,
+            || budget_192.mul_f64(0.2),
+        );
+    }
+    let mut max_step_192 = 0.0_f32;
+    crate::mix_engine::tests::assert_no_heap_operations(|| {
+        render_output_slice_with_elapsed(
+            &mut eng_fade,
+            &mut wd_fade,
+            &shared_fade,
+            &mut buf_192,
+            2,
+            192_000,
+            || budget_192.mul_f64(4.5),
+        );
+        let fade_start = (block_192 - fade_frames) * 2;
+        for f in (fade_start..buf_192.len() - 2).step_by(2) {
+            max_step_192 = max_step_192
+                .max((buf_192[f + 2] - buf_192[f]).abs())
+                .max((buf_192[f + 3] - buf_192[f + 1]).abs());
+        }
+        assert_eq!(buf_192[buf_192.len() - 2], 0.0);
+        assert_eq!(buf_192[buf_192.len() - 1], 0.0);
+    });
+    assert!(shared_fade.read_health().overloaded);
+    assert!(
+        max_step_192 < 0.15,
+        "192 kHz overload fade-out must be smooth over {fade_frames} frames: max_step={max_step_192}"
+    );
+
+    // 4. Engine publishes MixerEngine::total_output_latency_frames() to AudioHealth::pdc_latency_frames
+    //    on Engine::new and on every live adopt(), feeding round_trip_latency_ms across sample rates.
+    for sr in [44_100u32, 48_000, 96_000, 192_000] {
+        let lookahead = limiter_lookahead_frames(f64::from(sr)) as u32;
+        let mut p = rack_project(vec![Step::default(); 16], RackPatch::default_synth());
+        let dry_score = p.compile().unwrap();
+        let sh = Shared::new_arc();
+        sh.buffer_frames.store(512, Ordering::Release);
+        let mut eng = Engine::new(dry_score, Vec::new(), sr, Arc::clone(&sh));
+        assert_eq!(sh.read_health().pdc_latency_frames, 0, "sr={sr}");
+
+        // Live-adopt a Master Limiter -> pdc_latency_frames updates to `lookahead`.
+        p.mixer.master.inserts.push(EffectDevice {
+            id: 901,
+            name: "Master Limiter".into(),
+            bypassed: false,
+            kind: EffectKind::Limiter(LimiterPatch::default()),
+        });
+        eng.publish_score_update(p.compile().unwrap());
+        eng.poll_controls();
+        let health = sh.read_health();
+        assert_eq!(
+            health.pdc_latency_frames, lookahead,
+            "sr={sr}: Engine adopt must publish Master Limiter PDC latency"
+        );
+
+        let inp = AudioInputTelemetry {
+            sample_rate: sr,
+            buffer_frames: 256,
+            ..AudioInputTelemetry::default()
+        };
+        let rt_ms = inp.round_trip_latency_ms(health, sr, 0.0).unwrap();
+        let expected_ms = (256 + 512 + lookahead) as f32 * 1000.0 / sr as f32;
+        assert!(
+            (rt_ms - expected_ms).abs() < 1e-3,
+            "sr={sr}: round_trip_latency_ms={rt_ms} expected={expected_ms}"
+        );
+    }
+
+    // 5. Verify sample-rate-invariant meter publication cadence & Rack-bus SVF control stride masks.
+    for (sr, expected_meter_stride, expected_svf_mask) in [
+        (44_100u32, 256usize, 7u32),
+        (48_000, 256, 7),
+        (96_000, 512, 15),
+        (192_000, 1024, 31),
+    ] {
+        let score = rack_project(vec![Step::default(); 16], RackPatch::default_synth())
+            .compile()
+            .unwrap();
+        let sh = Shared::new_arc();
+        let mut eng = Engine::new(score, Vec::new(), sr, Arc::clone(&sh));
+        assert_eq!(
+            eng.voices()[0].rack_svf_mask,
+            expected_svf_mask,
+            "sr={sr}: rack_svf_mask mismatch"
+        );
+        let gen_start = sh.mixer_meter_generation.load(Ordering::Acquire);
+        for _ in 0..(expected_meter_stride - 1) {
+            let _ = eng.next_frame();
+        }
+        assert_eq!(
+            sh.mixer_meter_generation.load(Ordering::Acquire),
+            gen_start,
+            "sr={sr}: meter must not publish before stride {expected_meter_stride}"
+        );
+        let _ = eng.next_frame();
+        assert_eq!(
+            sh.mixer_meter_generation.load(Ordering::Acquire),
+            gen_start + 2,
+            "sr={sr}: meter must publish on exact stride {expected_meter_stride}"
+        );
+    }
 }

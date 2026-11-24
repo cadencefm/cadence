@@ -6,9 +6,9 @@
 //! plugin delay compensation stays constant without stale bursts.
 
 use crate::dsp::math::{
-    db_to_lin_f64, lin_to_db_f64, one_pole_decay_ms, sanitize_clamp_f32, sanitize_clamp_f64,
-    sanitize_frame, sanitize_sample_f64, sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS,
-    LIN_FLOOR_F64,
+    db_to_lin_f64, lin_to_db_f64, mix_stereo_f64, one_pole_decay_ms, sanitize_clamp_f32,
+    sanitize_clamp_f64, sanitize_frame, sanitize_sample_f64, sanitize_sample_rate, BypassFader,
+    BypassStep, Smoother, LN_100,
 };
 use crate::mixer::{CompressorPatch, LimiterPatch};
 
@@ -81,7 +81,8 @@ pub fn soft_knee_gr_db(input_db: f32, threshold_db: f32, ratio: f32, knee_db: f3
 }
 
 /// Stereo-linked feed-forward soft-knee compressor smoothing **`gr_db` after the
-/// gain computer** (starting from `0.0 dB` with zero startup lag). Zero heap allocations.
+/// gain computer** (starting from `0.0 dB` with zero startup lag) and click-free
+/// bypass crossfade. Zero heap allocations.
 pub struct Compressor {
     sample_rate: f64,
     threshold_db: f64,
@@ -90,8 +91,10 @@ pub struct Compressor {
     release_decay: f64,
     makeup_gain: Smoother,
     mix: Smoother,
+    bypass: BypassFader,
     gr_db: f64,
     current_gr_db: f32,
+    last_patch: CompressorPatch,
     has_processed: bool,
 }
 
@@ -107,12 +110,19 @@ impl Compressor {
             release_decay: one_pole_decay_ms(default.release_ms, sr),
             makeup_gain: Smoother::new(db_to_lin_f64(f64::from(default.makeup_db)), 4.0, sr),
             mix: Smoother::new(f64::from(default.mix), 4.0, sr),
+            bypass: BypassFader::new(sr),
             gr_db: 0.0,
             current_gr_db: 0.0,
+            last_patch: default,
             has_processed: false,
         };
         c.set_parameters(default);
         c
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_idle(&self) -> bool {
+        self.bypass.is_idle()
     }
 
     pub fn reset(&mut self) {
@@ -120,6 +130,7 @@ impl Compressor {
         self.current_gr_db = 0.0;
         self.makeup_gain.snap(self.makeup_gain.target());
         self.mix.snap(self.mix.target());
+        self.bypass.reset();
         self.has_processed = false;
     }
 
@@ -131,25 +142,39 @@ impl Compressor {
 
     pub fn set_parameters(&mut self, patch: CompressorPatch) {
         let def = CompressorPatch::default();
-        self.threshold_db = sanitize_clamp_f64(
+        let threshold_db = sanitize_clamp_f64(
             f64::from(patch.threshold_db),
             -48.0,
             0.0,
             f64::from(def.threshold_db),
         );
-        self.ratio = sanitize_clamp_f64(f64::from(patch.ratio), 1.0, 20.0, f64::from(def.ratio));
+        let ratio = sanitize_clamp_f64(f64::from(patch.ratio), 1.0, 20.0, f64::from(def.ratio));
         let att_ms = sanitize_clamp_f32(patch.attack_ms, 0.5, 100.0, def.attack_ms);
         let rel_ms = sanitize_clamp_f32(patch.release_ms, 10.0, 1000.0, def.release_ms);
-        self.attack_decay = one_pole_decay_ms(att_ms, self.sample_rate);
-        self.release_decay = one_pole_decay_ms(rel_ms, self.sample_rate);
         let makeup_db = sanitize_clamp_f64(
             f64::from(patch.makeup_db),
             -6.0,
             24.0,
             f64::from(def.makeup_db),
         );
-        let makeup = db_to_lin_f64(makeup_db);
         let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
+        let sanitized = CompressorPatch {
+            threshold_db: threshold_db as f32,
+            ratio: ratio as f32,
+            attack_ms: att_ms,
+            release_ms: rel_ms,
+            makeup_db: makeup_db as f32,
+            mix: mix as f32,
+        };
+        if self.has_processed && sanitized == self.last_patch {
+            return;
+        }
+        self.last_patch = sanitized;
+        self.threshold_db = threshold_db;
+        self.ratio = ratio;
+        self.attack_decay = one_pole_decay_ms(att_ms, self.sample_rate);
+        self.release_decay = one_pole_decay_ms(rel_ms, self.sample_rate);
+        let makeup = db_to_lin_f64(makeup_db);
         if !self.has_processed {
             self.makeup_gain.snap(makeup);
             self.mix.snap(mix);
@@ -162,12 +187,21 @@ impl Compressor {
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
-        if bypassed {
-            // Reset envelope on bypass so un-bypassing starts cleanly at 0.0 dB GR.
-            self.gr_db = 0.0;
-            self.current_gr_db = 0.0;
-            return dry;
-        }
+        let bypass_w = match self.bypass.step(bypassed) {
+            BypassStep::Idle => {
+                self.gr_db = 0.0;
+                self.current_gr_db = 0.0;
+                return dry;
+            }
+            BypassStep::SettledBypass => {
+                self.gr_db = 0.0;
+                self.current_gr_db = 0.0;
+                self.bypass.mark_idle();
+                return dry;
+            }
+            BypassStep::Active(w) => w,
+        };
+
         let peak = f64::from(dry[0].abs().max(dry[1].abs()));
         let level_db = lin_to_db_f64(peak);
         let target_gr_db = soft_knee_gr_db_f64(
@@ -185,21 +219,19 @@ impl Compressor {
         if self.gr_db < 1e-6 {
             self.gr_db = 0.0;
         }
-        self.current_gr_db = self.gr_db as f32;
+        self.current_gr_db = if bypassed { 0.0 } else { self.gr_db as f32 };
 
         let makeup = self.makeup_gain.next();
         let wet_mix = self.mix.next();
-        let dry_mix = 1.0 - wet_mix;
         let gain = if self.gr_db <= 0.0 {
             makeup
         } else {
             db_to_lin_f64(-self.gr_db) * makeup
         };
-        let total = dry_mix + wet_mix * gain;
-        [
-            (f64::from(dry[0]) * total) as f32,
-            (f64::from(dry[1]) * total) as f32,
-        ]
+        let dry64 = [f64::from(dry[0]), f64::from(dry[1])];
+        let wet = [dry64[0] * gain, dry64[1] * gain];
+        let out = mix_stereo_f64(dry64, wet, wet_mix * bypass_w);
+        [out[0] as f32, out[1] as f32]
     }
 }
 
@@ -236,7 +268,7 @@ pub struct Limiter {
     ceiling_db: Smoother,
     drive_db: Smoother,
     mix: Smoother,
-    bypass_wet: Smoother,
+    bypass: BypassFader,
     cached_ceiling_db_bits: u64,
     cached_ceiling_lin: f64,
     cached_drive_db_bits: u64,
@@ -245,8 +277,8 @@ pub struct Limiter {
     release_decay: f64,
     gr_db: f64,
     current_gr_db: f32,
+    last_patch: LimiterPatch,
     has_processed: bool,
-    was_active: bool,
 }
 
 impl Limiter {
@@ -255,7 +287,7 @@ impl Limiter {
         let lookahead = limiter_lookahead_frames(sr);
         let deque_cap = lookahead + 2;
         // Reach 99% of target GR across the exact lookahead duration before the peak arrives.
-        let attack_decay = (-4.605_170_185_988_091 / lookahead as f64).exp();
+        let attack_decay = (-LN_100 / lookahead as f64).exp();
         let default = LimiterPatch::default();
         let init_ceil = f64::from(default.ceiling_db);
         let init_drive = f64::from(default.input_drive_db);
@@ -271,7 +303,7 @@ impl Limiter {
             ceiling_db: Smoother::new(init_ceil, 4.0, sr),
             drive_db: Smoother::new(init_drive, 4.0, sr),
             mix: Smoother::new(f64::from(default.mix), 4.0, sr),
-            bypass_wet: Smoother::new(1.0, 1.5, sr),
+            bypass: BypassFader::new(sr),
             cached_ceiling_db_bits: init_ceil.to_bits(),
             cached_ceiling_lin: db_to_lin_f64(init_ceil),
             cached_drive_db_bits: init_drive.to_bits(),
@@ -280,8 +312,8 @@ impl Limiter {
             release_decay: one_pole_decay_ms(default.release_ms, sr),
             gr_db: 0.0,
             current_gr_db: 0.0,
+            last_patch: default,
             has_processed: false,
-            was_active: false,
         };
         lim.set_parameters(default);
         lim
@@ -289,7 +321,7 @@ impl Limiter {
 
     #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
-        !self.was_active
+        self.bypass.is_idle()
     }
 
     pub fn reset(&mut self) {
@@ -303,9 +335,8 @@ impl Limiter {
         self.ceiling_db.snap(self.ceiling_db.target());
         self.drive_db.snap(self.drive_db.target());
         self.mix.snap(self.mix.target());
-        self.bypass_wet.snap(1.0);
+        self.bypass.reset();
         self.has_processed = false;
-        self.was_active = false;
     }
 
     /// Lookahead latency in sample frames (constant across active & bypassed states for PDC).
@@ -336,6 +367,16 @@ impl Limiter {
         );
         let rel_ms = sanitize_clamp_f32(patch.release_ms, 10.0, 1000.0, def.release_ms);
         let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
+        let sanitized = LimiterPatch {
+            ceiling_db: ceil as f32,
+            input_drive_db: drive as f32,
+            release_ms: rel_ms,
+            mix: mix as f32,
+        };
+        if self.has_processed && sanitized == self.last_patch {
+            return;
+        }
+        self.last_patch = sanitized;
         self.release_decay = one_pole_decay_ms(rel_ms, self.sample_rate);
         if !self.has_processed {
             self.ceiling_db.snap(ceil);
@@ -356,7 +397,8 @@ impl Limiter {
         while self.deque_head != self.deque_tail
             && idx.saturating_sub(self.deque[self.deque_head].0) > max_age
         {
-            self.deque_head = (self.deque_head + 1) % cap;
+            let next = self.deque_head + 1;
+            self.deque_head = if next >= cap { 0 } else { next };
         }
         while self.deque_head != self.deque_tail {
             let prev = if self.deque_tail == 0 {
@@ -371,7 +413,8 @@ impl Limiter {
             }
         }
         self.deque[self.deque_tail] = (idx, peak);
-        self.deque_tail = (self.deque_tail + 1) % cap;
+        let next_tail = self.deque_tail + 1;
+        self.deque_tail = if next_tail >= cap { 0 } else { next_tail };
         self.sample_index = idx.wrapping_add(1);
         self.deque[self.deque_head].1
     }
@@ -391,25 +434,22 @@ impl Limiter {
             self.write_idx = 0;
         }
 
-        if bypassed && !self.was_active {
-            self.bypass_wet.snap(0.0);
-            self.gr_db = 0.0;
-            self.current_gr_db = 0.0;
-            return delayed_dry;
-        }
-
-        self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
-        let bypass_w = self.bypass_wet.next();
-        if bypassed && bypass_w <= BYPASS_SETTLE_EPS {
-            self.bypass_wet.snap(0.0);
-            self.deque_head = 0;
-            self.deque_tail = 0;
-            self.gr_db = 0.0;
-            self.current_gr_db = 0.0;
-            self.was_active = false;
-            return delayed_dry;
-        }
-        self.was_active = true;
+        let bypass_w = match self.bypass.step(bypassed) {
+            BypassStep::Idle => {
+                self.gr_db = 0.0;
+                self.current_gr_db = 0.0;
+                return delayed_dry;
+            }
+            BypassStep::SettledBypass => {
+                self.deque_head = 0;
+                self.deque_tail = 0;
+                self.gr_db = 0.0;
+                self.current_gr_db = 0.0;
+                self.bypass.mark_idle();
+                return delayed_dry;
+            }
+            BypassStep::Active(w) => w,
+        };
 
         let ceiling_db = self.ceiling_db.next();
         let ceiling_bits = ceiling_db.to_bits();
@@ -472,16 +512,12 @@ impl Limiter {
         let wet_l = (del_l * gain).clamp(-ceiling_lin, ceiling_lin);
         let wet_r = (del_r * gain).clamp(-ceiling_lin, ceiling_lin);
 
-        let eff_wet = mix * bypass_w;
-        if eff_wet >= 1.0 - LIN_FLOOR_F64 {
-            [wet_l as f32, wet_r as f32]
-        } else {
-            let dry_mix = 1.0 - eff_wet;
-            [
-                (f64::from(delayed_dry[0]) * dry_mix + wet_l * eff_wet) as f32,
-                (f64::from(delayed_dry[1]) * dry_mix + wet_r * eff_wet) as f32,
-            ]
-        }
+        let out = mix_stereo_f64(
+            [f64::from(delayed_dry[0]), f64::from(delayed_dry[1])],
+            [wet_l, wet_r],
+            mix * bypass_w,
+        );
+        [out[0] as f32, out[1] as f32]
     }
 }
 
@@ -549,7 +585,26 @@ mod tests {
                 "sr={sr}: AC sine GR={ac_gr:.2} dB vs theoretical {expected_gr:.2} dB"
             );
 
-            // Bypass clears GR and passes dry input untouched.
+            // Bypass crossfades click-free over ~1.5 ms and settles to exact dry + 0.0 dB GR.
+            let first_bypass = c.process([0.75, -0.5], true);
+            assert!(
+                first_bypass[0] < 0.70 && first_bypass[0] > 0.05,
+                "sr={sr}: expected smooth bypass fade-out on frame 1, got {first_bypass:?}"
+            );
+            assert!(!c.is_idle());
+            let fade_frames = (sr * 0.025) as usize;
+            let mut prev_l = first_bypass[0];
+            for _ in 0..fade_frames {
+                let y = c.process([0.75, -0.5], true);
+                assert!(y[0].is_finite() && y[1].is_finite());
+                assert!(
+                    (y[0] - prev_l).abs() < 0.05,
+                    "sr={sr}: bypass fade step too large: prev={prev_l}, next={}",
+                    y[0]
+                );
+                prev_l = y[0];
+            }
+            assert!(c.is_idle(), "sr={sr}: bypassed compressor must idle");
             assert_eq!(c.process([0.75, -0.5], true), [0.75, -0.5]);
             assert_eq!(c.gain_reduction_db(), 0.0);
         }
@@ -668,6 +723,76 @@ mod tests {
             });
             let y_comp = comp.process([0.5, -0.5], false);
             assert!(y_comp[0].is_finite() && y_comp[1].is_finite());
+        }
+    }
+
+    #[test]
+    fn compressor_bypass_crossfades_click_free_and_idles_across_sample_rates() {
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            let mut comp = Compressor::new(sr);
+            assert!(comp.is_idle());
+            // Initial bypass while idle passes dry untouched and stays idle.
+            assert_eq!(comp.process([0.6, -0.4], true), [0.6, -0.4]);
+            assert!(comp.is_idle());
+
+            let patch = CompressorPatch {
+                threshold_db: -24.0,
+                ratio: 10.0,
+                attack_ms: 1.0,
+                release_ms: 120.0,
+                makeup_db: 0.0,
+                mix: 1.0,
+            };
+            comp.set_parameters(patch);
+
+            // Engage strong steady-state compression.
+            let drive_frames = (sr * 0.05) as usize;
+            let mut last_active = [0.0_f32; 2];
+            for _ in 0..drive_frames {
+                last_active = comp.process([0.8, -0.6], false);
+            }
+            assert!(!comp.is_idle());
+            assert!(
+                comp.gain_reduction_db() > 14.0,
+                "sr={sr}: expected strong GR, got {}",
+                comp.gain_reduction_db()
+            );
+            assert!(last_active[0] < 0.2);
+
+            // Toggle bypass: output must fade smoothly over ~1.5 ms without a click and reach idle.
+            let tau_frames = (0.0015 * sr).round() as usize;
+            let mut prev = last_active;
+            let mut max_step = 0.0_f32;
+            let mut at_tau = [0.0_f32; 2];
+            let settle_frames = (0.03 * sr) as usize;
+            for i in 0..settle_frames {
+                let y = comp.process([0.8, -0.6], true);
+                assert!(y[0].is_finite() && y[1].is_finite());
+                max_step = max_step
+                    .max((y[0] - prev[0]).abs())
+                    .max((y[1] - prev[1]).abs());
+                if i + 1 == tau_frames {
+                    at_tau = y;
+                }
+                prev = y;
+            }
+            assert!(
+                max_step < 0.02,
+                "sr={sr}: bypass crossfade clicked with max_step={max_step}"
+            );
+            // At t = tau (1.5 ms), wet weight is ~1/e so output sits well between compressed and dry.
+            assert!(
+                at_tau[0] > 0.35 && at_tau[0] < 0.70,
+                "sr={sr}: unexpected output at 1.5 ms fade tau: {at_tau:?}"
+            );
+            assert!(comp.is_idle(), "sr={sr}: compressor must idle after bypass");
+            assert_eq!(comp.gain_reduction_db(), 0.0);
+            assert_eq!(comp.process([0.8, -0.6], true), [0.8, -0.6]);
+
+            // Un-bypassing after idle starts cleanly from 0.0 dB GR with smooth fade-in.
+            let resume = comp.process([0.2, -0.2], false);
+            assert!(resume[0].is_finite() && (resume[0] - 0.2).abs() < 0.02);
+            assert!(!comp.is_idle());
         }
     }
 }

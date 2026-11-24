@@ -9,8 +9,9 @@
 
 use crate::dsp::biquad::TptOnePoleLpf;
 use crate::dsp::math::{
-    flush_denormal_f32, hann_fade_in, hermite4_f32, sanitize_clamp_f64, sanitize_frame,
-    sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS, TAIL_SILENCE_FLOOR_F32,
+    flush_denormal_f32, hann_fade_in, hermite4_f32, mix_stereo_f32, sanitize_clamp_f64,
+    sanitize_frame, sanitize_sample_rate, BypassFader, BypassStep, Smoother,
+    TAIL_SILENCE_FLOOR_F32,
 };
 use crate::mixer::{DelayMode, DelayPatch, MAX_DELAY_SECONDS};
 
@@ -144,6 +145,35 @@ impl DelayLine {
             hermite4_f32(y0[1], y1[1], y2[1], y3[1], t),
         ]
     }
+
+    /// 4-point Catmull-Rom cubic Hermite interpolated fractional delay read for a single
+    /// stereo channel (`ch = 0` Left, `ch = 1` Right; returns `0.0` if `ch >= 2`).
+    #[inline]
+    pub fn read_cubic_channel(&self, delay_samples: f64, ch: usize) -> f32 {
+        if ch >= 2 {
+            return 0.0;
+        }
+        let max_d = self.capacity();
+        if max_d == 0 {
+            return 0.0;
+        }
+        let d = sanitize_clamp_f64(delay_samples, 1.0, max_d as f64, 1.0);
+        let whole = d.floor() as usize;
+        let t = (d - whole as f64) as f32;
+        if t.abs() < 1e-6 {
+            return self.read_integer(whole)[ch];
+        }
+        if whole < 2 || whole + 2 >= self.data.len() {
+            let a = self.read_integer(whole)[ch];
+            let b = self.read_integer(whole + 1)[ch];
+            return a + (b - a) * t;
+        }
+        let y0 = self.read_integer(whole - 1)[ch];
+        let y1 = self.read_integer(whole)[ch];
+        let y2 = self.read_integer(whole + 1)[ch];
+        let y3 = self.read_integer(whole + 2)[ch];
+        hermite4_f32(y0, y1, y2, y3, t)
+    }
 }
 
 /// Multi-mode stereo delay insert processor supporting [`DelayMode::PingPong`]
@@ -162,11 +192,11 @@ pub struct Delay {
     feedback: Smoother,
     mix: Smoother,
     ping_pong_blend: Smoother,
-    bypass_wet: Smoother,
+    bypass: BypassFader,
     damp_lpf: TptOnePoleLpf,
+    last_params: Option<(DelayPatch, f64)>,
     silent_bypass_frames: u32,
     has_processed: bool,
-    was_active: bool,
 }
 
 impl Delay {
@@ -206,17 +236,17 @@ impl Delay {
             feedback: Smoother::new(0.0, 5.0, sr),
             mix: Smoother::new(1.0, 5.0, sr),
             ping_pong_blend: Smoother::new(1.0, 5.0, sr),
-            bypass_wet: Smoother::new(1.0, 1.5, sr),
+            bypass: BypassFader::new(sr),
             damp_lpf: TptOnePoleLpf::new(sr, Self::DAMP_HZ),
+            last_params: None,
             silent_bypass_frames: 0,
             has_processed: false,
-            was_active: false,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
-        !self.was_active
+        self.bypass.is_idle()
     }
 
     /// Allocate (or resize) the delay buffer off the real-time audio thread.
@@ -241,10 +271,9 @@ impl Delay {
         self.feedback.snap(self.feedback.target());
         self.mix.snap(self.mix.target());
         self.ping_pong_blend.snap(self.ping_pong_blend.target());
-        self.bypass_wet.snap(1.0);
+        self.bypass.reset();
         self.silent_bypass_frames = 0;
         self.has_processed = false;
-        self.was_active = false;
     }
 
     pub fn set_parameters(&mut self, patch: DelayPatch, bpm: f64) {
@@ -264,6 +293,16 @@ impl Delay {
             f64::from(def.feedback),
         );
         let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
+        let sanitized = DelayPatch {
+            mode: patch.mode,
+            steps: steps as f32,
+            feedback: fb as f32,
+            mix: mix as f32,
+        };
+        if self.has_processed && self.last_params == Some((sanitized, safe_bpm)) {
+            return;
+        }
+        self.last_params = Some((sanitized, safe_bpm));
         let pp = match patch.mode {
             DelayMode::PingPong => 1.0,
             DelayMode::Stereo => 0.0,
@@ -295,25 +334,19 @@ impl Delay {
             return dry;
         }
 
-        if bypassed && !self.was_active {
-            self.bypass_wet.snap(0.0);
-            self.time_a = self.target_time;
-            self.time_b = self.target_time;
-            self.xfade = 1.0;
-            return dry;
-        }
-
-        self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
-        let bypass_w = self.bypass_wet.next();
-        let bypass_settled = bypassed && bypass_w <= BYPASS_SETTLE_EPS;
-        if !bypassed {
-            self.was_active = true;
-            self.silent_bypass_frames = 0;
-        } else if bypass_settled {
-            self.bypass_wet.snap(0.0);
-        } else {
-            self.silent_bypass_frames = 0;
-        }
+        let (bypass_w, bypass_settled) = match self.bypass.step(bypassed) {
+            BypassStep::Idle => {
+                self.time_a = self.target_time;
+                self.time_b = self.target_time;
+                self.xfade = 1.0;
+                return dry;
+            }
+            BypassStep::SettledBypass => (0.0, true),
+            BypassStep::Active(w) => {
+                self.silent_bypass_frames = 0;
+                (w, false)
+            }
+        };
 
         let fb = self.feedback.next();
         let mix = self.mix.next();
@@ -382,19 +415,14 @@ impl Delay {
                     self.time_b = self.target_time;
                     self.xfade = 1.0;
                     self.silent_bypass_frames = 0;
-                    self.was_active = false;
+                    self.bypass.mark_idle();
                 }
             } else {
                 self.silent_bypass_frames = 0;
             }
             return dry;
         }
-        let eff_wet = (mix * bypass_w) as f32;
-        let eff_dry = 1.0 - eff_wet;
-        [
-            dry[0] * eff_dry + delayed[0] * eff_wet,
-            dry[1] * eff_dry + delayed[1] * eff_wet,
-        ]
+        mix_stereo_f32(dry, delayed, (mix * bypass_w) as f32)
     }
 }
 
@@ -792,6 +820,62 @@ mod tests {
             );
             let y = delay.process([0.5, -0.5], false);
             assert!(y[0].is_finite() && y[1].is_finite());
+        }
+    }
+
+    #[test]
+    fn delay_line_read_cubic_channel_matches_read_cubic_across_sample_rates() {
+        use std::f64::consts::TAU;
+
+        let empty = DelayLine::unallocated();
+        assert_eq!(empty.read_cubic_channel(4.5, 0), 0.0);
+        assert_eq!(empty.read_cubic_channel(4.5, 1), 0.0);
+        assert_eq!(empty.read_cubic_channel(4.5, 2), 0.0);
+
+        for sr in [44_100.0_f64, 48_000.0, 96_000.0, 192_000.0] {
+            let cap = (sr * 0.02).ceil() as usize;
+            let mut line = DelayLine::new(cap);
+            for i in 0..(cap + 16) {
+                let t = i as f64 / sr;
+                let l = (TAU * 317.0 * t).sin() as f32 * 0.8;
+                let r = ((TAU * 523.0 * t).cos() * 0.6 + (TAU * 131.0 * t).sin() * 0.3) as f32;
+                line.write([l, r]);
+            }
+
+            let cap_f = line.capacity() as f64;
+            let test_delays = [
+                -5.0,
+                0.0,
+                0.5,
+                1.0,
+                1.25,
+                1.999_999_9,
+                2.0,
+                2.37,
+                15.5,
+                sr * 0.0075 + 0.333,
+                cap_f - 1.5,
+                cap_f - 0.25,
+                cap_f,
+                cap_f + 10.0,
+                f64::NAN,
+                f64::INFINITY,
+            ];
+            for &d in &test_delays {
+                let stereo = line.read_cubic(d);
+                assert_eq!(
+                    line.read_cubic_channel(d, 0),
+                    stereo[0],
+                    "sr={sr} delay={d}: Left channel mismatch"
+                );
+                assert_eq!(
+                    line.read_cubic_channel(d, 1),
+                    stereo[1],
+                    "sr={sr} delay={d}: Right channel mismatch"
+                );
+                assert_eq!(line.read_cubic_channel(d, 2), 0.0);
+                assert_eq!(line.read_cubic_channel(d, 99), 0.0);
+            }
         }
     }
 }

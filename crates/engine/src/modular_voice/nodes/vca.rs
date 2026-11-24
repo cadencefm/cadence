@@ -2,10 +2,10 @@
 
 use super::{
     write_copy_module_normalized, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks,
-    VoiceModule, SILENCE_FLOOR,
+    VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
-use cadence_core::dsp::smooth_step_f32;
+use cadence_core::dsp::{smooth_step_f32, TAIL_SILENCE_FLOOR_F64};
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, VcaModule};
 
 #[derive(Clone, Copy, Debug)]
@@ -25,12 +25,12 @@ impl VcaNode {
         }
     }
 
-    /// True when both the smoothed and target DC bias sit within [`SILENCE_FLOOR`],
+    /// True when both the smoothed and target DC bias sit within [`TAIL_SILENCE_FLOOR_F64`],
     /// guaranteeing an envelope-gated VCA passes exact silence once its CV reaches zero.
     #[inline]
     pub(in crate::modular_voice) fn is_bias_closed(&self) -> bool {
-        f64::from(self.current.bias).abs() <= SILENCE_FLOOR
-            && f64::from(self.target.bias).abs() <= SILENCE_FLOOR
+        f64::from(self.current.bias).abs() <= TAIL_SILENCE_FLOOR_F64
+            && f64::from(self.target.bias).abs() <= TAIL_SILENCE_FLOOR_F64
     }
 }
 
