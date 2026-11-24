@@ -9,7 +9,8 @@
 
 use crate::dsp::biquad::TptOnePoleLpf;
 use crate::dsp::math::{
-    flush_denormal_f32, hann_fade_in, hermite4_f32, sanitize_frame, sanitize_sample_rate, Smoother,
+    flush_denormal_f32, hann_fade_in, hermite4_f32, sanitize_clamp_f64, sanitize_frame,
+    sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS, TAIL_SILENCE_FLOOR_F32,
 };
 use crate::mixer::{DelayMode, DelayPatch, MAX_DELAY_SECONDS};
 
@@ -109,7 +110,7 @@ impl DelayLine {
         if max_d == 0 {
             return [0.0; 2];
         }
-        let d = delay_samples.clamp(1.0, max_d as f64);
+        let d = sanitize_clamp_f64(delay_samples, 1.0, max_d as f64, 1.0);
         let whole = d.floor() as usize;
         let frac = (d - whole as f64) as f32;
         let a = self.read_integer(whole);
@@ -125,7 +126,7 @@ impl DelayLine {
         if max_d == 0 {
             return [0.0; 2];
         }
-        let d = delay_samples.clamp(1.0, max_d as f64);
+        let d = sanitize_clamp_f64(delay_samples, 1.0, max_d as f64, 1.0);
         let whole = d.floor() as usize;
         let t = (d - whole as f64) as f32;
         if t.abs() < 1e-6 {
@@ -163,6 +164,7 @@ pub struct Delay {
     ping_pong_blend: Smoother,
     bypass_wet: Smoother,
     damp_lpf: TptOnePoleLpf,
+    silent_bypass_frames: u32,
     has_processed: bool,
     was_active: bool,
 }
@@ -179,7 +181,8 @@ impl Delay {
     /// Construct a delay buffer with an explicit maximum duration in seconds.
     pub fn with_max_seconds(sample_rate: u32, max_seconds: f64) -> Self {
         let sr = sanitize_sample_rate(f64::from(sample_rate));
-        let cap = (sr * max_seconds.clamp(0.1, MAX_DELAY_SECONDS)).ceil() as usize;
+        let secs = sanitize_clamp_f64(max_seconds, 0.1, MAX_DELAY_SECONDS, MAX_DELAY_SECONDS);
+        let cap = (sr * secs).ceil() as usize;
         Self::from_line(sr, DelayLine::new(cap))
     }
 
@@ -205,14 +208,21 @@ impl Delay {
             ping_pong_blend: Smoother::new(1.0, 5.0, sr),
             bypass_wet: Smoother::new(1.0, 1.5, sr),
             damp_lpf: TptOnePoleLpf::new(sr, Self::DAMP_HZ),
+            silent_bypass_frames: 0,
             has_processed: false,
             was_active: false,
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_idle(&self) -> bool {
+        !self.was_active
+    }
+
     /// Allocate (or resize) the delay buffer off the real-time audio thread.
     pub fn allocate(&mut self, max_seconds: f64) {
-        let cap = (self.sample_rate * max_seconds.clamp(0.1, MAX_DELAY_SECONDS)).ceil() as usize;
+        let secs = sanitize_clamp_f64(max_seconds, 0.1, MAX_DELAY_SECONDS, MAX_DELAY_SECONDS);
+        let cap = (self.sample_rate * secs).ceil() as usize;
         self.line.allocate(cap);
         self.has_processed = false;
     }
@@ -232,25 +242,28 @@ impl Delay {
         self.mix.snap(self.mix.target());
         self.ping_pong_blend.snap(self.ping_pong_blend.target());
         self.bypass_wet.snap(1.0);
+        self.silent_bypass_frames = 0;
         self.has_processed = false;
         self.was_active = false;
     }
 
     pub fn set_parameters(&mut self, patch: DelayPatch, bpm: f64) {
+        let def = DelayPatch::default();
         let safe_bpm = if bpm.is_finite() {
             bpm.max(20.0)
         } else {
             120.0
         };
         let max_d = self.line.capacity().max(1) as f64;
-        let steps = if patch.steps.is_finite() {
-            f64::from(patch.steps.clamp(0.0625, 32.0))
-        } else {
-            3.0
-        };
+        let steps = sanitize_clamp_f64(f64::from(patch.steps), 0.0625, 32.0, f64::from(def.steps));
         let target_time = (self.sample_rate * 15.0 / safe_bpm * steps).clamp(1.0, max_d);
-        let fb = f64::from(patch.feedback.clamp(0.0, 0.95));
-        let mix = f64::from(patch.mix.clamp(0.0, 1.0));
+        let fb = sanitize_clamp_f64(
+            f64::from(patch.feedback),
+            0.0,
+            0.95,
+            f64::from(def.feedback),
+        );
+        let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
         let pp = match patch.mode {
             DelayMode::PingPong => 1.0,
             DelayMode::Stereo => 0.0,
@@ -284,15 +297,22 @@ impl Delay {
 
         if bypassed && !self.was_active {
             self.bypass_wet.snap(0.0);
+            self.time_a = self.target_time;
+            self.time_b = self.target_time;
+            self.xfade = 1.0;
             return dry;
         }
 
         self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
         let bypass_w = self.bypass_wet.next();
+        let bypass_settled = bypassed && bypass_w <= BYPASS_SETTLE_EPS;
         if !bypassed {
             self.was_active = true;
-        } else if bypass_w <= 1e-4 {
+            self.silent_bypass_frames = 0;
+        } else if bypass_settled {
             self.bypass_wet.snap(0.0);
+        } else {
+            self.silent_bypass_frames = 0;
         }
 
         let fb = self.feedback.next();
@@ -340,7 +360,33 @@ impl Delay {
         let next_r = (st * st_r + pp * pp_r) as f32;
         self.line.write([next_l, next_r]);
 
-        if bypassed && bypass_w <= 1e-4 {
+        if bypass_settled {
+            let tail_peak = delayed[0]
+                .abs()
+                .max(delayed[1].abs())
+                .max(next_l.abs())
+                .max(next_r.abs());
+            if tail_peak < TAIL_SILENCE_FLOOR_F32 && self.damp_lpf.quiet() {
+                self.silent_bypass_frames = self.silent_bypass_frames.saturating_add(1);
+                let active_delay = if self.xfade < 1.0 {
+                    self.time_a.max(self.time_b).max(self.target_time)
+                } else {
+                    self.time_a.max(self.target_time)
+                };
+                let drain_frames = (active_delay.ceil() as u32).saturating_add(4);
+                if self.silent_bypass_frames >= drain_frames {
+                    // O(1) validity reset (zero memset on RT thread) clears any longer stale history.
+                    self.line.reset();
+                    self.damp_lpf.reset();
+                    self.time_a = self.target_time;
+                    self.time_b = self.target_time;
+                    self.xfade = 1.0;
+                    self.silent_bypass_frames = 0;
+                    self.was_active = false;
+                }
+            } else {
+                self.silent_bypass_frames = 0;
+            }
             return dry;
         }
         let eff_wet = (mix * bypass_w) as f32;
@@ -684,5 +730,68 @@ mod tests {
             max_step_jump < 0.25,
             "mode switch must stay smooth without clicks, max_step_jump={max_step_jump}"
         );
+    }
+
+    #[test]
+    fn delay_bypass_drains_to_idle_prevents_stale_bursts_and_sanitizes_nan() {
+        for sr in [44_100u32, 48_000, 96_000, 192_000] {
+            let mut delay = Delay::with_max_seconds(sr, 0.5);
+            delay.set_parameters(
+                DelayPatch {
+                    mode: DelayMode::Stereo,
+                    steps: 0.25,
+                    feedback: 0.2,
+                    mix: 1.0,
+                },
+                240.0, // 1/16 = 62.5 ms -> 0.25 step = ~15.6 ms
+            );
+            // Seed audible history into the delay line.
+            for _ in 0..64 {
+                let _ = delay.process([0.8, -0.8], false);
+            }
+            assert!(!delay.is_idle());
+
+            // Bypass and run until tail ages out cleanly and delay returns to idle.
+            let drain_limit = (f64::from(sr) * 0.5) as usize;
+            for _ in 0..drain_limit {
+                let out = delay.process([0.3, -0.3], true);
+                assert!(out[0].is_finite() && out[1].is_finite());
+                if delay.is_idle() {
+                    break;
+                }
+            }
+            assert!(
+                delay.is_idle(),
+                "sr={sr}: bypassed delay must drain to idle"
+            );
+
+            // Lengthen delay time while idle, then un-bypass with silence: zero stale audio may resurface!
+            delay.set_parameters(
+                DelayPatch {
+                    mode: DelayMode::Stereo,
+                    steps: 2.0,
+                    feedback: 0.5,
+                    mix: 1.0,
+                },
+                240.0,
+            );
+            let check_frames = (f64::from(sr) * 0.15) as usize;
+            for _ in 0..check_frames {
+                assert_eq!(delay.process([0.0, 0.0], false), [0.0, 0.0]);
+            }
+
+            // NaN parameters sanitize cleanly.
+            delay.set_parameters(
+                DelayPatch {
+                    mode: DelayMode::PingPong,
+                    steps: f32::NAN,
+                    feedback: f32::NAN,
+                    mix: f32::NAN,
+                },
+                f64::NAN,
+            );
+            let y = delay.process([0.5, -0.5], false);
+            assert!(y[0].is_finite() && y[1].is_finite());
+        }
     }
 }

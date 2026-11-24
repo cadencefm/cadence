@@ -7,8 +7,9 @@
 //! never drift from heard audio.
 
 use crate::dsp::math::{
-    flush_denormal_f64, lin_to_db_f64, one_pole_coeff_ms, sanitize_frame, sanitize_sample_f64,
-    sanitize_sample_rate, Smoother,
+    flush_denormal_f64, lin_to_db_f64, one_pole_coeff_ms, sanitize_clamp_f32, sanitize_frame,
+    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS,
+    TAIL_SILENCE_FLOOR_F64,
 };
 use crate::mixer::EqPatch;
 use std::f64::consts::{FRAC_1_SQRT_2, PI, TAU};
@@ -299,8 +300,7 @@ impl TptOnePoleLpf {
     /// Whether both channel integrator states have decayed below silence (`1e-7`).
     #[inline]
     pub fn quiet(&self) -> bool {
-        const SILENCE: f64 = 1e-7;
-        self.s.iter().all(|v| v.abs() < SILENCE)
+        self.s.iter().all(|v| v.abs() < TAIL_SILENCE_FLOOR_F64)
     }
 
     #[inline]
@@ -462,8 +462,21 @@ impl DcBlocker {
     /// Whether both channels have settled below silence (`1e-7`).
     #[inline]
     pub fn quiet(&self) -> bool {
-        const SILENCE: f64 = 1e-7;
-        self.x1.iter().all(|v| v.abs() < SILENCE) && self.y1.iter().all(|v| v.abs() < SILENCE)
+        self.x1.iter().all(|v| v.abs() < TAIL_SILENCE_FLOOR_F64)
+            && self.y1.iter().all(|v| v.abs() < TAIL_SILENCE_FLOOR_F64)
+    }
+}
+
+#[inline]
+fn sanitize_eq_patch(patch: &EqPatch) -> EqPatch {
+    let def = EqPatch::default();
+    EqPatch {
+        hpf_hz: sanitize_clamp_f32(patch.hpf_hz, 20.0, 20_000.0, def.hpf_hz),
+        low_db: sanitize_sample(patch.low_db),
+        mid_db: sanitize_sample(patch.mid_db),
+        mid_hz: sanitize_clamp_f32(patch.mid_hz, 160.0, 6_000.0, def.mid_hz),
+        mid_q: sanitize_clamp_f32(patch.mid_q, 0.3, 8.0, def.mid_q),
+        high_db: sanitize_sample(patch.high_db),
     }
 }
 
@@ -471,19 +484,20 @@ impl DcBlocker {
 #[inline]
 pub fn eq_stage_coeffs(patch: &EqPatch, sample_rate: f64) -> [BiquadCoeffs; 4] {
     let sr = sanitize_sample_rate(sample_rate);
-    let hpf = if patch.hpf_hz <= 21.0 {
+    let p = sanitize_eq_patch(patch);
+    let hpf = if p.hpf_hz <= 21.0 {
         BiquadCoeffs::bypass()
     } else {
-        BiquadCoeffs::highpass(sr, f64::from(patch.hpf_hz), FRAC_1_SQRT_2)
+        BiquadCoeffs::highpass(sr, f64::from(p.hpf_hz), FRAC_1_SQRT_2)
     };
-    let low = BiquadCoeffs::low_shelf(sr, 120.0, f64::from(patch.low_db));
+    let low = BiquadCoeffs::low_shelf(sr, 120.0, f64::from(p.low_db));
     let mid = BiquadCoeffs::peaking(
         sr,
-        f64::from(patch.mid_hz).clamp(160.0, 6_000.0),
-        f64::from(patch.mid_q).clamp(0.3, 8.0),
-        f64::from(patch.mid_db),
+        f64::from(p.mid_hz),
+        f64::from(p.mid_q),
+        f64::from(p.mid_db),
     );
-    let high = BiquadCoeffs::high_shelf(sr, 6_000.0, f64::from(patch.high_db));
+    let high = BiquadCoeffs::high_shelf(sr, 6_000.0, f64::from(p.high_db));
     [hpf, low, mid, high]
 }
 
@@ -542,11 +556,12 @@ impl Eq {
     }
 
     pub fn set_parameters(&mut self, patch: EqPatch) {
-        if self.has_processed && patch == self.last {
+        let sanitized = sanitize_eq_patch(&patch);
+        if self.has_processed && sanitized == self.last {
             return;
         }
-        self.last = patch;
-        let [hpf, low, mid, high] = eq_stage_coeffs(&patch, self.sample_rate);
+        self.last = sanitized;
+        let [hpf, low, mid, high] = eq_stage_coeffs(&sanitized, self.sample_rate);
         if !self.has_processed {
             self.hpf.snap_coeffs(hpf);
             self.low.snap_coeffs(low);
@@ -569,7 +584,7 @@ impl Eq {
         }
         self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
         let wet_mix = self.bypass_wet.next();
-        if bypassed && wet_mix <= 1e-4 {
+        if bypassed && wet_mix <= BYPASS_SETTLE_EPS {
             self.bypass_wet.snap(0.0);
             self.hpf.reset();
             self.low.reset();
@@ -586,7 +601,7 @@ impl Eq {
         s = self.mid.process(s);
         s = self.high.process(s);
 
-        if wet_mix >= 1.0 - 1e-4 {
+        if wet_mix >= 1.0 - BYPASS_SETTLE_EPS {
             [s[0] as f32, s[1] as f32]
         } else {
             let dry_mix = 1.0 - wet_mix;
@@ -727,5 +742,20 @@ mod tests {
             assert!(y[0].is_finite() && y[1].is_finite());
         }
         assert_eq!(eq.process([0.4, -0.4], true), [0.4, -0.4]);
+
+        // NaN parameters sanitize cleanly: HPF stays bypassed and response remains flat/finite.
+        let nan_patch = EqPatch {
+            hpf_hz: f32::NAN,
+            low_db: f32::NAN,
+            mid_db: f32::NAN,
+            mid_hz: f32::NAN,
+            mid_q: f32::NAN,
+            high_db: f32::NAN,
+        };
+        let stages = eq_stage_coeffs(&nan_patch, sr);
+        assert!(stages.iter().all(|c| !c.active));
+        eq.set_parameters(nan_patch);
+        let y = eq.process([0.5, -0.25], false);
+        assert!(y[0].is_finite() && y[1].is_finite());
     }
 }

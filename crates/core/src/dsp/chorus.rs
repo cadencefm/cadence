@@ -6,7 +6,10 @@
 
 use crate::dsp::biquad::TptOnePoleLpf;
 use crate::dsp::delay::DelayLine;
-use crate::dsp::math::{sanitize_frame, sanitize_sample_f64, sanitize_sample_rate, Smoother};
+use crate::dsp::math::{
+    sanitize_clamp_f64, sanitize_frame, sanitize_sample_f64, sanitize_sample_rate, Smoother,
+    BYPASS_SETTLE_EPS,
+};
 use crate::mixer::ChorusPatch;
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
 
@@ -101,6 +104,11 @@ impl Chorus {
         ch
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_idle(&self) -> bool {
+        !self.was_active
+    }
+
     pub fn reset(&mut self) {
         self.line.reset();
         self.lfo.reset();
@@ -115,10 +123,11 @@ impl Chorus {
     }
 
     pub fn set_parameters(&mut self, patch: ChorusPatch) {
-        let rate = f64::from(patch.rate_hz).clamp(0.05, 6.0);
-        let depth = f64::from(patch.depth).clamp(0.0, 1.0);
-        let width = f64::from(patch.width).clamp(0.0, 1.0);
-        let mix = f64::from(patch.mix).clamp(0.0, 1.0);
+        let def = ChorusPatch::default();
+        let rate = sanitize_clamp_f64(f64::from(patch.rate_hz), 0.05, 6.0, f64::from(def.rate_hz));
+        let depth = sanitize_clamp_f64(f64::from(patch.depth), 0.0, 1.0, f64::from(def.depth));
+        let width = sanitize_clamp_f64(f64::from(patch.width), 0.0, 1.0, f64::from(def.width));
+        let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
         if !self.has_processed {
             self.rate_hz.snap(rate);
             self.depth.snap(depth);
@@ -135,27 +144,28 @@ impl Chorus {
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
-        self.line.write(dry);
-
-        let rate = self.rate_hz.next();
-        let depth = self.depth.next();
-        let width = self.width.next();
-        let mix = self.mix.next();
-        let (v1, v2) = self.lfo.next(rate, width);
-
         if bypassed && !self.was_active {
             self.bypass_wet.snap(0.0);
             return dry;
         }
         self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
         let bypass_w = self.bypass_wet.next();
-        if bypassed && bypass_w <= 1e-4 {
+        if bypassed && bypass_w <= BYPASS_SETTLE_EPS {
             self.bypass_wet.snap(0.0);
+            // O(1) validity reset prevents stale bursts when un-bypassed later.
+            self.line.reset();
             self.tone_lpf.reset();
             self.was_active = false;
             return dry;
         }
         self.was_active = true;
+
+        self.line.write(dry);
+        let rate = self.rate_hz.next();
+        let depth = self.depth.next();
+        let width = self.width.next();
+        let mix = self.mix.next();
+        let (v1, v2) = self.lfo.next(rate, width);
 
         let base_ms = 7.5;
         let swing_ms = 5.5 * depth;
@@ -265,5 +275,46 @@ mod tests {
             }
         }
         assert!(diff_energy > 1.0);
+    }
+
+    #[test]
+    fn chorus_bypass_idles_cleanly_without_stale_burst_and_sanitizes_nan_params() {
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            let mut ch = Chorus::new(sr);
+            ch.set_parameters(ChorusPatch {
+                rate_hz: 1.0,
+                depth: 0.6,
+                width: 1.0,
+                mix: 1.0,
+            });
+            for _ in 0..512 {
+                let _ = ch.process([0.9, -0.9], false);
+            }
+            assert!(!ch.is_idle());
+
+            let fade_frames = (sr * 0.03) as usize;
+            for _ in 0..fade_frames {
+                let _ = ch.process([0.2, -0.2], true);
+            }
+            assert!(ch.is_idle(), "sr={sr}: bypassed chorus must idle");
+            assert_eq!(ch.process([0.4, -0.3], true), [0.4, -0.3]);
+            assert!(ch.is_idle());
+
+            // Un-bypassing with silence produces zero stale chorus burst (line was O(1) reset).
+            let check_frames = (sr * 0.03) as usize;
+            for _ in 0..check_frames {
+                assert_eq!(ch.process([0.0, 0.0], false), [0.0, 0.0]);
+            }
+
+            // NaN parameters sanitize cleanly.
+            ch.set_parameters(ChorusPatch {
+                rate_hz: f32::NAN,
+                depth: f32::NAN,
+                width: f32::NAN,
+                mix: f32::NAN,
+            });
+            let y = ch.process([0.5, -0.5], false);
+            assert!(y[0].is_finite() && y[1].is_finite());
+        }
     }
 }

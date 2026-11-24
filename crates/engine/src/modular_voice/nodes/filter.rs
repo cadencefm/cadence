@@ -6,8 +6,9 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    filter_velocity_mod, octaves_to_ratio_f64, smooth_step_f32, AcidCoeffs, AcidLadder,
-    LogSmoother, ModalResonator, SoftClipCoeffs, Svf, SvfCoeffs, TptOnePoleLpf,
+    filter_velocity_mod, octaves_to_ratio_f64, sanitize_clamp_f32, sanitize_clamp_f64,
+    smooth_step_f32, AcidCoeffs, AcidLadder, LogSmoother, ModalResonator, SoftClipCoeffs, Svf,
+    SvfCoeffs, TptOnePoleLpf, SMOOTH_SETTLE_EPS_F32,
 };
 use cadence_core::rack::{FilterMode, FilterModule, ModuleKind, ModuleKindTag, ModuleParam};
 
@@ -36,8 +37,13 @@ pub(in crate::modular_voice) struct FilterNode {
 impl FilterNode {
     #[inline]
     pub(super) fn new(params: FilterModule, sample_rate: f64) -> Self {
-        let fc = f64::from(params.cutoff_hz).clamp(20.0, sample_rate * 0.45);
-        let drv = f64::from(params.drive.clamp(0.0, 1.0));
+        let fc = sanitize_clamp_f64(
+            f64::from(params.cutoff_hz),
+            20.0,
+            sample_rate * 0.45,
+            1_000.0,
+        );
+        let drv = f64::from(sanitize_clamp_f32(params.drive, 0.0, 1.0, 0.0));
         Self {
             current: params,
             target: params,
@@ -186,7 +192,7 @@ impl VoiceModule for FilterNode {
             return;
         }
 
-        let fc = f64::from(flt.cutoff_hz).clamp(20.0, sr * 0.45);
+        let fc = sanitize_clamp_f64(f64::from(flt.cutoff_hz), 20.0, sr * 0.45, 1_000.0);
         self.svf = Svf::default();
         self.acid = AcidLadder::default();
         self.one_pole = TptOnePoleLpf::new(sr, fc);
@@ -251,14 +257,23 @@ impl VoiceModule for FilterNode {
                 flt.vel_amount,
                 flt.resonance,
             );
-            let total_oct = (key_oct + cv_octaves + vel_mod.cutoff_octaves).clamp(-12.0, 12.0);
-            let fc =
-                (self.cutoff.current() * octaves_to_ratio_f64(total_oct)).clamp(20.0, sr * 0.45);
+            let total_oct = sanitize_clamp_f64(
+                key_oct + cv_octaves + vel_mod.cutoff_octaves,
+                -12.0,
+                12.0,
+                0.0,
+            );
+            let fc = sanitize_clamp_f64(
+                self.cutoff.current() * octaves_to_ratio_f64(total_oct),
+                20.0,
+                sr * 0.45,
+                1_000.0,
+            );
             self.effective_cutoff_hz = fc as f32;
             self.update_coeffs(sr, flt.mode, fc, vel_mod.resonance);
         }
 
-        let drv = f64::from(flt.drive.clamp(0.0, 1.0));
+        let drv = f64::from(sanitize_clamp_f32(flt.drive, 0.0, 1.0, 0.0));
         let driven = if drv > 0.0 {
             let drv_bits = drv.to_bits();
             if drv_bits != self.cached_drive_bits {
@@ -275,10 +290,11 @@ impl VoiceModule for FilterNode {
             FilterMode::LowPass6 => self.one_pole.process_stereo(driven),
             mode => self.svf.process_stereo(driven, self.svf_coeffs, mode),
         };
-        let mix = f64::from(flt.mix.clamp(0.0, 1.0));
-        if mix >= 1.0 - 1e-6 {
+        let mix = f64::from(sanitize_clamp_f32(flt.mix, 0.0, 1.0, 1.0));
+        let eps = f64::from(SMOOTH_SETTLE_EPS_F32);
+        if mix >= 1.0 - eps {
             wet
-        } else if mix <= 1e-6 {
+        } else if mix <= eps {
             inputs.in_audio
         } else {
             let inv = 1.0 - mix;

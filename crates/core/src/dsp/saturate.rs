@@ -7,8 +7,9 @@
 
 use crate::dsp::biquad::{DcBlocker, TptOnePoleLpf};
 use crate::dsp::math::{
-    db_to_lin, db_to_lin_f64, flush_denormal_f64, sanitize_frame, sanitize_sample,
-    sanitize_sample_f64, sanitize_sample_rate, Smoother,
+    db_to_lin, db_to_lin_f64, flush_denormal_f64, sanitize_clamp_f64, sanitize_frame,
+    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS,
+    LIN_FLOOR_F64,
 };
 use crate::mixer::{DriveMode, DrivePatch};
 
@@ -488,6 +489,52 @@ impl Halfband2x {
     }
 }
 
+/// Zero-allocation stereo phase-alignment allpass matching the passband phase of
+/// [`Halfband2x`] (`A0(z)²`) with exact unity magnitude (`0.000 dB`) at every frequency.
+///
+/// Running parallel dry signals through `Halfband2xDryAlign` eliminates comb notches
+/// when blending un-shaped dry audio with 2× oversampled wet audio in [`Drive`] and
+/// voice-level `DriveNode` processing.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Halfband2xDryAlign {
+    stage1: [[f64; 2]; 2],
+    stage2: [[f64; 2]; 2],
+}
+
+impl Halfband2xDryAlign {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Process one stereo frame through two cascaded `HALFBAND_A0` allpass stages (`A0(z)²`).
+    #[inline]
+    pub fn process_stereo(&mut self, input: [f64; 2]) -> [f64; 2] {
+        let x0 = sanitize_sample_f64(input[0]);
+        let x1 = sanitize_sample_f64(input[1]);
+        let mid0 = Halfband2x::cascade(&mut self.stage1[0], &HALFBAND_A0, x0);
+        let mid1 = Halfband2x::cascade(&mut self.stage1[1], &HALFBAND_A0, x1);
+        [
+            Halfband2x::cascade(&mut self.stage2[0], &HALFBAND_A0, mid0),
+            Halfband2x::cascade(&mut self.stage2[1], &HALFBAND_A0, mid1),
+        ]
+    }
+
+    /// True once all internal allpass states have decayed below the silence floor.
+    #[inline]
+    pub fn quiet(&self) -> bool {
+        const EPS: f64 = 1e-10;
+        self.stage1
+            .iter()
+            .chain(self.stage2.iter())
+            .flatten()
+            .all(|v| v.abs() < EPS)
+    }
+}
+
 /// Zero-alloc 2× oversampled stereo drive shaper using precomputed [`DriveShaperCoeffs`].
 #[inline]
 pub fn shape_drive_oversampled_2x_coeffs(
@@ -536,6 +583,7 @@ pub struct Drive {
     tone_hz: Smoother,
     bypass_wet: Smoother,
     os: Halfband2x,
+    dry_align: Halfband2xDryAlign,
     tone_lpf: TptOnePoleLpf,
     dc_blocker: DcBlocker,
     has_processed: bool,
@@ -564,6 +612,7 @@ impl Drive {
             tone_hz: Smoother::new(f64::from(default.tone_hz), 4.0, sr),
             bypass_wet: Smoother::new(1.0, 1.5, sr),
             os: Halfband2x::new(),
+            dry_align: Halfband2xDryAlign::new(),
             tone_lpf: TptOnePoleLpf::new(sr, f64::from(default.tone_hz)),
             dc_blocker: DcBlocker::new(sr),
             has_processed: false,
@@ -579,6 +628,7 @@ impl Drive {
 
     pub fn reset(&mut self) {
         self.os.reset();
+        self.dry_align.reset();
         self.tone_lpf.reset();
         self.dc_blocker.reset();
         self.prev_mode = self.mode;
@@ -602,18 +652,27 @@ impl Drive {
     }
 
     pub fn set_parameters(&mut self, patch: DrivePatch) {
-        let drive = f64::from(sanitize_sample(patch.drive).clamp(0.0, 1.0));
-        let asym = f64::from(sanitize_sample(patch.asymmetry).clamp(-1.0, 1.0));
-        let out_gain = db_to_lin_f64(f64::from(
-            sanitize_sample(patch.output_db).clamp(DRIVE_MIN_OUTPUT_DB, DRIVE_MAX_OUTPUT_DB),
+        let def = DrivePatch::default();
+        let drive = sanitize_clamp_f64(f64::from(patch.drive), 0.0, 1.0, f64::from(def.drive));
+        let asym = sanitize_clamp_f64(
+            f64::from(patch.asymmetry),
+            -1.0,
+            1.0,
+            f64::from(def.asymmetry),
+        );
+        let out_gain = db_to_lin_f64(sanitize_clamp_f64(
+            f64::from(patch.output_db),
+            f64::from(DRIVE_MIN_OUTPUT_DB),
+            f64::from(DRIVE_MAX_OUTPUT_DB),
+            f64::from(def.output_db),
         ));
-        let mix = f64::from(sanitize_sample(patch.mix).clamp(0.0, 1.0));
-        let tone_raw = if patch.tone_hz.is_finite() {
-            f64::from(patch.tone_hz)
-        } else {
-            f64::from(DRIVE_MAX_TONE_HZ)
-        };
-        let tone = tone_raw.clamp(f64::from(DRIVE_MIN_TONE_HZ), self.sample_rate * 0.45);
+        let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
+        let tone = sanitize_clamp_f64(
+            f64::from(patch.tone_hz),
+            f64::from(DRIVE_MIN_TONE_HZ),
+            self.sample_rate * 0.45,
+            f64::from(DRIVE_MAX_TONE_HZ),
+        );
         if !self.has_processed {
             self.mode = patch.mode;
             self.prev_mode = patch.mode;
@@ -651,9 +710,10 @@ impl Drive {
         }
         self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
         let bypass_w = self.bypass_wet.next();
-        if bypassed && bypass_w <= 1e-4 {
+        if bypassed && bypass_w <= BYPASS_SETTLE_EPS {
             self.bypass_wet.snap(0.0);
             self.os.reset();
+            self.dry_align.reset();
             self.tone_lpf.reset();
             self.dc_blocker.reset();
             self.was_active = false;
@@ -677,7 +737,8 @@ impl Drive {
         self.ctrl_count = (self.ctrl_count + 1) & 7;
 
         let dry64 = [f64::from(dry[0]), f64::from(dry[1])];
-        let shaped = if drv <= 0.0 || m_xf >= 1.0 - 1e-6 {
+        let dry_aligned = self.dry_align.process_stereo(dry64);
+        let shaped = if drv <= 0.0 || m_xf >= 1.0 - LIN_FLOOR_F64 {
             let key = (drv.to_bits(), asym.to_bits(), self.mode);
             if key != self.cached_shaper_key {
                 self.cached_shaper_key = key;
@@ -699,12 +760,25 @@ impl Drive {
 
         let dc_free = self.dc_blocker.process_stereo(shaped);
         let toned = self.tone_lpf.process_stereo(dc_free);
-        let eff_wet = mix * bypass_w;
-        let eff_dry = 1.0 - eff_wet;
-        [
-            (dry64[0] * eff_dry + toned[0] * out_g * eff_wet) as f32,
-            (dry64[1] * eff_dry + toned[1] * out_g * eff_wet) as f32,
-        ]
+        let wet = [toned[0] * out_g, toned[1] * out_g];
+        let active_out = if mix >= 1.0 - LIN_FLOOR_F64 {
+            wet
+        } else {
+            let inv_mix = 1.0 - mix;
+            [
+                dry_aligned[0] * inv_mix + wet[0] * mix,
+                dry_aligned[1] * inv_mix + wet[1] * mix,
+            ]
+        };
+        if bypass_w >= 1.0 - LIN_FLOOR_F64 {
+            [active_out[0] as f32, active_out[1] as f32]
+        } else {
+            let dry_bypass = 1.0 - bypass_w;
+            [
+                (dry64[0] * dry_bypass + active_out[0] * bypass_w) as f32,
+                (dry64[1] * dry_bypass + active_out[1] * bypass_w) as f32,
+            ]
+        }
     }
 }
 
@@ -1314,6 +1388,72 @@ mod tests {
         for i in 0..256 {
             let s = (std::f64::consts::TAU * 440.0 * i as f64 / sr).sin() as f32 * 0.5;
             assert_eq!(drv.process([s, s], false), fresh.process([s, s], false));
+        }
+    }
+
+    #[test]
+    fn parallel_drive_is_phase_aligned_with_flat_response_across_sample_rates() {
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            // 1. Halfband2xDryAlign vs Halfband2x identity parallel 50/50 sum stays flat (< 0.02 dB)
+            //    all the way up to 0.42 * sr (zero allpass comb cancellation).
+            for &frac in &[0.005_f64, 0.05, 0.12, 0.22, 0.32, 0.40, 0.42] {
+                let freq = sr * frac;
+                let mut hb = Halfband2x::new();
+                let mut align = Halfband2xDryAlign::new();
+                let mut in_sq = 0.0_f64;
+                let mut sum_sq = 0.0_f64;
+                for i in 0..4_096 {
+                    let x = (TAU * freq * i as f64 / sr).sin();
+                    let w = hb.process_stereo_with([x, x], |s| s);
+                    let d = align.process_stereo([x, x]);
+                    let mix = 0.5 * (d[0] + w[0]);
+                    if i >= 1_024 {
+                        in_sq += x * x;
+                        sum_sq += mix * mix;
+                    }
+                }
+                let gain_db = crate::dsp::lin_to_db_f64((sum_sq / in_sq).sqrt());
+                assert!(
+                    gain_db.abs() < 0.02,
+                    "sr={sr} freq={freq:.0} Hz: Halfband2xDryAlign parallel sum drifted {gain_db:+.4} dB"
+                );
+                assert!(!align.quiet());
+                align.reset();
+                assert!(align.quiet());
+            }
+
+            // 2. Full Drive insert at drive=0.0, mix=0.5, tone_hz=18 kHz stays smooth without comb notches.
+            for &freq in &[200.0_f64, 1_000.0, 4_000.0, 8_000.0, 12_000.0, 16_000.0] {
+                if freq > sr * 0.40 {
+                    continue;
+                }
+                let mut drv = Drive::new(sr);
+                drv.set_parameters(DrivePatch {
+                    mode: DriveMode::Tape,
+                    drive: 0.0,
+                    asymmetry: 0.0,
+                    tone_hz: DRIVE_MAX_TONE_HZ,
+                    output_db: 0.0,
+                    mix: 0.5,
+                });
+                let warmup = (sr * 0.05) as usize;
+                let measure = (sr * 0.05) as usize;
+                let mut in_sq = 0.0_f64;
+                let mut out_sq = 0.0_f64;
+                for i in 0..(warmup + measure) {
+                    let x = (TAU * freq * i as f64 / sr).sin() as f32 * 0.5;
+                    let y = drv.process([x, x], false);
+                    if i >= warmup {
+                        in_sq += f64::from(x) * f64::from(x);
+                        out_sq += f64::from(y[0]) * f64::from(y[0]);
+                    }
+                }
+                let gain_db = crate::dsp::lin_to_db_f64((out_sq / in_sq).sqrt());
+                assert!(
+                    gain_db > -2.0 && gain_db < 0.2,
+                    "sr={sr} freq={freq:.0} Hz: parallel Drive(drive=0, mix=0.5) combed to {gain_db:+.2} dB"
+                );
+            }
         }
     }
 }

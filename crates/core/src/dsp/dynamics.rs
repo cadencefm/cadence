@@ -6,8 +6,9 @@
 //! plugin delay compensation stays constant without stale bursts.
 
 use crate::dsp::math::{
-    db_to_lin_f64, lin_to_db_f64, one_pole_decay_ms, sanitize_frame, sanitize_sample_f64,
-    sanitize_sample_rate, Smoother,
+    db_to_lin_f64, lin_to_db_f64, one_pole_decay_ms, sanitize_clamp_f32, sanitize_clamp_f64,
+    sanitize_frame, sanitize_sample_f64, sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS,
+    LIN_FLOOR_F64,
 };
 use crate::mixer::{CompressorPatch, LimiterPatch};
 
@@ -129,14 +130,26 @@ impl Compressor {
     }
 
     pub fn set_parameters(&mut self, patch: CompressorPatch) {
-        self.threshold_db = f64::from(patch.threshold_db).clamp(-48.0, 0.0);
-        self.ratio = f64::from(patch.ratio).clamp(1.0, 20.0);
-        let att_ms = patch.attack_ms.clamp(0.5, 100.0);
-        let rel_ms = patch.release_ms.clamp(10.0, 1000.0);
+        let def = CompressorPatch::default();
+        self.threshold_db = sanitize_clamp_f64(
+            f64::from(patch.threshold_db),
+            -48.0,
+            0.0,
+            f64::from(def.threshold_db),
+        );
+        self.ratio = sanitize_clamp_f64(f64::from(patch.ratio), 1.0, 20.0, f64::from(def.ratio));
+        let att_ms = sanitize_clamp_f32(patch.attack_ms, 0.5, 100.0, def.attack_ms);
+        let rel_ms = sanitize_clamp_f32(patch.release_ms, 10.0, 1000.0, def.release_ms);
         self.attack_decay = one_pole_decay_ms(att_ms, self.sample_rate);
         self.release_decay = one_pole_decay_ms(rel_ms, self.sample_rate);
-        let makeup = db_to_lin_f64(f64::from(patch.makeup_db).clamp(-6.0, 24.0));
-        let mix = f64::from(patch.mix).clamp(0.0, 1.0);
+        let makeup_db = sanitize_clamp_f64(
+            f64::from(patch.makeup_db),
+            -6.0,
+            24.0,
+            f64::from(def.makeup_db),
+        );
+        let makeup = db_to_lin_f64(makeup_db);
+        let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
         if !self.has_processed {
             self.makeup_gain.snap(makeup);
             self.mix.snap(mix);
@@ -177,7 +190,11 @@ impl Compressor {
         let makeup = self.makeup_gain.next();
         let wet_mix = self.mix.next();
         let dry_mix = 1.0 - wet_mix;
-        let gain = db_to_lin_f64(-self.gr_db) * makeup;
+        let gain = if self.gr_db <= 0.0 {
+            makeup
+        } else {
+            db_to_lin_f64(-self.gr_db) * makeup
+        };
         let total = dry_mix + wet_mix * gain;
         [
             (f64::from(dry[0]) * total) as f32,
@@ -220,6 +237,10 @@ pub struct Limiter {
     drive_db: Smoother,
     mix: Smoother,
     bypass_wet: Smoother,
+    cached_ceiling_db_bits: u64,
+    cached_ceiling_lin: f64,
+    cached_drive_db_bits: u64,
+    cached_drive_lin: f64,
     attack_decay: f64,
     release_decay: f64,
     gr_db: f64,
@@ -236,6 +257,8 @@ impl Limiter {
         // Reach 99% of target GR across the exact lookahead duration before the peak arrives.
         let attack_decay = (-4.605_170_185_988_091 / lookahead as f64).exp();
         let default = LimiterPatch::default();
+        let init_ceil = f64::from(default.ceiling_db);
+        let init_drive = f64::from(default.input_drive_db);
         let mut lim = Self {
             sample_rate: sr,
             lookahead,
@@ -245,10 +268,14 @@ impl Limiter {
             deque_head: 0,
             deque_tail: 0,
             sample_index: 0,
-            ceiling_db: Smoother::new(f64::from(default.ceiling_db), 4.0, sr),
-            drive_db: Smoother::new(f64::from(default.input_drive_db), 4.0, sr),
+            ceiling_db: Smoother::new(init_ceil, 4.0, sr),
+            drive_db: Smoother::new(init_drive, 4.0, sr),
             mix: Smoother::new(f64::from(default.mix), 4.0, sr),
             bypass_wet: Smoother::new(1.0, 1.5, sr),
+            cached_ceiling_db_bits: init_ceil.to_bits(),
+            cached_ceiling_lin: db_to_lin_f64(init_ceil),
+            cached_drive_db_bits: init_drive.to_bits(),
+            cached_drive_lin: db_to_lin_f64(init_drive),
             attack_decay,
             release_decay: one_pole_decay_ms(default.release_ms, sr),
             gr_db: 0.0,
@@ -258,6 +285,11 @@ impl Limiter {
         };
         lim.set_parameters(default);
         lim
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_idle(&self) -> bool {
+        !self.was_active
     }
 
     pub fn reset(&mut self) {
@@ -289,10 +321,21 @@ impl Limiter {
     }
 
     pub fn set_parameters(&mut self, patch: LimiterPatch) {
-        let ceil = f64::from(patch.ceiling_db).clamp(-18.0, -0.1);
-        let drive = f64::from(patch.input_drive_db).clamp(0.0, 24.0);
-        let rel_ms = patch.release_ms.clamp(10.0, 1000.0);
-        let mix = f64::from(patch.mix).clamp(0.0, 1.0);
+        let def = LimiterPatch::default();
+        let ceil = sanitize_clamp_f64(
+            f64::from(patch.ceiling_db),
+            -18.0,
+            -0.1,
+            f64::from(def.ceiling_db),
+        );
+        let drive = sanitize_clamp_f64(
+            f64::from(patch.input_drive_db),
+            0.0,
+            24.0,
+            f64::from(def.input_drive_db),
+        );
+        let rel_ms = sanitize_clamp_f32(patch.release_ms, 10.0, 1000.0, def.release_ms);
+        let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
         self.release_decay = one_pole_decay_ms(rel_ms, self.sample_rate);
         if !self.has_processed {
             self.ceiling_db.snap(ceil);
@@ -335,9 +378,9 @@ impl Limiter {
 
     /// Process one stereo frame.
     ///
-    /// While `bypassed == true`, `delay_buf` and the sliding peak deque continue to
-    /// advance cleanly with live dry audio (`0.0` peak pushed), keeping latency constant
-    /// for PDC and preventing stale audio bursts when un-bypassing.
+    /// While `bypassed == true`, `delay_buf` continues to advance with live dry audio so
+    /// lookahead latency stays constant for PDC with zero stale audio bursts on un-bypass;
+    /// once the bypass crossfade settles, the peak deque resets and skips per-sample work.
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry_in = sanitize_frame(input);
@@ -348,13 +391,7 @@ impl Limiter {
             self.write_idx = 0;
         }
 
-        let ceiling_db = self.ceiling_db.next();
-        let ceiling_lin = db_to_lin_f64(ceiling_db);
-        let drive_lin = db_to_lin_f64(self.drive_db.next());
-        let mix = self.mix.next();
-
         if bypassed && !self.was_active {
-            let _ = self.push_window_peak(0.0);
             self.bypass_wet.snap(0.0);
             self.gr_db = 0.0;
             self.current_gr_db = 0.0;
@@ -363,15 +400,33 @@ impl Limiter {
 
         self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
         let bypass_w = self.bypass_wet.next();
-        if bypassed && bypass_w <= 1e-4 {
-            let _ = self.push_window_peak(0.0);
+        if bypassed && bypass_w <= BYPASS_SETTLE_EPS {
             self.bypass_wet.snap(0.0);
+            self.deque_head = 0;
+            self.deque_tail = 0;
             self.gr_db = 0.0;
             self.current_gr_db = 0.0;
             self.was_active = false;
             return delayed_dry;
         }
         self.was_active = true;
+
+        let ceiling_db = self.ceiling_db.next();
+        let ceiling_bits = ceiling_db.to_bits();
+        if ceiling_bits != self.cached_ceiling_db_bits {
+            self.cached_ceiling_db_bits = ceiling_bits;
+            self.cached_ceiling_lin = db_to_lin_f64(ceiling_db);
+        }
+        let ceiling_lin = self.cached_ceiling_lin;
+
+        let drive_db = self.drive_db.next();
+        let drive_bits = drive_db.to_bits();
+        if drive_bits != self.cached_drive_db_bits {
+            self.cached_drive_db_bits = drive_bits;
+            self.cached_drive_lin = db_to_lin_f64(drive_db);
+        }
+        let drive_lin = self.cached_drive_lin;
+        let mix = self.mix.next();
 
         let in_peak = if bypassed {
             0.0
@@ -409,12 +464,16 @@ impl Limiter {
         }
         self.current_gr_db = if bypassed { 0.0 } else { self.gr_db as f32 };
 
-        let gain = db_to_lin_f64(-self.gr_db);
+        let gain = if self.gr_db <= 0.0 {
+            1.0
+        } else {
+            db_to_lin_f64(-self.gr_db)
+        };
         let wet_l = (del_l * gain).clamp(-ceiling_lin, ceiling_lin);
         let wet_r = (del_r * gain).clamp(-ceiling_lin, ceiling_lin);
 
         let eff_wet = mix * bypass_w;
-        if eff_wet >= 1.0 - 1e-6 {
+        if eff_wet >= 1.0 - LIN_FLOOR_F64 {
             [wet_l as f32, wet_r as f32]
         } else {
             let dry_mix = 1.0 - eff_wet;
@@ -545,6 +604,70 @@ mod tests {
                     "sr={sr}: stale audio burst on un-bypass: {y:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn limiter_bypass_idles_preserving_pdc_and_dynamics_sanitize_nan_params() {
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            let mut lim = Limiter::new(sr);
+            let lookahead = lim.latency_frames();
+            lim.set_parameters(LimiterPatch {
+                ceiling_db: -6.0,
+                input_drive_db: 12.0,
+                release_ms: 40.0,
+                mix: 1.0,
+            });
+            for _ in 0..(lookahead * 2) {
+                let _ = lim.process([0.9, -0.9], false);
+            }
+            assert!(!lim.is_idle());
+
+            // Bypass until fade settles -> limiter enters idle while preserving exact lookahead PDC.
+            let flush = lookahead * 2 + (sr * 0.03) as usize;
+            for _ in 0..flush {
+                let _ = lim.process([0.0, 0.0], true);
+            }
+            assert!(lim.is_idle(), "sr={sr}: bypassed limiter must idle");
+            assert_eq!(lim.gain_reduction_db(), 0.0);
+
+            // Inject a dry impulse while idle-bypassed: must emerge at exact `lookahead` delay.
+            let mut emerged_at = None;
+            for i in 0..=(lookahead + 4) {
+                let x = if i == 0 { [0.75, -0.5] } else { [0.0, 0.0] };
+                let y = lim.process(x, true);
+                assert!(lim.is_idle());
+                if y[0].abs() > 0.5 {
+                    emerged_at = Some((i, y));
+                }
+            }
+            assert_eq!(
+                emerged_at,
+                Some((lookahead, [0.75, -0.5])),
+                "sr={sr}: idle-bypassed limiter must preserve exact lookahead PDC"
+            );
+
+            // NaN parameter patches sanitize cleanly for both Compressor and Limiter.
+            lim.set_parameters(LimiterPatch {
+                ceiling_db: f32::NAN,
+                input_drive_db: f32::NAN,
+                release_ms: f32::NAN,
+                mix: f32::NAN,
+            });
+            let y_lim = lim.process([0.5, -0.5], false);
+            assert!(y_lim[0].is_finite() && y_lim[1].is_finite());
+
+            let mut comp = Compressor::new(sr);
+            comp.set_parameters(CompressorPatch {
+                threshold_db: f32::NAN,
+                ratio: f32::NAN,
+                attack_ms: f32::NAN,
+                release_ms: f32::NAN,
+                makeup_db: f32::NAN,
+                mix: f32::NAN,
+            });
+            let y_comp = comp.process([0.5, -0.5], false);
+            assert!(y_comp[0].is_finite() && y_comp[1].is_finite());
         }
     }
 }

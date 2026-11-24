@@ -2,13 +2,13 @@
 //! rhythmic step envelopes.
 
 use crate::dsp::math::{
-    decay_coeff_60db_ms, one_pole_coeff_ms, sanitize_sample_f64, sanitize_sample_rate,
-    DECAY_LN_60DB,
+    decay_coeff_60db_ms, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_sample_f64,
+    sanitize_sample_rate, DECAY_LN_60DB, TAIL_SILENCE_FLOOR_F64,
 };
 use crate::filter_patterns::CompiledFilterPattern;
 use crate::rack::TriggerMode;
 
-const ENV_SILENCE: f64 = 1e-7;
+const ENV_SILENCE: f64 = TAIL_SILENCE_FLOOR_F64;
 
 /// Stage of an [`AdsrState`] envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -979,6 +979,19 @@ impl RhythmicEnv {
     pub const SMOOTH_ATTACK_MS: f32 = 18.0;
     /// Drift threshold (in 16th-note steps) before snapping song position on seek/loop.
     const SEEK_THRESHOLD_STEPS: f64 = 0.02;
+    const MIN_DECAY_MS: f64 = 15.0;
+    const MAX_DECAY_MS: f64 = 1500.0;
+    const DEFAULT_DECAY_MS: f64 = 240.0;
+
+    #[inline]
+    fn sanitize_decay_sec(env_decay_ms: f32) -> f64 {
+        sanitize_clamp_f64(
+            f64::from(env_decay_ms),
+            Self::MIN_DECAY_MS,
+            Self::MAX_DECAY_MS,
+            Self::DEFAULT_DECAY_MS,
+        ) * 0.001
+    }
 
     pub fn new(sample_rate: f64) -> Self {
         let sr = sanitize_sample_rate(sample_rate);
@@ -1011,11 +1024,7 @@ impl RhythmicEnv {
     /// Update pattern and decay time without disturbing clock synchronization.
     pub fn set_pattern(&mut self, compiled: CompiledFilterPattern, env_decay_ms: f32) {
         self.pattern = compiled;
-        let tau = f64::from(if env_decay_ms.is_finite() {
-            env_decay_ms.clamp(15.0, 1500.0)
-        } else {
-            240.0
-        }) * 0.001;
+        let tau = Self::sanitize_decay_sec(env_decay_ms);
         self.decay_coef = (-1.0 / (tau * self.sample_rate)).exp();
     }
 
@@ -1169,7 +1178,7 @@ impl RhythmicEnv {
             120.0
         };
         let step_sec = 60.0 / (safe_bpm * 4.0 * compiled.steps_per_sixteenth());
-        let tau_decay = (f64::from(env_decay_ms).clamp(15.0, 1500.0) * 0.001).max(0.005);
+        let tau_decay = Self::sanitize_decay_sec(env_decay_ms).max(0.005);
         let tau_atk = f64::from(if compiled.smooth_attack {
             Self::SMOOTH_ATTACK_MS
         } else {
@@ -1214,7 +1223,7 @@ impl RhythmicEnv {
         };
         let step_sec = 60.0 / (safe_bpm * 4.0 * compiled.steps_per_sixteenth());
         let sub_dt = step_sec / pps as f64;
-        let tau_decay = (f64::from(env_decay_ms).clamp(15.0, 1500.0) * 0.001).max(0.005);
+        let tau_decay = Self::sanitize_decay_sec(env_decay_ms).max(0.005);
         let tau_atk = f64::from(if compiled.smooth_attack {
             Self::SMOOTH_ATTACK_MS
         } else {
@@ -1504,5 +1513,24 @@ mod tests {
         assert_eq!(delayed_curve.len(), 64);
         assert_eq!(delayed_curve[0], (0.0, 0.0));
         assert_eq!(delayed_curve.last().unwrap().1, 0.0);
+    }
+
+    #[test]
+    fn rhythmic_env_eval_and_preview_sanitize_nan_decay_and_bpm() {
+        let mut pat = CompiledFilterPattern {
+            length: 4,
+            ..CompiledFilterPattern::default()
+        };
+        pat.steps[0] = 127;
+        pat.steps[2] = 96;
+
+        let (slot, val) = RhythmicEnv::eval_at(&pat, 0.5, f64::NAN, f32::NAN);
+        assert!(slot < 4 && val.is_finite() && (0.0..=1.0).contains(&val));
+
+        let prev = RhythmicEnv::preview(&pat, f32::NAN, f64::NAN, 8);
+        assert_eq!(prev.len(), 32);
+        assert!(prev
+            .iter()
+            .all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
     }
 }

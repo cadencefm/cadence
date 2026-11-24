@@ -38,6 +38,8 @@ pub(super) struct Voice {
     pub(super) gain_scale: Smoother,
     /// Smoothed Rack bus stereo balance pan (`pan_stereo_balance_f64`).
     pub(super) rack_pan_sm: Smoother,
+    pub(super) cached_rack_pan_bits: u64,
+    pub(super) cached_rack_pan_lr: [f64; 2],
     /// Dedicated Rack-bus LowPass SVF (transparent bypass at >= 19.9 kHz & res <= 0.001).
     pub(super) rack_svf: Svf,
     pub(super) rack_svf_coeffs: SvfCoeffs,
@@ -76,6 +78,8 @@ impl Voice {
             zone_pan: 0.0,
             gain_scale: Smoother::new(1.0, 4.0, sr),
             rack_pan_sm: Smoother::new(0.0, 4.0, sr),
+            cached_rack_pan_bits: 0.0_f64.to_bits(),
+            cached_rack_pan_lr: [1.0, 1.0],
             rack_svf: Svf::default(),
             rack_svf_coeffs: SvfCoeffs::new(sr, 20_000.0, 0.0),
             rack_cutoff: LogSmoother::new_clamped(20_000.0, 20.0, 20_000.0),
@@ -140,6 +144,12 @@ impl Voice {
         let res = sanitize_sample(resonance).clamp(0.0, 0.95);
         self.gain_scale = Smoother::new(g, 4.0, sr);
         self.rack_pan_sm = Smoother::new(pan, 4.0, sr);
+        self.cached_rack_pan_bits = pan.to_bits();
+        self.cached_rack_pan_lr = if pan == 0.0 {
+            [1.0, 1.0]
+        } else {
+            pan_stereo_balance_f64(pan)
+        };
         self.rack_cutoff = LogSmoother::new_clamped(fc, 20.0, 20_000.0);
         self.rack_cutoff_target_hz = fc;
         self.rack_cutoff_coeff = one_pole_coeff_ms(4.0, sr);
@@ -233,11 +243,16 @@ impl Voice {
             self.rack_svf_was_active = false;
         }
 
-        let [rpl, rpr] = if rack_pan == 0.0 {
-            [1.0, 1.0]
-        } else {
-            pan_stereo_balance_f64(rack_pan)
-        };
+        let rack_pan_bits = rack_pan.to_bits();
+        if rack_pan_bits != self.cached_rack_pan_bits {
+            self.cached_rack_pan_bits = rack_pan_bits;
+            self.cached_rack_pan_lr = if rack_pan == 0.0 {
+                [1.0, 1.0]
+            } else {
+                pan_stereo_balance_f64(rack_pan)
+            };
+        }
+        let [rpl, rpr] = self.cached_rack_pan_lr;
         let output = [
             flush_denormal_f32(sanitize_sample((stereo[0] * rpl * gain_scale) as f32)),
             flush_denormal_f32(sanitize_sample((stereo[1] * rpr * gain_scale) as f32)),

@@ -1173,3 +1173,62 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
         }
     });
 }
+
+#[test]
+fn mixer_smoothers_settle_exactly_without_subnormal_stalls_and_cache_pan_weights() {
+    use cadence_core::dsp::pan_stereo_balance;
+
+    for sr in [44_100u32, 48_000, 96_000, 192_000] {
+        let mut score = stereo_score();
+        score.mixer.channel_mut(1).unwrap().strip.pan = -0.65;
+        score.mixer.channel_mut(1).unwrap().sends = vec![ChannelSend {
+            target: 4,
+            amount: 0.75,
+        }];
+        score.validate().unwrap();
+
+        let mut mix = MixerEngine::new(&score, sr);
+        mix.update_controls(&score, 0.0, 0.0);
+        mix.snap_smoothers();
+
+        // Cached pan weights must match pan_stereo_balance immediately after snap_smoothers.
+        let slot1 = MAX_INSTRUMENTS;
+        assert_eq!(
+            mix.channels[slot1].cached_pan_lr,
+            pan_stereo_balance(-0.65),
+            "sr={sr}: cached pan weights out of sync after snap"
+        );
+
+        let mut sources = [[0.0_f32; 2]; MAX_INSTRUMENTS];
+        sources[0] = [0.5, 0.5];
+        let y_panned = mix.process(&sources, [0.0; 2]);
+        let [pl, pr] = pan_stereo_balance(-0.65);
+        // Channel 1 + Return 4 (amount 0.75, pre-pan) both route to Master.
+        close(y_panned[0], 0.5 * pl + 0.5 * 0.75);
+        close(y_panned[1], 0.5 * pr + 0.5 * 0.75);
+
+        // Return pan and send amount back to 0.0: smooth_step_f32 must settle to exact 0.0
+        // (zero subnormal stall) and refresh cached_pan_lr back to [1.0, 1.0].
+        score.mixer.channel_mut(1).unwrap().strip.pan = 0.0;
+        score.mixer.channel_mut(1).unwrap().sends[0].amount = 0.0;
+        mix.adopt(&score, false);
+        mix.update_controls(&score, 0.0, 0.0);
+        let settle_frames = (f64::from(sr) * 0.15) as usize;
+        for _ in 0..settle_frames {
+            let _ = mix.process(&sources, [0.0; 2]);
+        }
+        assert_eq!(
+            mix.channels[slot1].pan, 0.0,
+            "sr={sr}: channel pan stalled in subnormals"
+        );
+        assert_eq!(
+            mix.channels[slot1].cached_pan_lr,
+            [1.0, 1.0],
+            "sr={sr}: cached pan weights did not reset to unity"
+        );
+        assert_eq!(
+            mix.channels[slot1].sends[0].amount, 0.0,
+            "sr={sr}: send amount stalled in subnormals"
+        );
+    }
+}
