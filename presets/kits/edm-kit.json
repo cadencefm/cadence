@@ -1,0 +1,666 @@
+{
+  "version": 1,
+  "name": "EDM Kit",
+  "category": "Kit",
+  "patch": {
+    "kit_name": "EDM Kit",
+    "zones": [
+      {
+        "id": 1,
+        "name": "BD",
+        "low_midi": 36,
+        "high_midi": 36,
+        "root_midi": 36,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/01-bd.wav",
+              "root_midi": 36,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "name": "SD",
+        "low_midi": 37,
+        "high_midi": 37,
+        "root_midi": 37,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/02-sd.wav",
+              "root_midi": 37,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 3,
+        "name": "LT",
+        "low_midi": 38,
+        "high_midi": 38,
+        "root_midi": 38,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/03-lt.wav",
+              "root_midi": 38,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "name": "MT",
+        "low_midi": 39,
+        "high_midi": 39,
+        "root_midi": 39,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/04-mt.wav",
+              "root_midi": 39,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "name": "HT",
+        "low_midi": 40,
+        "high_midi": 40,
+        "root_midi": 40,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/05-ht.wav",
+              "root_midi": 40,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "name": "RS",
+        "low_midi": 41,
+        "high_midi": 41,
+        "root_midi": 41,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/06-rs.wav",
+              "root_midi": 41,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "name": "CH",
+        "low_midi": 42,
+        "high_midi": 42,
+        "root_midi": 42,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "choke_group": 1,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/07-ch.wav",
+              "root_midi": 42,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "name": "CP",
+        "low_midi": 43,
+        "high_midi": 43,
+        "root_midi": 43,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/08-cp.wav",
+              "root_midi": 43,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "name": "CR",
+        "low_midi": 44,
+        "high_midi": 44,
+        "root_midi": 44,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/09-cr.wav",
+              "root_midi": 44,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "name": "RD",
+        "low_midi": 45,
+        "high_midi": 45,
+        "root_midi": 45,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/10-rd.wav",
+              "root_midi": 45,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "name": "OH",
+        "low_midi": 46,
+        "high_midi": 46,
+        "root_midi": 46,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "choke_group": 1,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Sampler",
+            "kind": {
+              "type": "sampler",
+              "path": "factory-samples/edm-kit/11-oh.wav",
+              "root_midi": 46,
+              "coarse_semitones": 0,
+              "fine_cents": 0.0,
+              "sample_start": 0,
+              "sample_end": 0,
+              "loop_mode": "off",
+              "loop_start": 0,
+              "loop_end": 0,
+              "loop_xfade_ms": 4.0,
+              "one_shot": true,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      }
+    ],
+    "gain_db": 0.0,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0
+  }
+}

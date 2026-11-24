@@ -1,0 +1,559 @@
+{
+  "version": 1,
+  "name": "TR-909 CH",
+  "category": "Drum",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "909 CH",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 42,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "fixed",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Stick Exc",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 1200.0,
+              "lowpass_hz": 17500.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Strike Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 30.0,
+              "sustain": 0.0,
+              "release_ms": 6.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 3,
+            "name": "Strike VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 4,
+            "name": "Hat Plate A",
+            "kind": {
+              "type": "resonator",
+              "mode": "plate",
+              "pitch_tracking": "fixed",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 505.0,
+              "structure": 0.5,
+              "decay_ms": 520.0,
+              "brightness": 0.7,
+              "position": 0.58,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 5,
+            "name": "Hat Plate B",
+            "kind": {
+              "type": "resonator",
+              "mode": "plate",
+              "pitch_tracking": "fixed",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 640.0,
+              "structure": 0.49,
+              "decay_ms": 480.0,
+              "brightness": 0.72,
+              "position": 0.6,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Hat Plate C",
+            "kind": {
+              "type": "resonator",
+              "mode": "plate",
+              "pitch_tracking": "fixed",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 905.0,
+              "structure": 0.48,
+              "decay_ms": 440.0,
+              "brightness": 0.74,
+              "position": 0.62,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 7,
+            "name": "Plate Shimmer",
+            "kind": {
+              "type": "noise",
+              "color": "pink",
+              "highpass_hz": 20.0,
+              "lowpass_hz": 140.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 8,
+            "name": "Hat Air",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 4500.0,
+              "lowpass_hz": 17500.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 9,
+            "name": "Air Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 280.0,
+              "sustain": 0.0,
+              "release_ms": 10.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 10,
+            "name": "Air VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 11,
+            "name": "EPROM Tape",
+            "kind": {
+              "type": "drive",
+              "mode": "tape",
+              "drive": 0.88,
+              "asymmetry": 0.0,
+              "tone_hz": 17500.0,
+              "output_db": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 12,
+            "name": "6-Bit EPROM",
+            "kind": {
+              "type": "lofi",
+              "bits": 5.8,
+              "rate_hz": 33500.0,
+              "mix": 0.88
+            }
+          },
+          {
+            "id": 13,
+            "name": "Hat HPF",
+            "kind": {
+              "type": "filter",
+              "mode": "high_pass",
+              "cutoff_hz": 2650.0,
+              "resonance": 0.14,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 14,
+            "name": "Choke Env",
+            "kind": {
+              "type": "env",
+              "mode": "hold_decay",
+              "attack_ms": 0.1,
+              "hold_ms": 10.0,
+              "decay_ms": 205.0,
+              "sustain": 0.0,
+              "release_ms": 10.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 15,
+            "name": "Hat VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 16,
+            "name": "Shell Body",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 95.0,
+              "lowpass_hz": 2400.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 17,
+            "name": "Shell BP 270",
+            "kind": {
+              "type": "filter",
+              "mode": "band_pass",
+              "cutoff_hz": 270.0,
+              "resonance": 0.42,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 18,
+            "name": "Shell Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 105.0,
+              "sustain": 0.0,
+              "release_ms": 8.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 19,
+            "name": "Shell VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 20,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 4.505757,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 3,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "in",
+            "amount": 1.25
+          },
+          {
+            "id": 4,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 5,
+            "to_port": "in",
+            "amount": 1.45
+          },
+          {
+            "id": 5,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "in",
+            "amount": 1.35
+          },
+          {
+            "id": 6,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "pitch_cv",
+            "amount": 0.55
+          },
+          {
+            "id": 7,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 5,
+            "to_port": "pitch_cv",
+            "amount": -0.5
+          },
+          {
+            "id": 8,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "pitch_cv",
+            "amount": 0.55
+          },
+          {
+            "id": 9,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 10,
+            "from_module": 9,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 11,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 0.88
+          },
+          {
+            "id": 12,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 1.08
+          },
+          {
+            "id": 13,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 1.05
+          },
+          {
+            "id": 14,
+            "from_module": 10,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 1.25
+          },
+          {
+            "id": 15,
+            "from_module": 11,
+            "from_port": "out",
+            "to_module": 12,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 16,
+            "from_module": 12,
+            "from_port": "out",
+            "to_module": 13,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 17,
+            "from_module": 13,
+            "from_port": "out",
+            "to_module": 15,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 18,
+            "from_module": 14,
+            "from_port": "out",
+            "to_module": 15,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 19,
+            "from_module": 16,
+            "from_port": "out",
+            "to_module": 17,
+            "to_port": "in",
+            "amount": 1.05
+          },
+          {
+            "id": 20,
+            "from_module": 17,
+            "from_port": "out",
+            "to_module": 19,
+            "to_port": "in",
+            "amount": 1.25
+          },
+          {
+            "id": 21,
+            "from_module": 16,
+            "from_port": "out",
+            "to_module": 19,
+            "to_port": "in",
+            "amount": 0.95
+          },
+          {
+            "id": 22,
+            "from_module": 18,
+            "from_port": "out",
+            "to_module": 19,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 23,
+            "from_module": 15,
+            "from_port": "out",
+            "to_module": 20,
+            "to_port": "in",
+            "amount": 0.8
+          },
+          {
+            "id": 24,
+            "from_module": 19,
+            "from_port": "out",
+            "to_module": 20,
+            "to_port": "in",
+            "amount": 1.15
+          }
+        ]
+      }
+    ],
+    "gain_db": -5.0357966,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 14,
+          "param": "decay"
+        },
+        "label": "Decay"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 4,
+          "param": "fixed_hz"
+        },
+        "label": "Plate A Hz"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 4,
+          "param": "brightness"
+        },
+        "label": "Bright"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 13,
+          "param": "cutoff"
+        },
+        "label": "Tone HPF"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 12,
+          "param": "sample_rate_hz"
+        },
+        "label": "Clock Hz"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 11
+        },
+        "label": "Bronze"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 14
+        },
+        "label": "Air"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 24
+        },
+        "label": "Shell"
+      }
+    ]
+  }
+}

@@ -1,0 +1,292 @@
+{
+  "version": 1,
+  "name": "TR-808 CP",
+  "category": "Drum",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "808 CP",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 43,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "fixed",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Clap Noise",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 360.0,
+              "lowpass_hz": 12500.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Clap BP 935",
+            "kind": {
+              "type": "filter",
+              "mode": "band_pass",
+              "cutoff_hz": 935.0,
+              "resonance": 0.56,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 3,
+            "name": "Slap Air 1.9k",
+            "kind": {
+              "type": "filter",
+              "mode": "band_pass",
+              "cutoff_hz": 1900.0,
+              "resonance": 0.25,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 4,
+            "name": "4-Burst Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 14.5,
+              "sustain": 0.0,
+              "release_ms": 6.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 4,
+              "burst_spacing_ms": 10.6
+            }
+          },
+          {
+            "id": 5,
+            "name": "Slap VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Reverb Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 3.0,
+              "hold_ms": 0.0,
+              "decay_ms": 920.0,
+              "sustain": 0.0,
+              "release_ms": 40.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 32.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 7,
+            "name": "Reverb VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 8,
+            "name": "808 Tape",
+            "kind": {
+              "type": "drive",
+              "mode": "tape",
+              "drive": 0.08,
+              "asymmetry": 0.0,
+              "tone_hz": 5500.0,
+              "output_db": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 9,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 10.605757,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 2,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 0.58
+          },
+          {
+            "id": 3,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 5,
+            "to_port": "in",
+            "amount": 1.15
+          },
+          {
+            "id": 4,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 5,
+            "to_port": "in",
+            "amount": 0.52
+          },
+          {
+            "id": 5,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 5,
+            "to_port": "in",
+            "amount": 0.15
+          },
+          {
+            "id": 6,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 5,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 7,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 8,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 9,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 8,
+            "to_port": "in",
+            "amount": 1.12
+          },
+          {
+            "id": 10,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 8,
+            "to_port": "in",
+            "amount": 0.13
+          },
+          {
+            "id": 11,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 9,
+            "to_port": "in",
+            "amount": 0.9
+          }
+        ]
+      }
+    ],
+    "gain_db": -4.8406,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 4,
+          "param": "burst_spacing_ms"
+        },
+        "label": "Spread"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 6,
+          "param": "decay"
+        },
+        "label": "Reverb Dec"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 2,
+          "param": "cutoff"
+        },
+        "label": "BP Freq"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 2,
+          "param": "resonance"
+        },
+        "label": "BP Res"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 9
+        },
+        "label": "Slap"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 10
+        },
+        "label": "Reverb"
+      }
+    ]
+  }
+}

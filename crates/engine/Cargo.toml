@@ -1,0 +1,23 @@
+[package]
+name = "cadence-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Real-time DSP synthesis, sampler voices, mixer runtime, CPAL output, WAV export, and MIDI for Cadence"
+
+[features]
+default = ["audio", "midi"]
+audio = ["dep:cpal"]
+midi = ["dep:midir"]
+
+[dependencies]
+anyhow.workspace = true
+cadence-core.workspace = true
+cpal = { workspace = true, optional = true }
+hound.workspace = true
+midir = { workspace = true, optional = true }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true

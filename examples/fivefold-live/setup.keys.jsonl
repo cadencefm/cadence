@@ -1,0 +1,2 @@
+{"label": "Set the lift part to restart on launch", "keys": ":lane Lift add \"Lift / Noise\" restart<Enter>"}
+{"label": "Song edits made while playing land on the launch boundary", "keys": ":quantize edits launch<Enter>"}

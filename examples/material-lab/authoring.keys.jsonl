@@ -1,0 +1,16 @@
+{"label": "Start a small musical workspace", "keys": ":title Modal Workshop<Enter>:bpm 136<Enter>:bars 4<Enter>", "wait_ms": 500, "expect": {"patterns": 0}}
+{"label": "New Notes: choose kind, name and length", "keys": "gpnnMotif<Enter>5<Enter>i13587<Esc>", "wait_ms": 900, "expect": {"patterns": 1, "instruments": 0}}
+{"label": "Create Harmony with a neutral first point", "keys": "ndHarmony<Enter>64<Enter>", "wait_ms": 800, "expect": {"patterns": 2, "/patterns/1/kind/period": 64}}
+{"label": "Move through time and enter exact degree offsets", "keys": "24l<Enter>-2<Enter>8l<Enter>2<Enter>24l<Enter>-1<Enter>", "wait_ms": 1000, "expect": {"/patterns/1/kind/points/1/step": 24, "/patterns/1/kind/points/1/value": -2.0, "/patterns/1/kind/points/3/step": 56}}
+{"label": "Point navigation does not create new values", "keys": "ggwjb", "wait_ms": 700, "expect": {"patterns": 2, "/patterns/1/kind/points": [{"step": 0, "value": 0.0}, {"step": 24, "value": -2.0}, {"step": 32, "value": 2.0}, {"step": 56, "value": -1.0}]}}
+{"label": "Name the derivation and choose Add Degrees", "keys": "dMoving<Enter>a", "wait_ms": 900, "screen": ["Notes source", "Motif"], "expect": {"patterns": 2}}
+{"label": "The next picker offers compatible degree sources", "keys": "<Enter>", "wait_ms": 900, "screen": ["Degree source", "Harmony"], "expect": {"patterns": 2}}
+{"label": "Accept Harmony; retain both independent sources", "keys": "<Enter>", "wait_ms": 900, "expect": {"patterns": 3, "/patterns/2/kind/type": "add_degrees"}}
+{"label": "Create and shape a normalized ramp", "keys": "nvSweep<Enter>16<Enter>r<Enter>30%<Enter>8l<Enter>80%<Enter>", "wait_ms": 1000, "expect": {"patterns": 4, "/patterns/3/kind/mode": "ramp", "/patterns/3/kind/points/1/step": 8}}
+{"label": "Choose a Synth preset; audition before committing", "keys": "niLead<Enter>s/pulse<Tab>A", "wait_ms": 1000, "screen": ["Preset"], "expect": {"instruments": 0, "draft_open": true}}
+{"label": "Create Lead and its Audio channel together", "keys": "<Enter><Enter><Enter>", "wait_ms": 700, "expect": {"instruments": 1, "channels": 1, "draft_open": false}}
+{"label": "Join Moving to Lead with typed pickers", "keys": "nbLeadPart<Enter>/Moving<Enter><Enter>/Lead<Enter><Enter><Enter><Enter>", "wait_ms": 700, "expect": {"parts": 1}}
+{"label": "Create a lane, then choose binding, lane and placement time", "keys": "nlLeadLane<Enter>no/LeadPart<Enter><Enter>/LeadLane<Enter><Enter>1<Enter>4<Enter>s0<Enter>", "wait_ms": 1000, "expect": {"lanes": 1, "placements": 1}}
+{"label": "Link the independent value source to binding expression", "keys": ":link LeadPart pan Sweep<Enter>", "wait_ms": 600, "expect": {"ready": true}}
+{"label": "Vertical mixer: lower the selected fader six dB", "keys": "gmgg<m-J><m-J>:play 1<Enter>", "wait_ms": 1400, "screen": ["MIXER", "Trim"], "expect": {"ready": true}}
+{"label": "Home stops playback; the material stays editable", "keys": "<Home>", "wait_ms": 500, "expect": {"patterns": 4, "ready": true, "draft_open": false, "value_entry_open": false}}

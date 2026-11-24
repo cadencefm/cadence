@@ -1,0 +1,385 @@
+{
+  "version": 1,
+  "name": "TR-909 CP",
+  "category": "Drum",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "909 CP",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 43,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "fixed",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Clap Noise",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 20.0,
+              "lowpass_hz": 20000.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Burst 1",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 28.0,
+              "sustain": 0.0,
+              "release_ms": 10.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 3,
+            "name": "Burst 2",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 28.0,
+              "sustain": 0.0,
+              "release_ms": 10.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 11.36,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 4,
+            "name": "Burst 3",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 28.0,
+              "sustain": 0.0,
+              "release_ms": 10.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 22.72,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 5,
+            "name": "Slap 4",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 122.0,
+              "sustain": 0.0,
+              "release_ms": 30.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 34.09,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Clap VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 7,
+            "name": "Clap HPF",
+            "kind": {
+              "type": "filter",
+              "mode": "high_pass",
+              "cutoff_hz": 980.0,
+              "resonance": 0.79,
+              "drive": 0.04,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 8,
+            "name": "Tail Noise",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 420.0,
+              "lowpass_hz": 20000.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 9,
+            "name": "Tail Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 2.0,
+              "hold_ms": 0.0,
+              "decay_ms": 840.0,
+              "sustain": 0.0,
+              "release_ms": 80.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 34.09,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 10,
+            "name": "Tail VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 11,
+            "name": "Tail BP",
+            "kind": {
+              "type": "filter",
+              "mode": "band_pass",
+              "cutoff_hz": 850.0,
+              "resonance": 0.78,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 12,
+            "name": "Tone LP6",
+            "kind": {
+              "type": "filter",
+              "mode": "low_pass_6",
+              "cutoff_hz": 1750.0,
+              "resonance": 0.0,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 0.78
+            }
+          },
+          {
+            "id": 13,
+            "name": "CP Crack",
+            "kind": {
+              "type": "drive",
+              "mode": "hard_clip",
+              "drive": 0.1,
+              "asymmetry": 0.0,
+              "tone_hz": 18000.0,
+              "output_db": 5.5,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 14,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 3.0057569,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 3,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 4,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 5,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "cv",
+            "amount": 0.88
+          },
+          {
+            "id": 6,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 7,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 8,
+            "from_module": 9,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 9,
+            "from_module": 10,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 10,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 12,
+            "to_port": "in",
+            "amount": 1.00756
+          },
+          {
+            "id": 11,
+            "from_module": 11,
+            "from_port": "out",
+            "to_module": 12,
+            "to_port": "in",
+            "amount": 0.15969
+          },
+          {
+            "id": 12,
+            "from_module": 12,
+            "from_port": "out",
+            "to_module": 13,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 13,
+            "from_module": 13,
+            "from_port": "out",
+            "to_module": 14,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      }
+    ],
+    "gain_db": -4.6496935,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 7,
+          "param": "cutoff"
+        },
+        "label": "Body Hz"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 7,
+          "param": "resonance"
+        },
+        "label": "Q"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 5,
+          "param": "decay"
+        },
+        "label": "Slap Dec"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 11
+        },
+        "label": "Reverb"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 12,
+          "param": "cutoff"
+        },
+        "label": "Tone"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 13,
+          "param": "drive"
+        },
+        "label": "Crack"
+      }
+    ]
+  }
+}

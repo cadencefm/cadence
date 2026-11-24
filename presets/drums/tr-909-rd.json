@@ -1,0 +1,593 @@
+{
+  "version": 1,
+  "name": "TR-909 RD",
+  "category": "Drum",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "909 RD",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 45,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "fixed",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Stick Tip",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 3000.0,
+              "lowpass_hz": 18500.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Tip Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 19.0,
+              "sustain": 0.0,
+              "release_ms": 6.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 3,
+            "name": "Tip VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 4,
+            "name": "Ping 4.27k",
+            "kind": {
+              "type": "vco",
+              "waveform": "sine",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.5,
+              "phase_deg": 90.0,
+              "level": 0.85,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 4270.0,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 5,
+            "name": "Ping Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 32.0,
+              "sustain": 0.0,
+              "release_ms": 8.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Ping VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 7,
+            "name": "Ride Bow A",
+            "kind": {
+              "type": "resonator",
+              "mode": "plate",
+              "pitch_tracking": "fixed",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 620.0,
+              "structure": 0.5,
+              "decay_ms": 1950.0,
+              "brightness": 0.74,
+              "position": 0.56,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 8,
+            "name": "Ride Mid B",
+            "kind": {
+              "type": "resonator",
+              "mode": "plate",
+              "pitch_tracking": "fixed",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 762.0,
+              "structure": 0.5,
+              "decay_ms": 1850.0,
+              "brightness": 0.77,
+              "position": 0.63,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 9,
+            "name": "Ride Bell C",
+            "kind": {
+              "type": "resonator",
+              "mode": "plate",
+              "pitch_tracking": "fixed",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 1022.0,
+              "structure": 0.49,
+              "decay_ms": 1750.0,
+              "brightness": 0.8,
+              "position": 0.66,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 10,
+            "name": "Ride Silver D",
+            "kind": {
+              "type": "resonator",
+              "mode": "plate",
+              "pitch_tracking": "fixed",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 1340.0,
+              "structure": 0.48,
+              "decay_ms": 1600.0,
+              "brightness": 0.82,
+              "position": 0.68,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 11,
+            "name": "Ride Shimmer",
+            "kind": {
+              "type": "noise",
+              "color": "pink",
+              "highpass_hz": 20.0,
+              "lowpass_hz": 110.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 12,
+            "name": "Glass Air",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 7600.0,
+              "lowpass_hz": 19000.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 13,
+            "name": "Air Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.2,
+              "hold_ms": 0.0,
+              "decay_ms": 1550.0,
+              "sustain": 0.0,
+              "release_ms": 45.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 14,
+            "name": "Air VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 15,
+            "name": "EPROM Tape",
+            "kind": {
+              "type": "drive",
+              "mode": "tape",
+              "drive": 0.45,
+              "asymmetry": 0.0,
+              "tone_hz": 18000.0,
+              "output_db": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 16,
+            "name": "6-Bit EPROM",
+            "kind": {
+              "type": "lofi",
+              "bits": 6.3,
+              "rate_hz": 35500.0,
+              "mix": 0.84
+            }
+          },
+          {
+            "id": 17,
+            "name": "Ride HPF",
+            "kind": {
+              "type": "filter",
+              "mode": "high_pass",
+              "cutoff_hz": 920.0,
+              "resonance": 0.05,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 18,
+            "name": "Ride Env",
+            "kind": {
+              "type": "env",
+              "mode": "hold_decay",
+              "attack_ms": 0.1,
+              "hold_ms": 495.0,
+              "decay_ms": 760.0,
+              "sustain": 0.0,
+              "release_ms": 90.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 19,
+            "name": "Ride VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 20,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 5.6057568,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 3,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 0.78
+          },
+          {
+            "id": 4,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 8,
+            "to_port": "in",
+            "amount": 1.25
+          },
+          {
+            "id": 5,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 9,
+            "to_port": "in",
+            "amount": 1.4
+          },
+          {
+            "id": 6,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "in",
+            "amount": 1.45
+          },
+          {
+            "id": 7,
+            "from_module": 11,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "pitch_cv",
+            "amount": 0.36
+          },
+          {
+            "id": 8,
+            "from_module": 11,
+            "from_port": "out",
+            "to_module": 8,
+            "to_port": "pitch_cv",
+            "amount": -0.34
+          },
+          {
+            "id": 9,
+            "from_module": 11,
+            "from_port": "out",
+            "to_module": 9,
+            "to_port": "pitch_cv",
+            "amount": 0.38
+          },
+          {
+            "id": 10,
+            "from_module": 11,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "pitch_cv",
+            "amount": -0.35
+          },
+          {
+            "id": 11,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "in",
+            "amount": 0.45
+          },
+          {
+            "id": 12,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 13,
+            "from_module": 12,
+            "from_port": "out",
+            "to_module": 14,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 14,
+            "from_module": 13,
+            "from_port": "out",
+            "to_module": 14,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 15,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 15,
+            "to_port": "in",
+            "amount": 0.22
+          },
+          {
+            "id": 16,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 15,
+            "to_port": "in",
+            "amount": 0.8
+          },
+          {
+            "id": 17,
+            "from_module": 9,
+            "from_port": "out",
+            "to_module": 15,
+            "to_port": "in",
+            "amount": 1.18
+          },
+          {
+            "id": 18,
+            "from_module": 10,
+            "from_port": "out",
+            "to_module": 15,
+            "to_port": "in",
+            "amount": 1.28
+          },
+          {
+            "id": 19,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 15,
+            "to_port": "in",
+            "amount": 0.3
+          },
+          {
+            "id": 20,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 15,
+            "to_port": "in",
+            "amount": 0.22
+          },
+          {
+            "id": 21,
+            "from_module": 14,
+            "from_port": "out",
+            "to_module": 15,
+            "to_port": "in",
+            "amount": 0.32
+          },
+          {
+            "id": 22,
+            "from_module": 15,
+            "from_port": "out",
+            "to_module": 16,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 23,
+            "from_module": 16,
+            "from_port": "out",
+            "to_module": 17,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 24,
+            "from_module": 17,
+            "from_port": "out",
+            "to_module": 19,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 25,
+            "from_module": 18,
+            "from_port": "out",
+            "to_module": 19,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 26,
+            "from_module": 19,
+            "from_port": "out",
+            "to_module": 20,
+            "to_port": "in",
+            "amount": 0.84
+          }
+        ]
+      }
+    ],
+    "gain_db": -5.235481,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 18,
+          "param": "decay"
+        },
+        "label": "Decay"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 8,
+          "param": "fixed_hz"
+        },
+        "label": "Bow Hz"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 9,
+          "param": "fixed_hz"
+        },
+        "label": "Shimmer Hz"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 9,
+          "param": "brightness"
+        },
+        "label": "Bright"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 16,
+          "param": "sample_rate_hz"
+        },
+        "label": "Tune Clk"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 15
+        },
+        "label": "Bow"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 17
+        },
+        "label": "Shimmer"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 19
+        },
+        "label": "Stick Tip"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 21
+        },
+        "label": "Air"
+      }
+    ]
+  }
+}

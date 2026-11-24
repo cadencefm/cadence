@@ -1,0 +1,347 @@
+{
+  "version": 1,
+  "name": "TR-808 CB",
+  "category": "Drum",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "808 CB",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 44,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "fixed",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Osc 558",
+            "kind": {
+              "type": "vco",
+              "waveform": "pulse",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.41,
+              "phase_deg": 0.0,
+              "level": 0.92,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 558.2,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Osc 824",
+            "kind": {
+              "type": "vco",
+              "waveform": "pulse",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.4,
+              "phase_deg": 41.0,
+              "level": 0.95,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 823.6,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 3,
+            "name": "Mixer Tape",
+            "kind": {
+              "type": "drive",
+              "mode": "tape",
+              "drive": 0.08,
+              "asymmetry": 0.1,
+              "tone_hz": 15000.0,
+              "output_db": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 4,
+            "name": "Sub HPF 440",
+            "kind": {
+              "type": "filter",
+              "mode": "high_pass",
+              "cutoff_hz": 440.0,
+              "resonance": 0.1,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 5,
+            "name": "Bell BP 825",
+            "kind": {
+              "type": "filter",
+              "mode": "band_pass",
+              "cutoff_hz": 825.0,
+              "resonance": 0.62,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Clank BP 2.2k",
+            "kind": {
+              "type": "filter",
+              "mode": "band_pass",
+              "cutoff_hz": 2250.0,
+              "resonance": 0.38,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 7,
+            "name": "Strike Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 15.0,
+              "sustain": 0.0,
+              "release_ms": 5.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 8,
+            "name": "Strike VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 9,
+            "name": "Ring Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.2,
+              "hold_ms": 0.0,
+              "decay_ms": 720.0,
+              "sustain": 0.0,
+              "release_ms": 30.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 10,
+            "name": "Ring VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 11,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 5.405757,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 0.64
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 0.94
+          },
+          {
+            "id": 3,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 4,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 5,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 5,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 6,
+            "to_port": "in",
+            "amount": 0.72
+          },
+          {
+            "id": 6,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 8,
+            "to_port": "in",
+            "amount": 1.15
+          },
+          {
+            "id": 7,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 8,
+            "to_port": "in",
+            "amount": 0.78
+          },
+          {
+            "id": 8,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 8,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 9,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "in",
+            "amount": 1.08
+          },
+          {
+            "id": 10,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "in",
+            "amount": 0.14
+          },
+          {
+            "id": 11,
+            "from_module": 9,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 12,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 0.95
+          },
+          {
+            "id": 13,
+            "from_module": 10,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 0.17
+          }
+        ]
+      }
+    ],
+    "gain_db": -4.8406,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "fixed_hz"
+        },
+        "label": "Osc 1 Hz"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 2,
+          "param": "fixed_hz"
+        },
+        "label": "Osc 2 Hz"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 5,
+          "param": "cutoff"
+        },
+        "label": "Bell BP"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 9,
+          "param": "decay"
+        },
+        "label": "Ring Decay"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 12
+        },
+        "label": "Strike"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 13
+        },
+        "label": "Ring"
+      }
+    ]
+  }
+}

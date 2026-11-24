@@ -1,0 +1,9 @@
+{"label": "Create a Sampler from a staged instrument draft", "keys": "niTexture<Enter>mb", "wait_ms": 900, "screen": ["SAMPLE BROWSER"], "expect": {"instruments": 0}}
+{"label": "Search original bundled samples and audition the selected file", "keys": "/reese-bass<Tab>A", "wait_ms": 1200, "screen": ["reese-bass", "Root", "Loop"], "expect": {"instruments": 0}}
+{"label": "Choose the sample, then create its Audio channel", "keys": "<Enter><Enter><Enter>", "wait_ms": 800, "expect": {"instruments": 1, "channels": 1, "ready": true, "draft_open": false}}
+{"label": "Browse a replacement without changing the instrument", "keys": "B/<C-u>brass-pad<Tab>A", "wait_ms": 1200, "screen": ["brass-pad", "Texture"], "expect": {"instruments": 1}}
+{"label": "Cancel the replacement; retain the selected sound", "keys": "<Esc><Esc>", "wait_ms": 800, "expect": {"instruments": 1}}
+{"label": "Create a short source and connect the existing sound", "keys": "gpnnPulse<Enter>8<Enter>i15..3.5.<Esc>nbTexturePart<Enter><Enter><Enter><Enter><Enter>nlSequence<Enter>no<Enter><Enter>1<Enter>1<Enter>r0<Enter>", "wait_ms": 900, "expect": {"patterns": 1, "parts": 1, "placements": 1, "ready": true}}
+{"label": "Follow playback while keeping the editing position parked", "keys": "gpggtf<Space>", "wait_ms": 1500, "screen": ["Follow on"], "expect": {"ready": true}}
+{"label": "Manual editing navigation suspends follow", "keys": "l", "wait_ms": 800, "screen": ["Follow suspended"]}
+{"label": "Resume follow, then stop and return to Song start", "keys": "tf<Home>", "wait_ms": 700, "screen": ["Follow on"], "expect": {"ready": true}}

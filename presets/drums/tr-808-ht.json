@@ -1,0 +1,334 @@
+{
+  "version": 1,
+  "name": "TR-808 HT",
+  "category": "Drum",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "808 HT",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 40,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "fixed",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Bridged-T",
+            "kind": {
+              "type": "vco",
+              "waveform": "sine",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.5,
+              "phase_deg": 0.0,
+              "level": 1.0,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 187.4,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Trig Blip",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 15.0,
+              "sustain": 0.0,
+              "release_ms": 4.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 3,
+            "name": "Body Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.2,
+              "hold_ms": 0.0,
+              "decay_ms": 310.0,
+              "sustain": 0.0,
+              "release_ms": 20.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 4,
+            "name": "Body VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 5,
+            "name": "Knock",
+            "kind": {
+              "type": "vco",
+              "waveform": "triangle",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.5,
+              "phase_deg": 0.0,
+              "level": 0.85,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 374.0,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Knock Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 4.0,
+              "sustain": 0.0,
+              "release_ms": 2.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 7,
+            "name": "Knock VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 8,
+            "name": "Shell Pink",
+            "kind": {
+              "type": "noise",
+              "color": "pink",
+              "highpass_hz": 450.0,
+              "lowpass_hz": 3200.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 9,
+            "name": "Shell Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.2,
+              "hold_ms": 0.0,
+              "decay_ms": 42.0,
+              "sustain": 0.0,
+              "release_ms": 12.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 10,
+            "name": "Shell VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 11,
+            "name": "808 Tape",
+            "kind": {
+              "type": "drive",
+              "mode": "tape",
+              "drive": 0.14,
+              "asymmetry": 0.03,
+              "tone_hz": 6500.0,
+              "output_db": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 12,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 3.6057568,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 1,
+            "to_port": "pitch_cv",
+            "amount": 0.45
+          },
+          {
+            "id": 2,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 3,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 4,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 5,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 6,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 7,
+            "from_module": 9,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 8,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 0.92
+          },
+          {
+            "id": 9,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 0.22
+          },
+          {
+            "id": 10,
+            "from_module": 10,
+            "from_port": "out",
+            "to_module": 11,
+            "to_port": "in",
+            "amount": 0.025
+          },
+          {
+            "id": 11,
+            "from_module": 11,
+            "from_port": "out",
+            "to_module": 12,
+            "to_port": "in",
+            "amount": 0.9
+          }
+        ]
+      }
+    ],
+    "gain_db": -4.8406,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "fixed_hz"
+        },
+        "label": "Tuning"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 3,
+          "param": "decay"
+        },
+        "label": "Decay"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 9
+        },
+        "label": "Knock"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 10
+        },
+        "label": "Shell Pink"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 11,
+          "param": "drive"
+        },
+        "label": "Drive"
+      }
+    ]
+  }
+}

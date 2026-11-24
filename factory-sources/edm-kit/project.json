@@ -1,0 +1,5480 @@
+{
+  "version": 1,
+  "title": "EDM Kit",
+  "bpm": 120.0,
+  "root_midi": 60,
+  "scale": [
+    0,
+    2,
+    4,
+    5,
+    7,
+    9,
+    11
+  ],
+  "bars": 7,
+  "patterns": [
+    {
+      "id": 201,
+      "name": "BD Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 202,
+      "name": "SD Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 203,
+      "name": "LT Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 204,
+      "name": "MT Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 205,
+      "name": "HT Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 206,
+      "name": "RS Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 207,
+      "name": "CH Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 208,
+      "name": "CP Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.0,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.0,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.0,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.0,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.0,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.0,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.0,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 209,
+      "name": "CR Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 210,
+      "name": "RD Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 211,
+      "name": "OH Hit",
+      "kind": {
+        "type": "notes",
+        "steps": [
+          {
+            "active": true,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.92,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          },
+          {
+            "active": false,
+            "degree": 1,
+            "accidental": 0,
+            "velocity": 0.8,
+            "gate": 1.0,
+            "condition": {
+              "turn": 1,
+              "every": 1
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "instruments": [
+    {
+      "id": 101,
+      "name": "BD",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM BD",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 36,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Sub Core",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.95,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 49.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "Punch Pitch",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 13.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Body Pitch",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 65.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "Sub Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.2,
+                  "hold_ms": 22.0,
+                  "decay_ms": 345.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Sub VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 6,
+                "name": "Click Pop",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "triangle",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.78,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 2450.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Click Air",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 3200.0,
+                  "lowpass_hz": 15500.0,
+                  "level": 0.82
+                }
+              },
+              {
+                "id": 8,
+                "name": "Click Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.5,
+                  "decay_ms": 6.5,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 9,
+                "name": "Click VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Club Tape",
+                "kind": {
+                  "type": "drive",
+                  "mode": "tape",
+                  "drive": 0.26,
+                  "asymmetry": 0.08,
+                  "tone_hz": 8600.0,
+                  "output_db": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 11,
+                "name": "Sub Clean HP",
+                "kind": {
+                  "type": "filter",
+                  "mode": "high_pass",
+                  "cutoff_hz": 30.0,
+                  "resonance": 0.05,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 12,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 7.8,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 1,
+                "to_port": "pitch_cv",
+                "amount": 26.5
+              },
+              {
+                "id": 2,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 1,
+                "to_port": "pitch_cv",
+                "amount": 6.5
+              },
+              {
+                "id": 3,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 5,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 4,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 5,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 5,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 0.56
+              },
+              {
+                "id": 6,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 0.48
+              },
+              {
+                "id": 7,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 8,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 1.05
+              },
+              {
+                "id": 9,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 0.62
+              },
+              {
+                "id": 10,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 11,
+                "from_module": 11,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.92
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 1,
+              "param": "fixed_hz"
+            },
+            "label": "Sub Hz"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 4,
+              "param": "decay"
+            },
+            "label": "Decay"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 2,
+              "param": "decay"
+            },
+            "label": "Punch Ms"
+          },
+          {
+            "target": {
+              "scope": "cable",
+              "zone": 1,
+              "cable": 9
+            },
+            "label": "Click"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 10,
+              "param": "drive"
+            },
+            "label": "Drive"
+          }
+        ]
+      },
+      "channel": 1
+    },
+    {
+      "id": 102,
+      "name": "SD",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM SD",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 37,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Chest Core",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.95,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 188.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "Chest Pitch",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 16.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Chest Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 5.0,
+                  "decay_ms": 145.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "Chest VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Shell Tri",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "triangle",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.65,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 308.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 6,
+                "name": "Shell Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 80.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Shell VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Snare Wire",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 680.0,
+                  "lowpass_hz": 18500.0,
+                  "level": 1.0
+                }
+              },
+              {
+                "id": 9,
+                "name": "Wire HPF",
+                "kind": {
+                  "type": "filter",
+                  "mode": "high_pass",
+                  "cutoff_hz": 1100.0,
+                  "resonance": 0.08,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Crack BP 3.6k",
+                "kind": {
+                  "type": "filter",
+                  "mode": "band_pass",
+                  "cutoff_hz": 3600.0,
+                  "resonance": 0.22,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 11,
+                "name": "Air HPF 7.2k",
+                "kind": {
+                  "type": "filter",
+                  "mode": "high_pass",
+                  "cutoff_hz": 7200.0,
+                  "resonance": 0.05,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 12,
+                "name": "Wire Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.2,
+                  "hold_ms": 10.0,
+                  "decay_ms": 245.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 13,
+                "name": "Wire VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 14,
+                "name": "Snap Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.5,
+                  "decay_ms": 11.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 15,
+                "name": "Snap VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 16,
+                "name": "Snare Clip",
+                "kind": {
+                  "type": "drive",
+                  "mode": "hard_clip",
+                  "drive": 0.2,
+                  "asymmetry": 0.05,
+                  "tone_hz": 16000.0,
+                  "output_db": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 17,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 4.2,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 1,
+                "to_port": "pitch_cv",
+                "amount": 15.0
+              },
+              {
+                "id": 2,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 4,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 3,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 4,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 4,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 5,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 6,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 7,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 8,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 9,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "in",
+                "amount": 0.55
+              },
+              {
+                "id": 10,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "in",
+                "amount": 0.72
+              },
+              {
+                "id": 11,
+                "from_module": 11,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "in",
+                "amount": 0.52
+              },
+              {
+                "id": 12,
+                "from_module": 12,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 13,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 15,
+                "to_port": "in",
+                "amount": 0.95
+              },
+              {
+                "id": 14,
+                "from_module": 14,
+                "from_port": "out",
+                "to_module": 15,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 15,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 16,
+                "to_port": "in",
+                "amount": 0.95
+              },
+              {
+                "id": 16,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 16,
+                "to_port": "in",
+                "amount": 0.32
+              },
+              {
+                "id": 17,
+                "from_module": 13,
+                "from_port": "out",
+                "to_module": 16,
+                "to_port": "in",
+                "amount": 0.88
+              },
+              {
+                "id": 18,
+                "from_module": 15,
+                "from_port": "out",
+                "to_module": 16,
+                "to_port": "in",
+                "amount": 0.45
+              },
+              {
+                "id": 19,
+                "from_module": 16,
+                "from_port": "out",
+                "to_module": 17,
+                "to_port": "in",
+                "amount": 0.88
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 1,
+              "param": "fixed_hz"
+            },
+            "label": "Body Hz"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 3,
+              "param": "decay"
+            },
+            "label": "Body Dec"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 12,
+              "param": "decay"
+            },
+            "label": "Wire Dec"
+          },
+          {
+            "target": {
+              "scope": "cable",
+              "zone": 1,
+              "cable": 17
+            },
+            "label": "Wire Lvl"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 16,
+              "param": "drive"
+            },
+            "label": "Snap Clip"
+          }
+        ]
+      },
+      "channel": 2
+    },
+    {
+      "id": 103,
+      "name": "LT",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM LT",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 38,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Tom Body",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.95,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 82.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "Shell Tri",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "triangle",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.45,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 124.64,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Tom Pitch",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 26.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "Body Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.15,
+                  "hold_ms": 6.0,
+                  "decay_ms": 345.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Harm Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 86.25,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 6,
+                "name": "Body VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Harm VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Stick Noise",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 600.0,
+                  "lowpass_hz": 12000.0,
+                  "level": 0.9
+                }
+              },
+              {
+                "id": 9,
+                "name": "Stick BP",
+                "kind": {
+                  "type": "filter",
+                  "mode": "band_pass",
+                  "cutoff_hz": 1750.0,
+                  "resonance": 0.28,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Stick Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 14.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 11,
+                "name": "Stick VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 12,
+                "name": "Tom Tape",
+                "kind": {
+                  "type": "drive",
+                  "mode": "tape",
+                  "drive": 0.22,
+                  "asymmetry": 0.08,
+                  "tone_hz": 10000.0,
+                  "output_db": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 13,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 5.8,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 1,
+                "to_port": "pitch_cv",
+                "amount": 11.5
+              },
+              {
+                "id": 2,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 2,
+                "to_port": "pitch_cv",
+                "amount": 9.0
+              },
+              {
+                "id": 3,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 4,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 5,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 6,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 7,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 8,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 9,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 10,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 1.05
+              },
+              {
+                "id": 11,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.45
+              },
+              {
+                "id": 12,
+                "from_module": 11,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.72
+              },
+              {
+                "id": 13,
+                "from_module": 12,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "in",
+                "amount": 0.9
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 1,
+              "param": "fixed_hz"
+            },
+            "label": "Tune Hz"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 4,
+              "param": "decay"
+            },
+            "label": "Decay"
+          },
+          {
+            "target": {
+              "scope": "cable",
+              "zone": 1,
+              "cable": 12
+            },
+            "label": "Stick"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 12,
+              "param": "drive"
+            },
+            "label": "Drive"
+          }
+        ]
+      },
+      "channel": 3
+    },
+    {
+      "id": 104,
+      "name": "MT",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM MT",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 39,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Tom Body",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.95,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 124.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "Shell Tri",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "triangle",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.45,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 188.48,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Tom Pitch",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 26.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "Body Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.15,
+                  "hold_ms": 6.0,
+                  "decay_ms": 260.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Harm Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 65.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 6,
+                "name": "Body VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Harm VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Stick Noise",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 600.0,
+                  "lowpass_hz": 12000.0,
+                  "level": 0.9
+                }
+              },
+              {
+                "id": 9,
+                "name": "Stick BP",
+                "kind": {
+                  "type": "filter",
+                  "mode": "band_pass",
+                  "cutoff_hz": 2550.0,
+                  "resonance": 0.28,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Stick Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 14.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 11,
+                "name": "Stick VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 12,
+                "name": "Tom Tape",
+                "kind": {
+                  "type": "drive",
+                  "mode": "tape",
+                  "drive": 0.22,
+                  "asymmetry": 0.08,
+                  "tone_hz": 10000.0,
+                  "output_db": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 13,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 5.8,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 1,
+                "to_port": "pitch_cv",
+                "amount": 11.5
+              },
+              {
+                "id": 2,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 2,
+                "to_port": "pitch_cv",
+                "amount": 9.0
+              },
+              {
+                "id": 3,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 4,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 5,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 6,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 7,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 8,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 9,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 10,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 1.05
+              },
+              {
+                "id": 11,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.45
+              },
+              {
+                "id": 12,
+                "from_module": 11,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.72
+              },
+              {
+                "id": 13,
+                "from_module": 12,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "in",
+                "amount": 0.9
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 1,
+              "param": "fixed_hz"
+            },
+            "label": "Tune Hz"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 4,
+              "param": "decay"
+            },
+            "label": "Decay"
+          },
+          {
+            "target": {
+              "scope": "cable",
+              "zone": 1,
+              "cable": 12
+            },
+            "label": "Stick"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 12,
+              "param": "drive"
+            },
+            "label": "Drive"
+          }
+        ]
+      },
+      "channel": 4
+    },
+    {
+      "id": 105,
+      "name": "HT",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM HT",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 40,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Tom Body",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.95,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 178.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "Shell Tri",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "triangle",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.45,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 270.56,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Tom Pitch",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 26.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "Body Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.15,
+                  "hold_ms": 6.0,
+                  "decay_ms": 210.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Harm Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 52.5,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 6,
+                "name": "Body VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Harm VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Stick Noise",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 600.0,
+                  "lowpass_hz": 12000.0,
+                  "level": 0.9
+                }
+              },
+              {
+                "id": 9,
+                "name": "Stick BP",
+                "kind": {
+                  "type": "filter",
+                  "mode": "band_pass",
+                  "cutoff_hz": 3350.0,
+                  "resonance": 0.28,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Stick Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 14.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 11,
+                "name": "Stick VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 12,
+                "name": "Tom Tape",
+                "kind": {
+                  "type": "drive",
+                  "mode": "tape",
+                  "drive": 0.22,
+                  "asymmetry": 0.08,
+                  "tone_hz": 10000.0,
+                  "output_db": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 13,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 5.8,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 1,
+                "to_port": "pitch_cv",
+                "amount": 11.5
+              },
+              {
+                "id": 2,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 2,
+                "to_port": "pitch_cv",
+                "amount": 9.0
+              },
+              {
+                "id": 3,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 4,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 5,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 6,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 7,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 8,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 9,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 10,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 1.05
+              },
+              {
+                "id": 11,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.45
+              },
+              {
+                "id": 12,
+                "from_module": 11,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.72
+              },
+              {
+                "id": 13,
+                "from_module": 12,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "in",
+                "amount": 0.9
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 1,
+              "param": "fixed_hz"
+            },
+            "label": "Tune Hz"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 4,
+              "param": "decay"
+            },
+            "label": "Decay"
+          },
+          {
+            "target": {
+              "scope": "cable",
+              "zone": 1,
+              "cable": 12
+            },
+            "label": "Stick"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 12,
+              "param": "drive"
+            },
+            "label": "Drive"
+          }
+        ]
+      },
+      "channel": 5
+    },
+    {
+      "id": 106,
+      "name": "RS",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM RS",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 41,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Strike",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 900.0,
+                  "lowpass_hz": 15500.0,
+                  "level": 1.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "Strike Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 3.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Strike VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "Rim Bar",
+                "kind": {
+                  "type": "resonator",
+                  "mode": "bar",
+                  "pitch_tracking": "fixed",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "fixed_hz": 640.0,
+                  "structure": 0.55,
+                  "decay_ms": 24.0,
+                  "brightness": 0.76,
+                  "position": 0.35,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Wood Body",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "triangle",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.88,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 1720.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 6,
+                "name": "Wood Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 13.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Wood VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Rim HPF",
+                "kind": {
+                  "type": "filter",
+                  "mode": "high_pass",
+                  "cutoff_hz": 480.0,
+                  "resonance": 0.12,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 9,
+                "name": "Rim Clip",
+                "kind": {
+                  "type": "drive",
+                  "mode": "hard_clip",
+                  "drive": 0.36,
+                  "asymmetry": 0.1,
+                  "tone_hz": 14500.0,
+                  "output_db": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 4.4,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 3,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 2,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 3,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 3,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 4,
+                "to_port": "in",
+                "amount": 1.25
+              },
+              {
+                "id": 4,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 5,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 6,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 8,
+                "to_port": "in",
+                "amount": 0.85
+              },
+              {
+                "id": 7,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 8,
+                "to_port": "in",
+                "amount": 0.82
+              },
+              {
+                "id": 8,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 8,
+                "to_port": "in",
+                "amount": 0.52
+              },
+              {
+                "id": 9,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 1.05
+              },
+              {
+                "id": 10,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 0.92
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 4,
+              "param": "fixed_hz"
+            },
+            "label": "Rim Hz"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 4,
+              "param": "resonator_decay"
+            },
+            "label": "Decay"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 9,
+              "param": "drive"
+            },
+            "label": "Crack"
+          }
+        ]
+      },
+      "channel": 6
+    },
+    {
+      "id": 107,
+      "name": "CH",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM CH",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 42,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Metal A",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.75,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 3840.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "FM Mod A",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "pulse",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.44,
+                  "phase_deg": 29.0,
+                  "level": 1.0,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 5420.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Metal B",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 113.0,
+                  "level": 0.7,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 6180.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "FM Mod B",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "pulse",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.41,
+                  "phase_deg": 211.0,
+                  "level": 1.0,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 8910.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Hat Air",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 7200.0,
+                  "lowpass_hz": 19500.0,
+                  "level": 0.95
+                }
+              },
+              {
+                "id": 6,
+                "name": "Hat HPF 6.6k",
+                "kind": {
+                  "type": "filter",
+                  "mode": "high_pass",
+                  "cutoff_hz": 6600.0,
+                  "resonance": 0.1,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Sheen BP 11k",
+                "kind": {
+                  "type": "filter",
+                  "mode": "band_pass",
+                  "cutoff_hz": 11200.0,
+                  "resonance": 0.18,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Hat Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 2.0,
+                  "decay_ms": 68.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 9,
+                "name": "Hat VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Tick Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 5.5,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 11,
+                "name": "Tick VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 12,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 8.2,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 1,
+                "to_port": "fm_in",
+                "amount": 0.56
+              },
+              {
+                "id": 2,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 3,
+                "to_port": "fm_in",
+                "amount": 0.5
+              },
+              {
+                "id": 3,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "in",
+                "amount": 0.52
+              },
+              {
+                "id": 4,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "in",
+                "amount": 0.48
+              },
+              {
+                "id": 5,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "in",
+                "amount": 0.78
+              },
+              {
+                "id": 6,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 7,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 0.65
+              },
+              {
+                "id": 8,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 0.6
+              },
+              {
+                "id": 9,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 10,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 0.85
+              },
+              {
+                "id": 11,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 12,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.9
+              },
+              {
+                "id": 13,
+                "from_module": 11,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.4
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 8,
+              "param": "decay"
+            },
+            "label": "Decay"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 6,
+              "param": "cutoff"
+            },
+            "label": "HPF Hz"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 1,
+              "param": "fixed_hz"
+            },
+            "label": "Tone A"
+          }
+        ]
+      },
+      "channel": 7
+    },
+    {
+      "id": 108,
+      "name": "CP",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM CP",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 43,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Clap Noise",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 480.0,
+                  "lowpass_hz": 18500.0,
+                  "level": 1.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "Clap BP 1.25k",
+                "kind": {
+                  "type": "filter",
+                  "mode": "band_pass",
+                  "cutoff_hz": 1250.0,
+                  "resonance": 0.3,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Slap BP 3.2k",
+                "kind": {
+                  "type": "filter",
+                  "mode": "band_pass",
+                  "cutoff_hz": 3200.0,
+                  "resonance": 0.18,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "Tail HPF 2.4k",
+                "kind": {
+                  "type": "filter",
+                  "mode": "high_pass",
+                  "cutoff_hz": 2400.0,
+                  "resonance": 0.05,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "4x Slap Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.25,
+                  "hold_ms": 0.0,
+                  "decay_ms": 20.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 4,
+                  "burst_spacing_ms": 11.0
+                }
+              },
+              {
+                "id": 6,
+                "name": "Slap VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Tail Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 4.0,
+                  "hold_ms": 4.0,
+                  "decay_ms": 295.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 32.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Tail VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 9,
+                "name": "Clap Crunch",
+                "kind": {
+                  "type": "drive",
+                  "mode": "tape",
+                  "drive": 0.24,
+                  "asymmetry": 0.05,
+                  "tone_hz": 14500.0,
+                  "output_db": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 9.2,
+                  "pan": 0.0,
+                  "spread": 0.4
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 2,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 2,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 3,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 3,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 4,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 4,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "in",
+                "amount": 1.05
+              },
+              {
+                "id": 5,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "in",
+                "amount": 0.72
+              },
+              {
+                "id": 6,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 7,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 8,
+                "to_port": "in",
+                "amount": 0.65
+              },
+              {
+                "id": 8,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 8,
+                "to_port": "in",
+                "amount": 0.58
+              },
+              {
+                "id": 9,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 8,
+                "to_port": "in",
+                "amount": 0.36
+              },
+              {
+                "id": 10,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 8,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 11,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 1.15
+              },
+              {
+                "id": 12,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 0.85
+              },
+              {
+                "id": 13,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 0.92
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 5,
+              "param": "burst_spacing_ms"
+            },
+            "label": "Spread"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 7,
+              "param": "decay"
+            },
+            "label": "Tail Dec"
+          },
+          {
+            "target": {
+              "scope": "cable",
+              "zone": 1,
+              "cable": 12
+            },
+            "label": "Tail Lvl"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 2,
+              "param": "cutoff"
+            },
+            "label": "Clap Hz"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 9,
+              "param": "drive"
+            },
+            "label": "Crunch"
+          }
+        ]
+      },
+      "channel": 8
+    },
+    {
+      "id": 109,
+      "name": "CR",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM CR",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 44,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Crash Strike",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 1800.0,
+                  "lowpass_hz": 19000.0,
+                  "level": 1.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "Strike Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.2,
+                  "hold_ms": 6.0,
+                  "decay_ms": 52.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Strike VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "Plate A",
+                "kind": {
+                  "type": "resonator",
+                  "mode": "plate",
+                  "pitch_tracking": "fixed",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "fixed_hz": 455.0,
+                  "structure": 0.56,
+                  "decay_ms": 1450.0,
+                  "brightness": 0.84,
+                  "position": 0.62,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Plate B",
+                "kind": {
+                  "type": "resonator",
+                  "mode": "plate",
+                  "pitch_tracking": "fixed",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "fixed_hz": 628.0,
+                  "structure": 0.64,
+                  "decay_ms": 1320.0,
+                  "brightness": 0.88,
+                  "position": 0.41,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 6,
+                "name": "Shimmer FM",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.45,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 4720.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Shimmer Mod",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "triangle",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 47.0,
+                  "level": 1.0,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 6890.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Crash Air",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 6800.0,
+                  "lowpass_hz": 19500.0,
+                  "level": 0.88
+                }
+              },
+              {
+                "id": 9,
+                "name": "Air Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 1.5,
+                  "hold_ms": 18.0,
+                  "decay_ms": 1220.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Air VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 11,
+                "name": "Crash HPF",
+                "kind": {
+                  "type": "filter",
+                  "mode": "high_pass",
+                  "cutoff_hz": 1750.0,
+                  "resonance": 0.08,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 12,
+                "name": "Bronze Tape",
+                "kind": {
+                  "type": "drive",
+                  "mode": "tape",
+                  "drive": 0.2,
+                  "asymmetry": 0.04,
+                  "tone_hz": 17200.0,
+                  "output_db": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 13,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 9.0,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 3,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 2,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 3,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 3,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 4,
+                "to_port": "in",
+                "amount": 1.1
+              },
+              {
+                "id": 4,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 5,
+                "to_port": "in",
+                "amount": 1.05
+              },
+              {
+                "id": 5,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "fm_in",
+                "amount": 0.52
+              },
+              {
+                "id": 6,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 0.42
+              },
+              {
+                "id": 7,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 0.8
+              },
+              {
+                "id": 8,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 9,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 0.65
+              },
+              {
+                "id": 10,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 0.6
+              },
+              {
+                "id": 11,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 0.78
+              },
+              {
+                "id": 12,
+                "from_module": 11,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.95
+              },
+              {
+                "id": 13,
+                "from_module": 12,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "in",
+                "amount": 0.88
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 4,
+              "param": "resonator_decay"
+            },
+            "label": "Decay"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 4,
+              "param": "brightness"
+            },
+            "label": "Bright"
+          },
+          {
+            "target": {
+              "scope": "cable",
+              "zone": 1,
+              "cable": 11
+            },
+            "label": "Air Wash"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 11,
+              "param": "cutoff"
+            },
+            "label": "HPF Hz"
+          }
+        ]
+      },
+      "channel": 9
+    },
+    {
+      "id": 110,
+      "name": "RD",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM RD",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 45,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Tip Strike",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 2200.0,
+                  "lowpass_hz": 18500.0,
+                  "level": 1.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "Tip Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 16.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Tip VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "Bell Bar",
+                "kind": {
+                  "type": "resonator",
+                  "mode": "bar",
+                  "pitch_tracking": "fixed",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "fixed_hz": 860.0,
+                  "structure": 0.58,
+                  "decay_ms": 265.0,
+                  "brightness": 0.78,
+                  "position": 0.28,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Ride Plate",
+                "kind": {
+                  "type": "resonator",
+                  "mode": "plate",
+                  "pitch_tracking": "fixed",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "fixed_hz": 690.0,
+                  "structure": 0.48,
+                  "decay_ms": 940.0,
+                  "brightness": 0.88,
+                  "position": 0.35,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 6,
+                "name": "Ping FM",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.48,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 5580.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Ping Mod",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 31.0,
+                  "level": 1.0,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 8120.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Ride Air",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 7600.0,
+                  "lowpass_hz": 19500.0,
+                  "level": 0.85
+                }
+              },
+              {
+                "id": 9,
+                "name": "Wash Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.8,
+                  "hold_ms": 12.0,
+                  "decay_ms": 800.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Wash VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 11,
+                "name": "Ride HPF",
+                "kind": {
+                  "type": "filter",
+                  "mode": "high_pass",
+                  "cutoff_hz": 2600.0,
+                  "resonance": 0.1,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 12,
+                "name": "Ride Tape",
+                "kind": {
+                  "type": "drive",
+                  "mode": "tape",
+                  "drive": 0.16,
+                  "asymmetry": 0.03,
+                  "tone_hz": 17600.0,
+                  "output_db": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 13,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 9.4,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 3,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 2,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 3,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 3,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 4,
+                "to_port": "in",
+                "amount": 1.15
+              },
+              {
+                "id": 4,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 5,
+                "to_port": "in",
+                "amount": 1.4
+              },
+              {
+                "id": 5,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 6,
+                "to_port": "fm_in",
+                "amount": 0.46
+              },
+              {
+                "id": 6,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 0.48
+              },
+              {
+                "id": 7,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 0.68
+              },
+              {
+                "id": 8,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 9,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 0.36
+              },
+              {
+                "id": 10,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 0.88
+              },
+              {
+                "id": 11,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 11,
+                "to_port": "in",
+                "amount": 0.62
+              },
+              {
+                "id": 12,
+                "from_module": 11,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.95
+              },
+              {
+                "id": 13,
+                "from_module": 12,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "in",
+                "amount": 0.9
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 5,
+              "param": "resonator_decay"
+            },
+            "label": "Decay"
+          },
+          {
+            "target": {
+              "scope": "cable",
+              "zone": 1,
+              "cable": 9
+            },
+            "label": "Bell Ping"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 5,
+              "param": "brightness"
+            },
+            "label": "Bright"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 11,
+              "param": "cutoff"
+            },
+            "label": "HPF Hz"
+          }
+        ]
+      },
+      "channel": 10
+    },
+    {
+      "id": 111,
+      "name": "OH",
+      "rack": {
+        "zones": [
+          {
+            "id": 1,
+            "name": "EDM OH",
+            "low_midi": 0,
+            "high_midi": 127,
+            "root_midi": 46,
+            "low_vel": 0.0,
+            "high_vel": 1.0,
+            "gain_db": 0.0,
+            "pan": 0.0,
+            "voice": {
+              "voice_mode": "poly",
+              "legato": false,
+              "glide_ms": 0.0,
+              "pitch_tracking": "fixed",
+              "phase_reset": true
+            },
+            "modules": [
+              {
+                "id": 1,
+                "name": "Metal A",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 0.0,
+                  "level": 0.72,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 3840.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 2,
+                "name": "FM Mod A",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "pulse",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.44,
+                  "phase_deg": 29.0,
+                  "level": 1.0,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 5420.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 3,
+                "name": "Metal B",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "sine",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.5,
+                  "phase_deg": 113.0,
+                  "level": 0.68,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 6180.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 4,
+                "name": "FM Mod B",
+                "kind": {
+                  "type": "vco",
+                  "waveform": "pulse",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "pulse_width": 0.41,
+                  "phase_deg": 211.0,
+                  "level": 1.0,
+                  "pitch_tracking": "fixed",
+                  "fixed_hz": 8910.0,
+                  "unison_voices": 1,
+                  "unison_detune_cents": 0.0,
+                  "unison_width": 0.0
+                }
+              },
+              {
+                "id": 5,
+                "name": "Hat Air",
+                "kind": {
+                  "type": "noise",
+                  "color": "white",
+                  "highpass_hz": 6800.0,
+                  "lowpass_hz": 19500.0,
+                  "level": 0.95
+                }
+              },
+              {
+                "id": 6,
+                "name": "Splash Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.1,
+                  "hold_ms": 0.0,
+                  "decay_ms": 22.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 7,
+                "name": "Splash VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 8,
+                "name": "Hat Plate",
+                "kind": {
+                  "type": "resonator",
+                  "mode": "plate",
+                  "pitch_tracking": "fixed",
+                  "tune_semitones": 0.0,
+                  "fine_cents": 0.0,
+                  "fixed_hz": 920.0,
+                  "structure": 0.62,
+                  "decay_ms": 340.0,
+                  "brightness": 0.9,
+                  "position": 0.48,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 9,
+                "name": "Hat HPF 5.8k",
+                "kind": {
+                  "type": "filter",
+                  "mode": "high_pass",
+                  "cutoff_hz": 5800.0,
+                  "resonance": 0.1,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 10,
+                "name": "Sheen BP 10.5k",
+                "kind": {
+                  "type": "filter",
+                  "mode": "band_pass",
+                  "cutoff_hz": 10500.0,
+                  "resonance": 0.16,
+                  "drive": 0.0,
+                  "key_tracking": 0.0,
+                  "vel_amount": 0.0,
+                  "mix": 1.0
+                }
+              },
+              {
+                "id": 11,
+                "name": "Open Env",
+                "kind": {
+                  "type": "env",
+                  "mode": "adsr",
+                  "attack_ms": 0.15,
+                  "hold_ms": 22.0,
+                  "decay_ms": 315.0,
+                  "sustain": 0.0,
+                  "release_ms": 20.0,
+                  "trigger_mode": "one_shot",
+                  "delay_ms": 0.0,
+                  "bursts": 1,
+                  "burst_spacing_ms": 10.0
+                }
+              },
+              {
+                "id": 12,
+                "name": "Open VCA",
+                "kind": {
+                  "type": "vca",
+                  "gain": 1.0,
+                  "bias": 0.0
+                }
+              },
+              {
+                "id": 13,
+                "name": "Out",
+                "kind": {
+                  "type": "out",
+                  "gain_db": 8.0,
+                  "pan": 0.0,
+                  "spread": 0.0
+                }
+              }
+            ],
+            "cables": [
+              {
+                "id": 1,
+                "from_module": 2,
+                "from_port": "out",
+                "to_module": 1,
+                "to_port": "fm_in",
+                "amount": 0.56
+              },
+              {
+                "id": 2,
+                "from_module": 4,
+                "from_port": "out",
+                "to_module": 3,
+                "to_port": "fm_in",
+                "amount": 0.5
+              },
+              {
+                "id": 3,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 4,
+                "from_module": 6,
+                "from_port": "out",
+                "to_module": 7,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 5,
+                "from_module": 7,
+                "from_port": "out",
+                "to_module": 8,
+                "to_port": "in",
+                "amount": 1.15
+              },
+              {
+                "id": 6,
+                "from_module": 1,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 0.48
+              },
+              {
+                "id": 7,
+                "from_module": 3,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 0.44
+              },
+              {
+                "id": 8,
+                "from_module": 5,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 0.8
+              },
+              {
+                "id": 9,
+                "from_module": 8,
+                "from_port": "out",
+                "to_module": 9,
+                "to_port": "in",
+                "amount": 0.45
+              },
+              {
+                "id": 10,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 10,
+                "to_port": "in",
+                "amount": 1.0
+              },
+              {
+                "id": 11,
+                "from_module": 9,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.65
+              },
+              {
+                "id": 12,
+                "from_module": 10,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "in",
+                "amount": 0.58
+              },
+              {
+                "id": 13,
+                "from_module": 11,
+                "from_port": "out",
+                "to_module": 12,
+                "to_port": "cv",
+                "amount": 1.0
+              },
+              {
+                "id": 14,
+                "from_module": 12,
+                "from_port": "out",
+                "to_module": 13,
+                "to_port": "in",
+                "amount": 0.9
+              }
+            ]
+          }
+        ],
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "tune_semitones": 0.0,
+        "cutoff_hz": 20000.0,
+        "resonance": 0.0,
+        "panel_pins": [
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 11,
+              "param": "decay"
+            },
+            "label": "Decay"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 9,
+              "param": "cutoff"
+            },
+            "label": "HPF Hz"
+          },
+          {
+            "target": {
+              "scope": "module",
+              "zone": 1,
+              "module": 1,
+              "param": "fixed_hz"
+            },
+            "label": "Tone A"
+          }
+        ]
+      },
+      "channel": 11
+    }
+  ],
+  "parts": [
+    {
+      "id": 301,
+      "name": "BD",
+      "pattern": 201,
+      "instrument": 101,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 302,
+      "name": "SD",
+      "pattern": 202,
+      "instrument": 102,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 303,
+      "name": "LT",
+      "pattern": 203,
+      "instrument": 103,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 304,
+      "name": "MT",
+      "pattern": 204,
+      "instrument": 104,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 305,
+      "name": "HT",
+      "pattern": 205,
+      "instrument": 105,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 306,
+      "name": "RS",
+      "pattern": 206,
+      "instrument": 106,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 307,
+      "name": "CH",
+      "pattern": 207,
+      "instrument": 107,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 308,
+      "name": "CP",
+      "pattern": 208,
+      "instrument": 108,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 309,
+      "name": "CR",
+      "pattern": 209,
+      "instrument": 109,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 310,
+      "name": "RD",
+      "pattern": 210,
+      "instrument": 110,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    },
+    {
+      "id": 311,
+      "name": "OH",
+      "pattern": 211,
+      "instrument": 111,
+      "transpose": 0,
+      "velocity_scale": 1.0,
+      "parameter_links": []
+    }
+  ],
+  "lanes": [
+    {
+      "id": 401,
+      "name": "BD",
+      "parts": [
+        {
+          "part": 301,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 601,
+          "part": 301,
+          "start_step": 0,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 402,
+      "name": "SD",
+      "parts": [
+        {
+          "part": 302,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 602,
+          "part": 302,
+          "start_step": 8,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 403,
+      "name": "LT",
+      "parts": [
+        {
+          "part": 303,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 603,
+          "part": 303,
+          "start_step": 16,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 404,
+      "name": "MT",
+      "parts": [
+        {
+          "part": 304,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 604,
+          "part": 304,
+          "start_step": 24,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 405,
+      "name": "HT",
+      "parts": [
+        {
+          "part": 305,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 605,
+          "part": 305,
+          "start_step": 32,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 406,
+      "name": "RS",
+      "parts": [
+        {
+          "part": 306,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 606,
+          "part": 306,
+          "start_step": 40,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 407,
+      "name": "CH",
+      "parts": [
+        {
+          "part": 307,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 607,
+          "part": 307,
+          "start_step": 48,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 408,
+      "name": "CP",
+      "parts": [
+        {
+          "part": 308,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 608,
+          "part": 308,
+          "start_step": 56,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 409,
+      "name": "CR",
+      "parts": [
+        {
+          "part": 309,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 609,
+          "part": 309,
+          "start_step": 64,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 410,
+      "name": "RD",
+      "parts": [
+        {
+          "part": 310,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 610,
+          "part": 310,
+          "start_step": 72,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    },
+    {
+      "id": 411,
+      "name": "OH",
+      "parts": [
+        {
+          "part": 311,
+          "phase": "song"
+        }
+      ],
+      "placements": [
+        {
+          "id": 611,
+          "part": 311,
+          "start_step": 80,
+          "length_steps": 8,
+          "phase": "restart",
+          "offset_steps": 0
+        }
+      ]
+    }
+  ],
+  "sections": [
+    {
+      "id": 900,
+      "name": "EDM Kit",
+      "start_step": 0,
+      "length_steps": 88
+    }
+  ],
+  "mixer": {
+    "master": {
+      "strip": {
+        "gain": 0.9,
+        "pan": 0.0
+      },
+      "inserts": []
+    },
+    "channels": [
+      {
+        "id": 1,
+        "name": "BD",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 2,
+        "name": "SD",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 3,
+        "name": "LT",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 4,
+        "name": "MT",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 5,
+        "name": "HT",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 6,
+        "name": "RS",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 7,
+        "name": "CH",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 8,
+        "name": "CP",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 9,
+        "name": "CR",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 10,
+        "name": "RD",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      },
+      {
+        "id": 11,
+        "name": "OH",
+        "kind": "audio",
+        "output": {
+          "kind": "master"
+        },
+        "strip": {
+          "gain": 0.9,
+          "pan": 0.0
+        },
+        "inserts": [],
+        "sends": []
+      }
+    ]
+  },
+  "ducks": [],
+  "modulations": [],
+  "end": "stop"
+}

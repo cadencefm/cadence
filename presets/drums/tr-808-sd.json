@@ -1,0 +1,394 @@
+{
+  "version": 1,
+  "name": "TR-808 SD",
+  "category": "Drum",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "808 SD",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 37,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "fixed",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Body Lo",
+            "kind": {
+              "type": "vco",
+              "waveform": "sine",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.5,
+              "phase_deg": 90.0,
+              "level": 1.0,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 172.3,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Snap Pitch",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 8.0,
+              "sustain": 0.0,
+              "release_ms": 4.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 3,
+            "name": "Body Lo Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 145.0,
+              "sustain": 0.0,
+              "release_ms": 12.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 4,
+            "name": "Body Lo VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 5,
+            "name": "Body Hi",
+            "kind": {
+              "type": "vco",
+              "waveform": "sine",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.5,
+              "phase_deg": 90.0,
+              "level": 1.0,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 339.8,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Body Hi Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 52.0,
+              "sustain": 0.0,
+              "release_ms": 8.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 7,
+            "name": "Body Hi VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 8,
+            "name": "Snare Noise",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 850.0,
+              "lowpass_hz": 9200.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 9,
+            "name": "Snappy HPF",
+            "kind": {
+              "type": "filter",
+              "mode": "high_pass",
+              "cutoff_hz": 1380.0,
+              "resonance": 0.14,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 10,
+            "name": "Wire BP 3.2k",
+            "kind": {
+              "type": "filter",
+              "mode": "band_pass",
+              "cutoff_hz": 3200.0,
+              "resonance": 0.28,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 11,
+            "name": "Snappy Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 215.0,
+              "sustain": 0.0,
+              "release_ms": 16.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 12,
+            "name": "Snappy VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 13,
+            "name": "808 Tape",
+            "kind": {
+              "type": "drive",
+              "mode": "tape",
+              "drive": 0.22,
+              "asymmetry": 0.1,
+              "tone_hz": 11500.0,
+              "output_db": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 14,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 4.805757,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 1,
+            "to_port": "pitch_cv",
+            "amount": 1.5
+          },
+          {
+            "id": 2,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 3,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 4,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 5,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 6,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 9,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 7,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "in",
+            "amount": 0.72
+          },
+          {
+            "id": 8,
+            "from_module": 9,
+            "from_port": "out",
+            "to_module": 12,
+            "to_port": "in",
+            "amount": 0.9
+          },
+          {
+            "id": 9,
+            "from_module": 10,
+            "from_port": "out",
+            "to_module": 12,
+            "to_port": "in",
+            "amount": 0.75
+          },
+          {
+            "id": 10,
+            "from_module": 11,
+            "from_port": "out",
+            "to_module": 12,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 11,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 13,
+            "to_port": "in",
+            "amount": 0.36
+          },
+          {
+            "id": 12,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 13,
+            "to_port": "in",
+            "amount": 0.32
+          },
+          {
+            "id": 13,
+            "from_module": 12,
+            "from_port": "out",
+            "to_module": 13,
+            "to_port": "in",
+            "amount": 1.38
+          },
+          {
+            "id": 14,
+            "from_module": 13,
+            "from_port": "out",
+            "to_module": 14,
+            "to_port": "in",
+            "amount": 0.88
+          }
+        ]
+      }
+    ],
+    "gain_db": -4.8406,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 11,
+          "param": "decay"
+        },
+        "label": "Snappy Dec"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 13
+        },
+        "label": "Snappy"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "fixed_hz"
+        },
+        "label": "Body Hz"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 12
+        },
+        "label": "Tone Hi"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 9,
+          "param": "cutoff"
+        },
+        "label": "Wire HPF"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 11
+        },
+        "label": "Body Mix"
+      }
+    ]
+  }
+}

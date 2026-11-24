@@ -1,0 +1,19 @@
+{"label": "Follow playback, loop Seed, and arm take recording", "keys": "tftltr", "wait_ms": 1000}
+{"label": "Jam", "keys": "gj", "expect": {"mode": "JAM"}, "wait_ms": 1000}
+{"label": "Seed: the five-step cell alone", "keys": " ", "advance": "40 steps", "wait_ms": 4412}
+{"label": "Pulse waits for Seed's pass to end", "keys": "2", "advance": "64 steps", "wait_ms": 7047}
+{"label": "Weight: the tonic bass joins", "keys": "3", "advance": "96 steps", "wait_ms": 10576}
+{"label": "A clap build in eighths over Weight", "keys": "u2", "advance": "32 steps", "wait_ms": 3505}
+{"label": "Sixteenths and the noise lift; Prism waits for the pass", "keys": "u3i14", "advance": "16 steps", "wait_ms": 1705}
+{"label": "Release the build as Prism arrives", "keys": "uuii", "advance": "112 steps", "wait_ms": 12305}
+{"label": "Unfold: the breakdown exposes the 64-step harmony", "keys": "5", "advance": "64 steps", "wait_ms": 7047}
+{"label": "Live edit: lift Harmonic Current's third quarter", "keys": ":value \"Harmonic Current\" 33 4<Enter>", "advance": "64 steps", "wait_ms": 6615}
+{"label": "Current: rolling bass under the edited harmony", "keys": "6", "advance": "64 steps", "wait_ms": 7047}
+{"label": "Drop the air for two bars", "keys": "e<m-m>", "advance": "32 steps", "wait_ms": 3457}
+{"label": "Bring it back", "keys": "e<m-m>", "advance": "32 steps", "wait_ms": 3457}
+{"label": "Crest", "keys": "7", "advance": "64 steps", "wait_ms": 7047}
+{"label": "Undo the harmony edit, on the bar", "keys": ":undo<Enter>", "advance": "64 steps", "wait_ms": 6915}
+{"label": "Landing: withdraw to cell, kick and bass", "keys": "8", "advance": "128 steps", "wait_ms": 14106}
+{"label": "Afterglow", "keys": "9", "advance": "88 steps", "wait_ms": 9694}
+{"label": "Save the recorded take after one pass of Afterglow", "keys": ":take save examples/fivefold-live/takes/set.take.jsonl<Enter>", "wait_ms": 600}
+{"label": "Pause, leave Jam and return to the song", "keys": " <Esc><Home>", "wait_ms": 1200}

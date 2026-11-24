@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Cadence
+GenericName=Keyboard-Driven Music Workstation
+Comment=Keyboard-driven live music workstation with modular synthesis, sampling, and real-time audio engine
+Exec=cadence %F
+Icon=cadence
+Terminal=false
+Categories=AudioVideo;Audio;Music;Sequencer;Midi;
+Keywords=daw;music;synth;modular;sequencer;sampler;midi;live;audio;
+StartupWMClass=cadence
+MimeType=application/json;

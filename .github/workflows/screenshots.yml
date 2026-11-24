@@ -1,0 +1,64 @@
+name: Refresh Docs Screenshots (Metal GPU)
+
+on:
+  workflow_dispatch:
+    inputs:
+      open_pr:
+        description: "Open a pull request if regenerated PNGs differ"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  screenshots:
+    name: Regenerate Docs Screenshots (macOS Metal GPU)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Render all flagship screenshots with live 48 kHz telemetry
+        env:
+          CADENCE_WRITE_DOCS_SCREENSHOTS: "1"
+        run: cargo test --test docs_screenshots_gpu -- --nocapture
+      - name: Show screenshot diff summary
+        run: git status --short docs/screenshots/
+      - name: Upload regenerated PNGs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-screenshots
+          path: docs/screenshots/*.png
+          if-no-files-found: error
+      - name: Open PR with refreshed screenshots
+        if: ${{ inputs.open_pr }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -z "$(git status --porcelain docs/screenshots/)" ]; then
+            echo "No screenshot changes detected."
+            exit 0
+          fi
+          branch="chore/refresh-docs-screenshots"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add docs/screenshots/*.png
+          git commit -m "docs: refresh Metal GPU screenshots"
+          git push --force-with-lease origin "$branch"
+          gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "docs: refresh Metal GPU screenshots" \
+            --body "Regenerated all flagship screenshots via \`CADENCE_WRITE_DOCS_SCREENSHOTS=1 cargo test --test docs_screenshots_gpu\` on \`macos-latest\`." \
+            || echo "PR already open for $branch; branch updated."

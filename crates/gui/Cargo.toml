@@ -1,0 +1,22 @@
+[package]
+name = "cadence-gui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GPU-accelerated keyboard-driven frontend for Cadence (wgpu + glyphon)"
+
+[dependencies]
+anyhow.workspace = true
+bytemuck.workspace = true
+cadence-app.workspace = true
+cadence-core.workspace = true
+glyphon.workspace = true
+image.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5.3"
+objc2-app-kit = { version = "0.2.2", default-features = false, features = ["NSApplication", "NSImage"] }
+objc2-foundation = { version = "0.2.2", default-features = false, features = ["NSData"] }

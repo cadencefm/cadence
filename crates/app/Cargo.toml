@@ -1,0 +1,21 @@
+[package]
+name = "cadence-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Frontend-neutral modal session controller, authoring drafts, and deck view models for Cadence"
+
+[features]
+default = []
+rbs = ["cadence-formats/rbs"]
+
+[dependencies]
+anyhow.workspace = true
+cadence-core.workspace = true
+cadence-formats.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+hound.workspace = true
+tempfile.workspace = true

@@ -1,0 +1,4 @@
+{"id": "room", "action": {"op": "edit", "edit": {"op": "create_channel", "channel": {"id": 1000, "name": "Room", "kind": "return", "output": {"kind": "master"}, "strip": {"gain": 0.5, "pan": 0.0}, "inserts": [], "sends": []}}}}
+{"id": "reverb", "action": {"op": "add_effect", "channel": {"kind": "channel", "id": 1000}, "kind": "reverb"}}
+{"id": "send", "action": {"op": "set_channel_send", "channel": 4, "target": 1000, "amount": 0.2}}
+{"id": "state", "action": {"op": "get_state"}}

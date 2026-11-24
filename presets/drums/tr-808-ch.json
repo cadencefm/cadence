@@ -1,0 +1,404 @@
+{
+  "version": 1,
+  "name": "TR-808 CH",
+  "category": "Drum",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "808 CH",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 42,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "fixed",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Osc 1",
+            "kind": {
+              "type": "vco",
+              "waveform": "pulse",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.42,
+              "phase_deg": 0.0,
+              "level": 0.68,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 486.2,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Osc 2",
+            "kind": {
+              "type": "vco",
+              "waveform": "pulse",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.43,
+              "phase_deg": 37.0,
+              "level": 0.68,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 558.4,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 3,
+            "name": "Osc 3",
+            "kind": {
+              "type": "vco",
+              "waveform": "pulse",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.41,
+              "phase_deg": 113.0,
+              "level": 0.68,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 630.6,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 4,
+            "name": "Osc 4",
+            "kind": {
+              "type": "vco",
+              "waveform": "pulse",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.44,
+              "phase_deg": 191.0,
+              "level": 0.68,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 690.9,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 5,
+            "name": "Osc 5",
+            "kind": {
+              "type": "vco",
+              "waveform": "pulse",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.43,
+              "phase_deg": 257.0,
+              "level": 0.68,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 823.8,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Osc 6",
+            "kind": {
+              "type": "vco",
+              "waveform": "pulse",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.41,
+              "phase_deg": 311.0,
+              "level": 0.68,
+              "pitch_tracking": "fixed",
+              "fixed_hz": 852.0,
+              "unison_voices": 1,
+              "unison_detune_cents": 0.0,
+              "unison_width": 0.0
+            }
+          },
+          {
+            "id": 7,
+            "name": "Schmitt Mix",
+            "kind": {
+              "type": "drive",
+              "mode": "tape",
+              "drive": 0.42,
+              "asymmetry": 0.05,
+              "tone_hz": 18000.0,
+              "output_db": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 8,
+            "name": "HPF 1 (6.8k)",
+            "kind": {
+              "type": "filter",
+              "mode": "high_pass",
+              "cutoff_hz": 6800.0,
+              "resonance": 0.14,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 9,
+            "name": "HPF 2 (8.8k)",
+            "kind": {
+              "type": "filter",
+              "mode": "high_pass",
+              "cutoff_hz": 8800.0,
+              "resonance": 0.22,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 10,
+            "name": "Hat BP 7.2k",
+            "kind": {
+              "type": "filter",
+              "mode": "band_pass",
+              "cutoff_hz": 7200.0,
+              "resonance": 0.38,
+              "drive": 0.0,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 0.45
+            }
+          },
+          {
+            "id": 11,
+            "name": "Air Hiss",
+            "kind": {
+              "type": "noise",
+              "color": "white",
+              "highpass_hz": 8800.0,
+              "lowpass_hz": 18500.0,
+              "level": 1.0
+            }
+          },
+          {
+            "id": 12,
+            "name": "Hat Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 0.1,
+              "hold_ms": 0.0,
+              "decay_ms": 125.0,
+              "sustain": 0.0,
+              "release_ms": 10.0,
+              "trigger_mode": "one_shot",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 13,
+            "name": "Hat VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 14,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 10.775757,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 0.36
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 0.36
+          },
+          {
+            "id": 3,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 0.36
+          },
+          {
+            "id": 4,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 0.36
+          },
+          {
+            "id": 5,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 0.36
+          },
+          {
+            "id": 6,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 0.36
+          },
+          {
+            "id": 7,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 8,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 8,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 9,
+            "to_port": "in",
+            "amount": 1.25
+          },
+          {
+            "id": 9,
+            "from_module": 9,
+            "from_port": "out",
+            "to_module": 10,
+            "to_port": "in",
+            "amount": 1.25
+          },
+          {
+            "id": 10,
+            "from_module": 10,
+            "from_port": "out",
+            "to_module": 13,
+            "to_port": "in",
+            "amount": 1.35
+          },
+          {
+            "id": 11,
+            "from_module": 11,
+            "from_port": "out",
+            "to_module": 13,
+            "to_port": "in",
+            "amount": 0.1
+          },
+          {
+            "id": 12,
+            "from_module": 12,
+            "from_port": "out",
+            "to_module": 13,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 13,
+            "from_module": 13,
+            "from_port": "out",
+            "to_module": 14,
+            "to_port": "in",
+            "amount": 0.95
+          }
+        ]
+      }
+    ],
+    "gain_db": -4.8406,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 12,
+          "param": "decay"
+        },
+        "label": "Decay"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 8,
+          "param": "cutoff"
+        },
+        "label": "HPF 1"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 9,
+          "param": "cutoff"
+        },
+        "label": "HPF 2"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 10,
+          "param": "cutoff"
+        },
+        "label": "BP Freq"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 10
+        },
+        "label": "Metallic"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 11
+        },
+        "label": "Air"
+      }
+    ]
+  }
+}

@@ -1,0 +1,21 @@
+[book]
+title = "Cadence"
+description = "Keyboard-driven live music workstation with modular synthesis, sampling, studio effects, and a zero-allocation 32-bit float audio engine."
+authors = ["Cadence Contributors"]
+language = "en"
+src = "docs"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/cadencefm/cadence"
+edit-url-template = "https://github.com/cadencefm/cadence/edit/main/{path}"
+additional-css = ["theme/cadence.css"]
+
+[output.html.fold]
+enable = true
+level = 1

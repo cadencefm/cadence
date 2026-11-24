@@ -1,0 +1,4 @@
+[env]
+# Resolves to the repository root at compile time for locating bundled examples
+# without fragile relative `parent()` traversal across workspace crates.
+CADENCE_WORKSPACE_DIR = { value = "", relative = true }

@@ -1,0 +1,17 @@
+[package]
+name = "cadence-formats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Feature-gated third-party song format importers and exporters for Cadence"
+
+[features]
+default = []
+rbs = []
+
+[dependencies]
+anyhow.workspace = true
+cadence-core.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

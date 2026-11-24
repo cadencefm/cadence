@@ -1,0 +1,64 @@
+# Architectural Design Decisions
+
+The engineering principles and architectural trade-offs that govern Cadence. Detailed wire formats, bounds, and DSP formulas live in [Specifications](spec/material-and-timing.md).
+
+---
+
+## 1. Retained Material Graph as Saved Truth
+
+- **Musical definitions outlive clips:** Persisted `Project` (`version = 1`) documents store independent patterns, retained derivations, parts, placements, sections, unified Eurorack Modular Rack instruments, mixer topology, modulations, ducks, and macros — never flattened MIDI clips or baked audio. Changing one chord or motif propagates live to every derived layer unless explicitly forked or frozen.
+- **Equal status for literal, derived, and `:mini` material:** All 22 `PatternKind` variants compose inside one bounded DAG (`MAX_DEPTH = 32`), share pure stateless evaluation (`det_hash` SplitMix64 + fractional sub-step `offset ∈ [0.0, 1.0)`), and edit through the same decks and Ex commands. Fork preserves dependency links; freeze captures a bounded literal snapshot; `'` (*From here*) scopes an edit to a bar boundary without breaking earlier sections.
+- **Compiled scores are private execution artifacts:** `ScoreWindow` is an internal flat buffer optimized for O(1) zero-allocation real-time playback and offline rendering, never a persistence or compatibility format.
+
+## 2. Zero-Legacy Pre-Release Discipline
+
+- **Clean replacement over shims:** Cadence carries zero schema migration converters, backwards-compatibility aliases, or dead-code fallbacks. When a domain model, parameter curve, or UI contract is wrong, it is replaced cleanly and every caller, test, and showcase example is updated together.
+- **Strict deserialization:** Domain structs enforce `#[serde(deny_unknown_fields)]` so typos or stale fields fail loudly at load time instead of silently dropping musical data.
+
+## 3. Pure `cadence-core::dsp` Single Point of Truth (SPOT)
+
+- **One math implementation for audio and visuals:** Every filter transfer function (`Svf`, `AcidLadder`, `TptOnePoleLpf`, complex parallel dry/wet mix), 4-band EQ response, multi-mode `Drive` waveshaper, `Halfband2x` 2× oversampling filter, sample-rate-invariant `NoiseGen`/`PinkFilter`/`ModalResonator`, `LoFiProcessor`, `ModularEnv` (`Adsr`/`HoldDecay` + pre-delay + multi-burst), 7-voice PolyBLEP/FM oscillator math, `SamplerVoice`, soft-knee dynamics gain computer, RT60 tail curve, quadrature LFO, pan law, fader power taper, `-60 dB` decay coefficient (`decay_coeff_60db_ms`), and dB formatter lives once in `crates/core/src/dsp/` with zero I/O and zero heap allocation.
+- **Structural impossibility of drift:** Both `cadence-engine` (real-time DSP) and `cadence-app::view` (GPU curves and readouts) call `cadence_core::dsp::*` directly, and `crates/app/src/view/live_params.rs` mirrors the exact 3-tier Macro/Modulation precedence of `crates/core/src/material/compile.rs`.
+
+## 4. Unclipped 32-Bit Float Headroom & Console Gain Staging
+
+- **No hidden Master soft-clipping:** Internal channels, groups, returns, and Master inserts run in uncolored 32-bit float with zero hidden `tanh` or limiter behind Master. Clamping to `[-1.0, 1.0]` happens strictly at the final CPAL hardware DAC conversion and PCM WAV export boundaries.
+- **Clear `hot` vs. `clipped` metering:** Internal float buses exceeding `0 dBFS` latch informational `hot` (recoverable headroom via faders or a Master Limiter); `clipped` latches strictly on non-finite samples anywhere or Master post-fader output `> 1.0`.
+- **Independent gain factors & `+6 dB` headroom:** Channel trim (`0.0..=2.0`, `CHANNEL_GAIN_UNITY_NORM = 0.75` console power taper), direct `ModulationTarget::ChannelGain` (`ChannelGainScale`), and event-triggered sidechain `Duck` envelopes multiply independently (`gain * scale * duck`). Mono sources use constant-power panning (`pan_mono_equal_power`); stereo mixer buses use unity-normalized equal-power balance (`pan_stereo_balance`) so centered buses pass at exact `[1.0, 1.0]` unity.
+
+## 5. Unified Eurorack Modular Rack & Compile-Time Mixer Invariance
+
+- **One orthogonal instrument architecture (`RackPatch`):** Instead of maintaining siloed, non-interoperable instrument engines, every `InstrumentInstance` owns one unified Eurorack Modular **`Rack`** (`Rack → Zones → Modules [Panel] + Patchbay`) composed from **11 orthogonal modules** (`Vco`, `Sampler`, `Noise`, `Env`, `Lfo`, `Filter`, `Vca`/RingMod, `Drive`, `LoFi`, `Resonator`, `Out`), bipolar attenuverter cables, and deterministic `z-1` 1-sample feedback compilation. A 1-zone subtractive or 2× through-zero FM synth, a plucked physical-modeling string/bar/plate instrument, a single-sample player, a hybrid analog+sample 32-zone drum kit with 8 choke groups, and a feedback-patched modular voice all run through one zero-alloc `ModularVoice` engine and one orthogonal parameter space (`InstrumentParam::{Rack, Zone, Module, Cable}`).
+- **Structural Rack & mixer invariance:** Every Rack zone enforces `1..=24` modules (`MAX_RESONATORS_PER_ZONE = 4`) with **exactly one mandatory `Out` module** (`AddRackModule`/`RemoveRackModule` both protect `Out`), validated port compatibility, and atomic pruning of stale `panel_pins`, `modulations`, `parameter_links`, and `macro.bindings` on zone/module/cable removal. On the console side, a `Channel`'s `ChannelKind` (`Audio`, `Group`, `Return`) and an `EffectDevice`'s `EffectKind` are immutable for the lifetime of their ID via typed mixer/effect edits (`CreateChannel`, `UpdateChannelMeta`, `AddEffect`, `RemoveEffect`, `MoveEffect`, `UpdateEffect`).
+
+## 6. Pure Zero-IO Controller (`cadence-app` + `HostIo`)
+
+- **Strict crate separation:** `cadence-app` depends solely on `anyhow`, `cadence-core`, `cadence-formats` (feature-gated `rbs`), `serde`, and `serde_json` — no audio backend, no MIDI backend, no windowing, and no direct `std::fs`/`std::env` access. All host I/O flows through `HostIo` (`CoreHostIo` on disk, `MemoryHostIo` in pure tests).
+- **One controller, every surface:** Interactive keyboard input, hardware MIDI, `--key-script`, `--script`, `--stdio`, and live GUI `--ctl` Unix socket requests all converge onto `App::apply(Action)` and one unified `HostRequest` protocol (`src/host/protocol.rs`).
+
+## 7. Keyboard-First Native GPU Decks, Modeless Grammar & Hermetic Typography
+
+- **GPU presentation over `FrameView`:** `cadence-app` projects immutable semantic `FrameView` snapshots; `cadence-gui` renders them on native `wgpu` + `glyphon` through a single painter-ordered `DisplayList` with balanced scissor clipping, selective phosphor bloom, shared `cable_graph.rs` multi-column Bezier rendering (powering both the Project Signal Graph and Eurorack Instrument Patchbay with ASCII `"z-1"` feedback badges), embedded cross-platform app icons (`icon.rs`), and zero hardcoded RGBA values outside `crates/gui/src/theme.rs` (`Cadence Dark`, `Midnight Neon`, `Studio Light`).
+- **Hermetic 2-face embedded typography:** `GpuRenderer` builds a self-contained `FontSystem` backed exclusively by bundled `JetBrains Mono` Regular (`400`) and Bold (`700`) with zero OS font scanning or proportional fallback, and disables programming ligatures (`calt`/`liga`/`clig`/`dlig`) so keyboard hints like `-/=`, `!=`, `->`, and `</>` always shape into literal monospace glyphs across platforms.
+- **Modeless 4-tier keyboard grammar & screen-axis alignment:**
+  - `h`/`j`/`k`/`l` (and `H`/`J`/`K`/`L`) strictly navigate and switch tabs across every deck — zero accidental mutations.
+  - `Alt+h`/`j`/`k`/`l` (`Alt+H`/`J`/`K`/`L` coarse) directly sculpt and reorder items along their visual screen axis with coalesced single-gesture undo, paired with one-hand `,`/`.` (`<`/`>` coarse) scalar adjustments and `Alt+Backspace` reset.
+  - Six deck layout alignments keep every control list, Rack `Zones` strip, Bank `Parts` row, Mixer vertical slot stack, Macros horizontal dial strip, and `Audio | MIDI` Devices inspector strictly aligned 1:1 with the visual axes.
+  - Only genuine input modes remain: `Insert` (`i` on Pattern Notes), modal `Jam` (`gj` / `Ctrl+Shift+j`), exact `ValueInput` (`Enter`), and live-validated `MiniEditor` (`Enter` on `Mini`).
+- **Discoverable modals over blind Ex typing:**
+  - **Fuzzy Action Palette (`:` / `Ctrl+Shift+p`):** Replaces blind GUI Ex mode with fuzzy search over actions, decks, layouts, 8 quick-add FX, themes, and dynamic project objects — while preserving a live top-slot `▶ Run command:` passthrough so power users, `--key-script`, and `cadence ctl cmd` work without friction.
+  - **First-class sound & song dialogs:** Unified 6-category **Instrument Preset Browser (`P`)** (`All` / `Synth` / `Sampler` / `Drums` / `Kit` / `Modular` + 4 bare `RackTemplate` defaults) with live non-destructive preview from a full `Project` snapshot (zero undo trace on `Esc`, single transaction on `Enter`), **Song Properties (`gP` / `Ctrl+Shift+i`)** spanning all 13 `NAMED_SCALES`, dedicated live-validated **Mini-Notation Editor**, `Sampler` sample assignment via `B` / `Sample` row (auto-inserting `Sampler -> Out.In` and applying RIFF `smpl`/`inst` metadata), unified `Audio | MIDI` Devices deck (`gd` / `Ctrl+d`), and universal **`/` search**.
+- **Derived layout state & MIDI symmetry:** Workspace, focus, and deck-gating queries compute purely from `Layout` with zero duplicate shadow fields. Data-driven MIDI profiles (`generic`, `standard_cc`, `minilab3_daw`) map hardware encoders, pads, and OLED/RGB feedback onto the same session actions.
+
+## 8. Single-Clock Live Performance, 24-Bit Recording & Crash-Safe Takes
+
+- **Performing over the arrangement:** One monotonic transport clock (`Timeline`) drives both song playback and live performance. Launching a part overrides only its lane (claiming any shared instrument) while every other lane continues playing the arrangement; releasing restores the arrangement and keeping writes the override back into it.
+- **Quantized boundaries & human feel:** Section jumps land at pass end so loop cycles stay exact; launches, releases, and live song edits land on configurable `Boundary` steps with `late_tolerance_steps` catching just-late presses; `StagedChange` batches multiple moves onto one downbeat.
+- **Live 24-bit audio recording into the material graph:** Hardware audio input (`ta` / `tA` / `ti` / `:rec`) streams lock-free through SPSC capture and monitor rings, converts cleanly across mismatched hardware sample rates, writes a portable 24-bit WAV, and commits a `Sampler` Rack + Part + Placement atomically onto the undo stack.
+- **Live flags outside undo:** Lane and channel mute/solo (`LiveFlags`) are saved as left, never enter undo history, and never bump song revisions.
+- **Explicitly armed Takes as performance scores:** Take recording defaults to **OFF** (`tr` toggles arming live; Chrome displays `TAKE ARM` / `● REC TAKE (N)` / `● TAKE CAPPED`; `Auto-Record Takes` in Settings `g,` restores opt-in always-on capture) so routine playback never litters session folders. When armed, an off-thread `.take.jsonl` journal (`TAKE_VERSION = 1`) captures landed changes (never raw audio) alongside the starting `v1` project, survives hard crashes up to the last flushed event, supports **`v` Visual range marking** and **`X` confirmation-guarded discard** in `gt`, renders bit-identically offline (`--take --render`), and auto-forks definitions edited mid-take when kept into the arrangement.
+
+## 9. Self-Contained Palette & 100% MIT External Assets
+
+- **Native studio completeness:** One unified Eurorack Modular Rack (11 orthogonal modules with 7-voice unison, 2× through-zero FM, 4-pole `AcidLowPass`, multi-burst `ModularEnv`, `LoFiProcessor`, 32-mode physical `ModalResonator`, RIFF `smpl`/`inst` `Sampler` module, and 32-zone/8-choke-group kits) plus 8 zero-allocation effects (`Eq`, rhythmic `Filter`, `Compressor`, lookahead PDC `Limiter`, 3-mode 2×-oversampled `Drive`, `Chorus`, dual-mode `Delay`, Hadamard FDN `Reverb`) and nested `Group → Group` bus routing deliver finished club/ambient mixes in one binary without external plugin dependencies.
+- **Externalized data, portable projects:** Zero instrument presets or filter grooves are compiled into the binary (only 4 bare neutral `RackTemplate` defaults live in code) — `v1` `InstrumentPreset`s in `presets/` (`6` kits including baked and live-synth `TR-808`/`TR-909`/`EDM Kit`, `46` single-voice drum presets, `11` synth presets), the 24-groove clean-room MIT factory bank in `presets/filter_grooves.json` (extensible up to 128 slots via user banks, browsable live via `P`, forkable into editable patterns via `f`, and exportable back to `presets/filter_grooves.json`), and `--render-kit`-generated MIT `factory-samples/` load dynamically and degrade gracefully to neutral defaults when absent. Persisted projects reject absolute sample paths, ensuring every project and portable bundle opens reproducibly on any machine.

@@ -1,0 +1,794 @@
+//! Top transport chrome bar, deck frames, breadcrumb trail, and bottom command/hints/status strip.
+use crate::decks::output::{db_norm, fmt_db};
+use crate::display::{DisplayList, Rect, TextAlign};
+use crate::theme::{Color, Theme};
+use cadence_app::view::{ChromeView, UiModeKind};
+use cadence_core::follow::FollowMode;
+use cadence_core::runtime::CapturePhase;
+
+#[allow(clippy::too_many_arguments)]
+fn draw_chrome_pill(
+    dl: &mut DisplayList,
+    row: Rect,
+    cursor_x: &mut f32,
+    max_right: f32,
+    small_cw: f32,
+    label: &str,
+    accent: Color,
+    glow: f32,
+    theme: &Theme,
+) {
+    let w = (label.chars().count() as f32 * small_cw + 16.0).max(48.0);
+    if *cursor_x + w > max_right {
+        return;
+    }
+    let rect = Rect::new(*cursor_x, row.y + 2.0, w, row.h - 4.0);
+    dl.panel(
+        rect,
+        accent.with_alpha(0.22),
+        accent,
+        theme.radii.pill,
+        1.0,
+        glow,
+    );
+    dl.text(
+        rect.inset(6.0, 0.0),
+        label,
+        theme.font.small,
+        true,
+        accent,
+        TextAlign::Center,
+    );
+    *cursor_x += w + 8.0;
+}
+
+pub fn draw_header(dl: &mut DisplayList, area: Rect, chrome: &ChromeView, theme: &Theme) {
+    dl.fill(area, theme.surface.header);
+    // Crisp 1px hairline separator below header.
+    dl.fill(
+        Rect::new(area.x, area.bottom() - 1.0, area.w, 1.0),
+        theme.border.hairline,
+    );
+
+    let inner = area.inset(12.0, 5.0);
+    let (row1, row2) = inner.split_top(22.0);
+
+    // Row 1: Brand + Project title + dirty badge on left; audio status + follow badge on right.
+    let title = format!(
+        "CADENCE  /  {}{}",
+        chrome.title,
+        if chrome.dirty { "  [+]" } else { "" }
+    );
+    dl.text(
+        Rect::new(row1.x, row1.y, row1.w * 0.55, row1.h),
+        title,
+        theme.font.title,
+        true,
+        theme.accent.focus,
+        TextAlign::Left,
+    );
+
+    let follow_color = match chrome.follow_mode {
+        FollowMode::Off => theme.text.muted,
+        FollowMode::Active => theme.accent.playhead,
+        FollowMode::Suspended => theme.accent.warning_key,
+    };
+    let follow_w = 132.0;
+    let follow_rect = Rect::new(
+        row1.right() - follow_w,
+        row1.y + 1.0,
+        follow_w,
+        row1.h - 2.0,
+    );
+    dl.panel(
+        follow_rect,
+        theme.surface.recessed,
+        follow_color.with_alpha(0.55),
+        theme.radii.badge,
+        1.0,
+        if chrome.follow_mode == FollowMode::Active {
+            0.12
+        } else {
+            0.0
+        },
+    );
+    dl.text(
+        follow_rect.inset(6.0, 0.0),
+        chrome.follow_mode.label(),
+        theme.font.small,
+        true,
+        follow_color,
+        TextAlign::Center,
+    );
+
+    let health_pill: Option<(String, Color, f32)> = if chrome.audio_health.failed {
+        Some((
+            "!AUDIO ERR".into(),
+            theme.accent.alert,
+            theme.glow.clip * 0.45,
+        ))
+    } else if chrome.audio_health.overloaded {
+        Some(("!OVERLOAD".into(), theme.accent.warning_key, 0.28))
+    } else if chrome.audio_health.xrun_count > 0 {
+        Some((
+            format!("XRUN {}", chrome.audio_health.xrun_count),
+            theme.accent.warning_key,
+            0.16,
+        ))
+    } else {
+        None
+    };
+    let health_reserve = if let Some((label, accent, glow)) = health_pill {
+        let pfont = theme.font.small - 1.0;
+        let pw = (label.chars().count() as f32 * theme.char_width(pfont) + 16.0).clamp(64.0, 120.0);
+        let prect = Rect::new(follow_rect.x - pw - 8.0, row1.y + 1.0, pw, row1.h - 2.0);
+        dl.panel(
+            prect,
+            accent.with_alpha(0.22),
+            accent,
+            theme.radii.badge,
+            1.0,
+            glow,
+        );
+        dl.text(prect, label, pfont, true, accent, TextAlign::Center);
+        pw + 10.0
+    } else {
+        0.0
+    };
+
+    let readiness = if chrome.ready {
+        "ready"
+    } else {
+        "ASSETS MISSING"
+    };
+    let info = format!("{}  ·  {readiness}", chrome.audio_status);
+    let info_left = row1.x + row1.w * 0.45;
+    let info_w = (follow_rect.x - health_reserve - info_left - 10.0).max(0.0);
+    let max_info_chars = (info_w / theme.char_width(theme.font.small)).floor() as usize;
+    dl.text(
+        Rect::new(info_left, row1.y, info_w, row1.h),
+        crate::display::trim_label(&info, max_info_chars),
+        theme.font.small,
+        false,
+        if chrome.ready {
+            theme.text.muted
+        } else {
+            theme.accent.alert
+        },
+        TextAlign::Right,
+    );
+
+    // Row 2: Live transport status pill + Staging/REC pills + BPM + bar.beat.step + key/scale + loop + master dBFS.
+    let play_badge_w = 24.0;
+    let play_rect = Rect::new(row2.x, row2.y + 2.0, play_badge_w, row2.h - 4.0);
+    let play_color = if chrome.playing {
+        theme.accent.playhead
+    } else {
+        theme.text.muted
+    };
+    dl.rounded_glow(
+        play_rect,
+        play_color.with_alpha(if chrome.playing { 0.22 } else { 0.08 }),
+        theme.radii.badge,
+        if chrome.playing {
+            theme.glow.playhead * 0.5
+        } else {
+            0.0
+        },
+    );
+    dl.text(
+        play_rect,
+        if chrome.playing { "▶" } else { "■" },
+        theme.font.small,
+        true,
+        play_color,
+        TextAlign::Center,
+    );
+
+    let meter_w = 276.0;
+    let max_meta_right = (row2.right() - meter_w - 8.0).max(row2.x + play_badge_w + 8.0);
+    let mut cursor_x = row2.x + play_badge_w + 8.0;
+    let small_cw = theme.char_width(theme.font.small);
+
+    if let Some(badge) = &chrome.recording_badge {
+        let (accent, glow) = match chrome.recording_phase {
+            CapturePhase::Recording => (theme.accent.alert, 0.36),
+            CapturePhase::Armed => (theme.accent.warning_key, 0.24),
+            CapturePhase::Finishing => (theme.accent.routing, 0.22),
+            CapturePhase::Idle => (theme.accent.focus, 0.14),
+        };
+        draw_chrome_pill(
+            dl,
+            row2,
+            &mut cursor_x,
+            max_meta_right,
+            small_cw,
+            badge,
+            accent,
+            glow,
+            theme,
+        );
+        if chrome.input_active && cursor_x + 48.0 <= max_meta_right {
+            let mw = 42.0_f32;
+            let mrect = Rect::new(cursor_x, row2.y + 4.0, mw, (row2.h - 8.0).max(10.0));
+            dl.panel(
+                mrect,
+                theme.surface.recessed,
+                if chrome.input_clipped {
+                    theme.accent.alert
+                } else {
+                    theme.border.hairline
+                },
+                theme.radii.badge,
+                1.0,
+                0.0,
+            );
+            let mi = mrect.inset(3.0, 2.0);
+            let ch_h = ((mi.h - 1.5) * 0.5).max(2.0);
+            for (idx, peak) in chrome.input_peak.into_iter().enumerate() {
+                let by = mi.y + idx as f32 * (ch_h + 1.5);
+                let track = Rect::new(mi.x, by, mi.w, ch_h);
+                dl.fill(track, theme.meter.track_bg);
+                let norm = db_norm(peak);
+                let fw = track.w * norm;
+                if fw > 0.5 {
+                    let col = if chrome.input_clipped || peak >= 0.999 {
+                        theme.meter.clip
+                    } else if peak >= 0.70 {
+                        theme.meter.hot
+                    } else if peak >= 0.25 {
+                        theme.meter.mid
+                    } else {
+                        theme.meter.low
+                    };
+                    dl.fill(Rect::new(track.x, track.y, fw, track.h), col);
+                }
+            }
+            cursor_x += mw + 8.0;
+        }
+        if chrome.input_monitoring {
+            draw_chrome_pill(
+                dl,
+                row2,
+                &mut cursor_x,
+                max_meta_right,
+                small_cw,
+                "◉ MON",
+                theme.accent.playhead,
+                0.16,
+                theme,
+            );
+        }
+    } else if chrome.input_monitoring {
+        draw_chrome_pill(
+            dl,
+            row2,
+            &mut cursor_x,
+            max_meta_right,
+            small_cw,
+            "◉ IN MON",
+            theme.accent.playhead,
+            0.16,
+            theme,
+        );
+    }
+
+    let mut draw_status_pill = |label: String, accent: Color, glow: f32| {
+        draw_chrome_pill(
+            dl,
+            row2,
+            &mut cursor_x,
+            max_meta_right,
+            small_cw,
+            &label,
+            accent,
+            glow,
+            theme,
+        );
+    };
+    if chrome.take_armed {
+        if let Some(n) = chrome.take_recording {
+            if chrome.take_capped {
+                draw_status_pill(format!("● TAKE CAPPED ({n})"), theme.accent.alert, 0.36);
+            } else if chrome.playing {
+                draw_status_pill(format!("● REC TAKE ({n})"), theme.accent.alert, 0.30);
+            } else {
+                draw_status_pill(format!("● REC TAKE ({n})"), theme.accent.warning_key, 0.22);
+            }
+        } else if chrome.playing {
+            draw_status_pill("● REC TAKE (0)".into(), theme.accent.alert, 0.30);
+        } else {
+            draw_status_pill("TAKE ARM".into(), theme.accent.warning_key, 0.18);
+        }
+    }
+    if let Some(n) = chrome.staged_count {
+        draw_status_pill(format!("◇ STAGED ({n})"), theme.accent.modulation, 0.30);
+    }
+    if chrome.midi_recording {
+        draw_status_pill("● REC · NOTE+CC".into(), theme.accent.alert, 0.32);
+        if let Some(target) = &chrome.midi_cc_last_recorded {
+            let trimmed = crate::display::trim_label(target, 18);
+            draw_status_pill(format!("CC● {trimmed}"), theme.accent.modulation, 0.20);
+        }
+    }
+    if chrome.active_macro_count > 0 {
+        let label = if chrome.active_macro_automated > 0 {
+            format!(
+                "◈ MACROS {} · {} MOD",
+                chrome.active_macro_count, chrome.active_macro_automated
+            )
+        } else {
+            format!("◈ MACROS {}", chrome.active_macro_count)
+        };
+        let accent = if chrome.active_macro_automated > 0 {
+            theme.accent.modulation
+        } else {
+            theme.accent.focus
+        };
+        draw_status_pill(label, accent, 0.18);
+    }
+
+    if chrome.live_timing_cycle || chrome.live_edits_on_launch {
+        let q_label = if chrome.live_edits_on_launch {
+            format!("Q: {} · EDITS", chrome.live_timing_label)
+        } else {
+            format!("Q: {}", chrome.live_timing_label)
+        };
+        let accent = if chrome.live_timing_cycle {
+            theme.accent.modulation
+        } else {
+            theme.accent.routing
+        };
+        draw_status_pill(crate::display::trim_label(&q_label, 24), accent, 0.20);
+    }
+
+    let mut meta = vec![
+        chrome.source_label.to_string(),
+        format!("{:.1} BPM", chrome.bpm),
+        format!("{:03}.{}.{}", chrome.bar, chrome.beat, chrome.substep),
+        format!("{} {}", chrome.root_note, chrome.scale_name),
+        chrome.loop_label.clone(),
+    ];
+    if !(chrome.live_timing_cycle || chrome.live_edits_on_launch) {
+        meta.push(format!("Q: {}", chrome.live_timing_label));
+    }
+    if chrome.override_count > 0 {
+        meta.push(format!(
+            "{} override{}",
+            chrome.override_count,
+            if chrome.override_count == 1 { "" } else { "s" }
+        ));
+    }
+    if chrome.pending_count > 0 {
+        meta.push(format!("{} pending", chrome.pending_count));
+    }
+    if let Some(end) = chrome.end_rule_label {
+        meta.push(format!("end: {end}"));
+    }
+    if chrome.from_here {
+        meta.push("' FROM HERE".into());
+    }
+    if chrome.jam_active {
+        meta.push("JAM".into());
+    }
+    if chrome.midi_learning {
+        meta.push("◉ MIDI LEARN".into());
+    }
+    if let Some(port) = &chrome.midi_port {
+        let fb = if chrome.midi_out_port.is_some() {
+            "↔"
+        } else {
+            ""
+        };
+        let last = chrome
+            .midi_last
+            .as_ref()
+            .map_or_else(String::new, |m| format!(" {m}"));
+        meta.push(format!("MIDI{fb} {port}{last}"));
+    } else if let Some(out_port) = &chrome.midi_out_port {
+        meta.push(format!("MIDI→ {out_port}"));
+    }
+
+    dl.text(
+        Rect::new(
+            cursor_x,
+            row2.y,
+            (max_meta_right - cursor_x).max(0.0),
+            row2.h,
+        ),
+        meta.join("  ·  "),
+        theme.font.body,
+        false,
+        theme.text.primary,
+        TextAlign::Left,
+    );
+
+    let level_text = |peak: f32| -> String {
+        if !chrome.output_observed {
+            "--".into()
+        } else {
+            fmt_db(peak)
+        }
+    };
+    let status_pill: Option<(&'static str, Color, f32, f32)> = if chrome.master_clipped {
+        Some(("!CLIP", theme.meter.clip, theme.glow.clip * 0.45, 50.0))
+    } else if chrome.master_hot {
+        Some(("HOT", theme.meter.hot, 0.18, 40.0))
+    } else {
+        None
+    };
+    let pill_reserve = status_pill.map_or(0.0, |(_, _, _, w)| w + 6.0);
+    let meter_str = format!(
+        "FINAL  L {}  R {} dBFS",
+        level_text(chrome.peak_left),
+        level_text(chrome.peak_right),
+    );
+    let meter_col = if chrome.master_clipped {
+        theme.meter.clip
+    } else if chrome.master_hot {
+        theme.meter.hot
+    } else {
+        theme.accent.routing
+    };
+    dl.text(
+        Rect::new(
+            row2.right() - meter_w,
+            row2.y,
+            (meter_w - pill_reserve).max(0.0),
+            row2.h,
+        ),
+        meter_str,
+        theme.font.small,
+        chrome.master_clipped,
+        meter_col,
+        TextAlign::Right,
+    );
+    if let Some((label, accent, glow, w)) = status_pill {
+        let prect = Rect::new(row2.right() - w, row2.y + 2.0, w, row2.h - 4.0);
+        dl.panel(
+            prect,
+            accent.with_alpha(0.22),
+            accent,
+            theme.radii.badge,
+            1.0,
+            glow,
+        );
+        dl.text(
+            prect,
+            label,
+            theme.font.small - 1.0,
+            true,
+            accent,
+            TextAlign::Center,
+        );
+    }
+}
+
+pub fn draw_trail(dl: &mut DisplayList, area: Rect, trail: &[String], theme: &Theme) {
+    if trail.is_empty() {
+        return;
+    }
+    let text = format!("  {}", trail.join("  ›  "));
+    dl.rounded(area, theme.surface.recessed, theme.radii.badge);
+    dl.text(
+        area.inset(6.0, 0.0),
+        text,
+        theme.font.small,
+        false,
+        theme.text.secondary,
+        TextAlign::Left,
+    );
+}
+
+pub fn draw_footer(dl: &mut DisplayList, area: Rect, chrome: &ChromeView, theme: &Theme) {
+    dl.fill(area, theme.surface.header);
+    dl.fill(
+        Rect::new(area.x, area.y, area.w, 1.0),
+        theme.border.hairline,
+    );
+
+    let inner = area.inset(10.0, 4.0);
+    let (top_row, bot_row) = inner.split_top(26.0);
+
+    // Mode pill on left of top row.
+    let mode_text = match chrome.pending_key_count {
+        Some(n) => format!("{} · {n}", chrome.mode_name),
+        None => chrome.mode_name.to_string(),
+    };
+    let mode_w = (mode_text.chars().count() as f32 * theme.char_width(theme.font.small) + 20.0)
+        .clamp(78.0, 220.0);
+    let mode_rect = Rect::new(top_row.x, top_row.y + 2.0, mode_w, top_row.h - 4.0);
+    let (mode_accent, mode_border_w, mode_glow) = match chrome.mode_kind {
+        UiModeKind::Jam => (theme.accent.jam, 1.5, theme.glow.jam_border * 0.75),
+        UiModeKind::Normal | UiModeKind::Overlay => match chrome.mode_name {
+            "STEP INSERT" => (theme.accent.playhead, 1.4, 0.26),
+            "VALUE ENTRY" | "MINI EDITOR" => {
+                (theme.accent.edit, 1.4, theme.glow.edit_border * 0.65)
+            }
+            "STAGE" => (theme.accent.jam, 1.2, 0.22),
+            "PALETTE" | "PRESETS" | "SONG PROPS" | "SEARCH" => {
+                (theme.accent.warning_key, 1.2, 0.18)
+            }
+            _ => (theme.accent.focus, 1.0, 0.16),
+        },
+    };
+    dl.panel(
+        mode_rect,
+        mode_accent.with_alpha(0.18),
+        mode_accent,
+        theme.radii.badge,
+        mode_border_w,
+        mode_glow,
+    );
+    dl.text(
+        mode_rect,
+        mode_text,
+        theme.font.small,
+        true,
+        mode_accent,
+        TextAlign::Center,
+    );
+
+    let right_rect = Rect::new(
+        mode_rect.right() + 10.0,
+        top_row.y,
+        (top_row.w - mode_w - 10.0).max(0.0),
+        top_row.h,
+    );
+
+    if let Some(search) = &chrome.search_line {
+        dl.panel(
+            right_rect.inset(0.0, 1.0),
+            theme.surface.recessed,
+            theme.accent.focus,
+            theme.radii.badge,
+            1.0,
+            0.14,
+        );
+        dl.text(
+            right_rect.inset(8.0, 0.0),
+            format!("/{search}▏"),
+            theme.font.body,
+            true,
+            theme.accent.focus,
+            TextAlign::Left,
+        );
+    } else {
+        // Contextual keyboard hints strip.
+        let mut x = right_rect.x;
+        let cw = theme.char_width(theme.font.small);
+        for (key, desc) in &chrome.hints {
+            let kw = key.chars().count() as f32 * cw + 10.0;
+            let dw = desc.chars().count() as f32 * cw + 14.0;
+            if x + kw + dw > right_rect.right() {
+                break;
+            }
+            let krect = Rect::new(x, right_rect.y + 3.0, kw, right_rect.h - 6.0);
+            dl.rounded(krect, theme.surface.elevated, theme.radii.badge);
+            dl.text(
+                krect,
+                key.as_str(),
+                theme.font.small,
+                true,
+                theme.accent.warning_key,
+                TextAlign::Center,
+            );
+            dl.text(
+                Rect::new(krect.right() + 5.0, right_rect.y, dw, right_rect.h),
+                desc.as_str(),
+                theme.font.small,
+                false,
+                theme.text.secondary,
+                TextAlign::Left,
+            );
+            x += kw + dw + 4.0;
+        }
+    }
+
+    // Bottom row: chain breadcrumb on left, status message on right.
+    let (chain_rect, status_rect) = bot_row.split_left(bot_row.w * 0.44);
+    dl.text(
+        chain_rect,
+        chrome.chain.as_str(),
+        theme.font.small,
+        false,
+        theme.text.muted,
+        TextAlign::Left,
+    );
+    dl.text(
+        status_rect,
+        chrome.status.as_str(),
+        theme.font.small,
+        chrome.status_alert,
+        if chrome.status_alert {
+            theme.accent.alert
+        } else {
+            theme.text.secondary
+        },
+        TextAlign::Right,
+    );
+}
+
+/// Total horizontal logical pixel inset added by `draw_deck_frame` (`1.5*2 + 6.0*2`).
+pub const DECK_FRAME_INSET_X: f32 = 15.0;
+
+/// Configuration for [`draw_deck_frame`].
+#[derive(Clone, Copy, Debug)]
+pub struct DeckFrameSpec<'a> {
+    pub title: &'a str,
+    pub right_badge: Option<&'a str>,
+    pub accent: Color,
+    pub focused: bool,
+    pub mode: UiModeKind,
+}
+
+/// Draw a deck's outer panel + header strip, returning the inner content `Rect`.
+///
+/// Mode signaling is applied centrally here so every deck shares identical visual grammar:
+/// - `NORMAL`: `accent` (cyan), `1.5px` border, subtle `focus_border` glow.
+/// - `JAM`: `theme.accent.jam` (electric violet/magenta), `2.2px` glowing border (`jam_border`).
+pub fn draw_deck_frame(
+    dl: &mut DisplayList,
+    area: Rect,
+    spec: &DeckFrameSpec<'_>,
+    theme: &Theme,
+) -> Rect {
+    let DeckFrameSpec {
+        title,
+        right_badge,
+        accent,
+        focused,
+        mode,
+    } = *spec;
+    let is_jam = focused && mode == UiModeKind::Jam;
+    let (border_col, border_w, glow, header_accent, header_alpha) = if is_jam {
+        (
+            theme.accent.jam,
+            2.2,
+            theme.glow.jam_border,
+            theme.accent.jam,
+            0.15,
+        )
+    } else if focused {
+        (accent, 1.5, theme.glow.focus_border, accent, 0.11)
+    } else {
+        (theme.border.hairline, 1.0, 0.0, accent, 0.0)
+    };
+    dl.panel(
+        area,
+        theme.surface.elevated,
+        border_col,
+        theme.radii.panel,
+        border_w,
+        glow,
+    );
+
+    let header_h = 24.0;
+    let inset_b = 1.5;
+    let (hdr, body) = area.inset(inset_b, inset_b).split_top(header_h);
+    dl.fill(
+        hdr,
+        if focused {
+            header_accent.with_alpha(header_alpha)
+        } else {
+            theme.surface.header
+        },
+    );
+    dl.fill(
+        Rect::new(hdr.x, hdr.bottom() - 1.0, hdr.w, 1.0),
+        if is_jam {
+            theme.accent.jam.with_alpha(0.45)
+        } else {
+            theme.border.subtle
+        },
+    );
+
+    let title_x = hdr.x + 8.0;
+
+    let small_cw = theme.char_width(theme.font.small).max(1.0);
+    let title_min_w = (title.chars().count() as f32 * small_cw + 8.0).min(hdr.w * 0.45);
+    let max_badge_w = (hdr.right() - title_x - title_min_w - 14.0).max(0.0);
+    let badge_w = right_badge.map_or(0.0, |b| {
+        (b.chars().count() as f32 * small_cw + 16.0).min(max_badge_w)
+    });
+    let title_w = if right_badge.is_some() {
+        (hdr.right() - badge_w - title_x - 14.0).max(0.0)
+    } else {
+        (hdr.right() - title_x - 8.0).max(0.0)
+    };
+    let title_max_chars = (title_w / small_cw).floor() as usize;
+    let trimmed_title = crate::display::trim_label(title, title_max_chars);
+    if !trimmed_title.is_empty() {
+        dl.text(
+            Rect::new(title_x, hdr.y, title_w, hdr.h),
+            trimmed_title,
+            theme.font.small,
+            true,
+            if focused {
+                header_accent
+            } else {
+                theme.text.secondary
+            },
+            TextAlign::Left,
+        );
+    }
+    if let Some(badge) = right_badge {
+        let badge_max_chars = ((badge_w - 4.0).max(0.0) / small_cw).floor() as usize;
+        let trimmed_badge = crate::display::trim_label(badge, badge_max_chars);
+        if !trimmed_badge.is_empty() {
+            dl.text(
+                Rect::new(hdr.right() - badge_w - 6.0, hdr.y, badge_w, hdr.h),
+                trimmed_badge,
+                theme.font.small,
+                false,
+                theme.text.muted,
+                TextAlign::Right,
+            );
+        }
+    }
+
+    body.inset(6.0, 5.0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deck_frame_trims_long_right_badge_to_prevent_title_overlap() {
+        let theme = Theme::cadence_dark();
+        let small_cw = theme.char_width(theme.font.small);
+        let long_badge =
+            "Notes · SHARED DEFINITION · 320 steps · zoom 100% · ▶ PLAY step 84 · 2 uses · local exception";
+
+        // Narrow pane: badge must be trimmed with an ellipsis and stay strictly to the right of title.
+        let mut narrow_dl = DisplayList::new(420.0, 300.0, 1.0);
+        draw_deck_frame(
+            &mut narrow_dl,
+            Rect::new(0.0, 0.0, 420.0, 240.0),
+            &DeckFrameSpec {
+                title: "Moving lead",
+                right_badge: Some(long_badge),
+                accent: theme.accent.focus,
+                focused: true,
+                mode: UiModeKind::Normal,
+            },
+            &theme,
+        );
+        assert_eq!(narrow_dl.base.texts.len(), 2);
+        let title_run = &narrow_dl.base.texts[0];
+        let badge_run = &narrow_dl.base.texts[1];
+        assert_eq!(title_run.text, "Moving lead");
+        assert!(badge_run.text.ends_with('…'));
+        assert!(badge_run.text.chars().count() < long_badge.chars().count());
+        let badge_rendered_w = badge_run.text.chars().count() as f32 * small_cw;
+        assert!(
+            badge_rendered_w <= badge_run.rect.w,
+            "trimmed badge ({badge_rendered_w}px) must fit its rect ({}px)",
+            badge_run.rect.w
+        );
+        assert!(
+            title_run.rect.right() < badge_run.rect.x,
+            "title right ({}) must remain strictly left of badge start ({})",
+            title_run.rect.right(),
+            badge_run.rect.x
+        );
+
+        // Wide pane: full badge fits untruncated.
+        let mut wide_dl = DisplayList::new(1200.0, 300.0, 1.0);
+        draw_deck_frame(
+            &mut wide_dl,
+            Rect::new(0.0, 0.0, 1200.0, 240.0),
+            &DeckFrameSpec {
+                title: "Moving lead",
+                right_badge: Some(long_badge),
+                accent: theme.accent.focus,
+                focused: true,
+                mode: UiModeKind::Normal,
+            },
+            &theme,
+        );
+        assert_eq!(wide_dl.base.texts.len(), 2);
+        assert_eq!(wide_dl.base.texts[1].text, long_badge);
+    }
+}

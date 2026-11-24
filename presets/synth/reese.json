@@ -1,0 +1,334 @@
+{
+  "version": 1,
+  "name": "Reese",
+  "category": "Bass",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "Reese",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 60,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "mono",
+          "legato": true,
+          "glide_ms": 55.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": false
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "VCO A",
+            "kind": {
+              "type": "vco",
+              "waveform": "saw",
+              "tune_semitones": 0.0,
+              "fine_cents": -7.0,
+              "pulse_width": 0.5,
+              "phase_deg": 0.0,
+              "level": 0.62,
+              "pitch_tracking": "chromatic",
+              "fixed_hz": 440.0,
+              "unison_voices": 1,
+              "unison_detune_cents": 12.0,
+              "unison_width": 0.7
+            }
+          },
+          {
+            "id": 2,
+            "name": "VCO B",
+            "kind": {
+              "type": "vco",
+              "waveform": "saw",
+              "tune_semitones": 0.0,
+              "fine_cents": 7.0,
+              "pulse_width": 0.5,
+              "phase_deg": 0.0,
+              "level": 0.62,
+              "pitch_tracking": "chromatic",
+              "fixed_hz": 440.0,
+              "unison_voices": 1,
+              "unison_detune_cents": 12.0,
+              "unison_width": 0.7
+            }
+          },
+          {
+            "id": 3,
+            "name": "Sub",
+            "kind": {
+              "type": "vco",
+              "waveform": "sine",
+              "tune_semitones": -12.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.5,
+              "phase_deg": 0.0,
+              "level": 0.15,
+              "pitch_tracking": "chromatic",
+              "fixed_hz": 440.0,
+              "unison_voices": 1,
+              "unison_detune_cents": 12.0,
+              "unison_width": 0.7
+            }
+          },
+          {
+            "id": 4,
+            "name": "Filter",
+            "kind": {
+              "type": "filter",
+              "mode": "low_pass",
+              "cutoff_hz": 1100.0,
+              "resonance": 0.25,
+              "drive": 0.23,
+              "key_tracking": 0.0,
+              "vel_amount": 0.0,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 5,
+            "name": "VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Amp Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 5.0,
+              "hold_ms": 0.0,
+              "decay_ms": 400.0,
+              "sustain": 0.82,
+              "release_ms": 180.0,
+              "trigger_mode": "gate",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 7,
+            "name": "Filter Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 2.0,
+              "hold_ms": 0.0,
+              "decay_ms": 450.0,
+              "sustain": 0.2,
+              "release_ms": 150.0,
+              "trigger_mode": "gate",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 8,
+            "name": "LFO",
+            "kind": {
+              "type": "lfo",
+              "shape": "sine",
+              "rate_hz": 0.22,
+              "sync": false,
+              "division_steps": 16.0,
+              "retrigger": false,
+              "bipolar": true
+            }
+          },
+          {
+            "id": 9,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.16
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 3,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 4,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 5,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 5,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 9,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 6,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 5,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 7,
+            "from_module": 7,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "cv",
+            "amount": 0.9
+          },
+          {
+            "id": 8,
+            "from_module": 8,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "cv",
+            "amount": 0.12
+          }
+        ]
+      }
+    ],
+    "gain_db": 0.0,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "waveform"
+        },
+        "label": "Wave"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 4,
+          "param": "cutoff"
+        },
+        "label": "Cutoff"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 4,
+          "param": "resonance"
+        },
+        "label": "Res"
+      },
+      {
+        "target": {
+          "scope": "cable",
+          "zone": 1,
+          "cable": 7
+        },
+        "label": "Env Mod"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 4,
+          "param": "drive"
+        },
+        "label": "Drive"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 3,
+          "param": "level"
+        },
+        "label": "Sub Level"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 6,
+          "param": "attack"
+        },
+        "label": "Attack"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 6,
+          "param": "decay"
+        },
+        "label": "Decay"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 6,
+          "param": "sustain"
+        },
+        "label": "Sustain"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 6,
+          "param": "release"
+        },
+        "label": "Release"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 9,
+          "param": "pan"
+        },
+        "label": "Pan"
+      }
+    ]
+  }
+}

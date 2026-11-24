@@ -1,0 +1,6 @@
+{"label":"A live source beside a pinned Rack Synth","keys":":open Motif<Enter>:instrument Lead<Enter>:page panel<Enter><C-w>p:open Motif<Enter>:play 1<Enter>","wait_ms":1600,"screen":["SHARED DEFINITION","PINNED","FINAL OUTPUT"],"expect":{"revision":0,"dirty":false}}
+{"label":"Follow the independent harmonic source while the sound stays pinned","keys":":open Harmony<Enter>","wait_ms":1000,"screen":["DEGREES","PINNED"],"expect":{"revision":0}}
+{"label":"End/start navigation and ordinary cursor movement preserve the source","keys":":open Motif<Enter>Gggllhh","wait_ms":1000,"expect":{"revision":0,"dirty":false}}
+{"label":"Collapse and restore the same context deck","keys":"<C-w>c<C-w>c","wait_ms":700,"screen":["INSTRUMENT","PINNED"]}
+{"label":"Zoom the active deck, then restore the split view","keys":"<C-w>z<Esc>","wait_ms":700,"expect":{"revision":0}}
+{"label":"Home returns to song start without moving the editor","keys":"<Home>","wait_ms":600,"screen":["001.1.1"],"expect":{"revision":0,"dirty":false}}

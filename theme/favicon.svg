@@ -1,0 +1,126 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Deep hardware chassis gradient (Cadence Dark) -->
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#162235"/>
+      <stop offset="52%" stop-color="#0D1420"/>
+      <stop offset="100%" stop-color="#080C15"/>
+    </linearGradient>
+
+    <!-- Subtle top-bevel hardware rim -->
+    <linearGradient id="rimGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3E5472" stop-opacity="0.95"/>
+      <stop offset="45%" stop-color="#243347" stop-opacity="0.75"/>
+      <stop offset="100%" stop-color="#141D2C" stop-opacity="0.95"/>
+    </linearGradient>
+
+    <!-- Phosphor ambient screen glow -->
+    <radialGradient id="ambientGlow" cx="50%" cy="50%" r="48%">
+      <stop offset="0%" stop-color="#68DBCD" stop-opacity="0.22"/>
+      <stop offset="55%" stop-color="#56B6E2" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#0C111B" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Soft matte top rim sheen -->
+    <radialGradient id="topSheen" cx="50%" cy="0%" r="55%">
+      <stop offset="0%" stop-color="#9CF2E8" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#9CF2E8" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Primary C-arc phosphor gradient -->
+    <linearGradient id="arcGrad" x1="0.15" y1="0.1" x2="0.85" y2="0.95">
+      <stop offset="0%" stop-color="#9CF2E8"/>
+      <stop offset="42%" stop-color="#68DBCD"/>
+      <stop offset="100%" stop-color="#48AEE0"/>
+    </linearGradient>
+
+    <!-- Amber accent bar gradient -->
+    <linearGradient id="amberGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFD180"/>
+      <stop offset="100%" stop-color="#FF9F2E"/>
+    </linearGradient>
+
+    <!-- Magenta jam bar gradient -->
+    <linearGradient id="jamGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#EB94FF"/>
+      <stop offset="100%" stop-color="#C94CF6"/>
+    </linearGradient>
+
+    <!-- Soft phosphor bloom filters -->
+    <filter id="tealBloom" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="16" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="softBloom" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="11" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Outer tile shadow -->
+    <filter id="tileShadow" x="-12%" y="-10%" width="124%" height="126%">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#02050A" flood-opacity="0.52"/>
+    </filter>
+
+    <!-- Clip for inner recessed grid -->
+    <clipPath id="tileClip">
+      <rect x="64" y="64" width="896" height="896" rx="204" ry="204"/>
+    </clipPath>
+  </defs>
+
+  <!-- Main rounded squircle tile -->
+  <g filter="url(#tileShadow)">
+    <rect x="64" y="64" width="896" height="896" rx="204" ry="204" fill="url(#bgGrad)"/>
+  </g>
+
+  <!-- Subtle internal ambient phosphor glow + hairline step grid -->
+  <g clip-path="url(#tileClip)">
+    <rect x="64" y="64" width="896" height="896" fill="url(#ambientGlow)"/>
+    <rect x="64" y="64" width="896" height="448" fill="url(#topSheen)"/>
+
+    <!-- Subtle 4x4 step-grid reference lines -->
+    <g stroke="#2B3D57" stroke-width="2" stroke-opacity="0.34">
+      <line x1="288" y1="112" x2="288" y2="912"/>
+      <line x1="512" y1="112" x2="512" y2="912"/>
+      <line x1="736" y1="112" x2="736" y2="912"/>
+      <line x1="112" y1="288" x2="912" y2="288"/>
+      <line x1="112" y1="512" x2="912" y2="512"/>
+      <line x1="112" y1="736" x2="912" y2="736"/>
+    </g>
+  </g>
+
+  <!-- Crisp hardware rim stroke -->
+  <rect x="70" y="70" width="884" height="884" rx="198" ry="198"
+        fill="none" stroke="url(#rimGrad)" stroke-width="12"/>
+
+  <!-- Optically centered emblem group (shifted +38px right to balance left C spine) -->
+  <g transform="translate(38 0)">
+    <!-- Geometric Cadence 'C' phosphor ring (open on the right for the pulse) -->
+    <!-- Center (488, 512), radius 254, opening from -42 deg to +42 deg -->
+    <g filter="url(#tealBloom)">
+      <path d="M 676.76 681.96 A 254 254 0 1 1 676.76 342.04"
+            fill="none"
+            stroke="url(#arcGrad)"
+            stroke-width="76"
+            stroke-linecap="round"/>
+    </g>
+
+    <!-- Rhythmic 4-step cadence bars spanning the core & mouth of the C -->
+    <g filter="url(#softBloom)">
+      <!-- Step 1: cyan sub-pulse -->
+      <rect x="372" y="446" width="58" height="132" rx="29" fill="#56B6E2"/>
+      <!-- Step 2: phosphor teal primary beat -->
+      <rect x="466" y="368" width="62" height="288" rx="31" fill="#82EDE0"/>
+      <!-- Step 3: edit-amber accent hit -->
+      <rect x="564" y="408" width="62" height="208" rx="31" fill="url(#amberGrad)"/>
+      <!-- Step 4: jam-magenta closing step in the mouth of the C -->
+      <rect x="662" y="458" width="60" height="108" rx="30" fill="url(#jamGrad)"/>
+    </g>
+  </g>
+</svg>

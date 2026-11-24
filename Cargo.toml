@@ -1,0 +1,104 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/formats",
+    "crates/engine",
+    "crates/app",
+    "crates/gui",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+anyhow = "1.0"
+bytemuck = { version = "1.22", features = ["derive"] }
+clap = { version = "4.5", features = ["derive"] }
+cpal = "0.16"
+glyphon = "0.12"
+hound = "3.5"
+image = { version = "0.25", default-features = false, features = ["png"] }
+midir = "0.11"
+pollster = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+symphonia = { version = "0.6", default-features = false, features = ["opt-simd", "pcm", "wav", "aiff", "ogg", "vorbis", "flac", "mp3"] }
+tempfile = "3.20"
+wavicle = { version = "0.1", default-features = false, features = ["decode"] }
+wgpu = "30"
+winit = "0.30"
+
+cadence-core = { path = "crates/core" }
+cadence-formats = { path = "crates/formats", default-features = false }
+cadence-engine = { path = "crates/engine", default-features = false }
+cadence-app = { path = "crates/app", default-features = false }
+cadence-gui = { path = "crates/gui" }
+
+[package]
+name = "cadence"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A keyboard-driven live music workstation"
+
+[[bin]]
+name = "cadence"
+path = "src/main.rs"
+
+[[example]]
+name = "build-demo"
+path = "examples/demo/build.rs"
+
+[[example]]
+name = "build-glass-cathedral"
+path = "examples/glass-cathedral/build.rs"
+
+[[example]]
+name = "build-iron-circuit"
+path = "examples/iron-circuit/build.rs"
+
+[features]
+default = ["audio", "midi", "gui", "rbs"]
+audio = ["cadence-engine/audio"]
+midi = ["cadence-engine/midi", "dep:midir"]
+gui = ["dep:cadence-gui", "dep:rfd"]
+rbs = ["cadence-formats/rbs", "cadence-app/rbs"]
+
+[dependencies]
+anyhow.workspace = true
+cadence-app.workspace = true
+cadence-core.workspace = true
+cadence-engine.workspace = true
+cadence-formats.workspace = true
+cadence-gui = { workspace = true, optional = true }
+clap.workspace = true
+midir = { workspace = true, optional = true }
+rfd = { version = "0.15", optional = true }
+serde.workspace = true
+serde_json.workspace = true
+
+[[test]]
+name = "rbs_import"
+required-features = ["rbs"]
+
+[[test]]
+name = "docs_screenshots_gpu"
+required-features = ["gui"]
+
+[dev-dependencies]
+hound.workspace = true
+image.workspace = true
+tempfile.workspace = true
+
+[profile.dev.package.cadence-core]
+opt-level = 2
+
+[profile.dev.package.cadence-engine]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

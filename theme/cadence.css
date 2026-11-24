@@ -1,0 +1,36 @@
+/* Subtle Cadence Dark palette accents for the mdBook navy/coal dark themes */
+.navy {
+    --bg: #0c111b;
+    --fg: #e2eaf2;
+    --sidebar-bg: #101723;
+    --sidebar-fg: #a6b6c9;
+    --sidebar-non-existant: #6d7e94;
+    --sidebar-active: #68dbcd;
+    --sidebar-spacer: #1a2434;
+    --scrollbar: #263244;
+    --icons: #6d7e94;
+    --icons-hover: #68dbcd;
+    --links: #68dbcd;
+    --inline-code-color: #8adb94;
+    --theme-popup-bg: #121925;
+    --theme-popup-border: #263244;
+    --theme-hover: #1b2b3f;
+    --quote-bg: #121925;
+    --quote-border: #56b6e2;
+    --table-border-color: #263244;
+    --table-header-bg: #121925;
+    --table-alternate-bg: #101723;
+    --searchbar-border-color: #263244;
+    --searchbar-bg: #121925;
+    --searchbar-fg: #e2eaf2;
+    --searchbar-shadow-color: #05080f;
+    --searchresults-header-fg: #68dbcd;
+    --searchresults-border-color: #263244;
+    --searchresults-li-bg: #152030;
+    --search-mark-bg: #ffb347;
+}
+
+.content img {
+    border-radius: 6px;
+    border: 1px solid var(--table-border-color);
+}

@@ -1,0 +1,5 @@
+{"label":"Play from song bar three","keys":":play 3<Enter>","wait_ms":1200,"expect":{"revision":0,"dirty":false}}
+{"label":"Independent instrument-dry and final-output scopes","keys":":instrument Lead<Enter>:page panel<Enter>","wait_ms":1200,"screen":["INSTRUMENT SCOPE","FINAL OUTPUT"]}
+{"label":"Hide the larger output scope; compact levels remain","keys":"go","wait_ms":600,"screen":["FINAL L"],"expect":{"revision":0}}
+{"label":"Restore the global output scope","keys":"go","wait_ms":600,"screen":["FINAL OUTPUT"]}
+{"label":"Home stops and returns to Song start","keys":"<Home>","wait_ms":600,"screen":["001.1.1"],"expect":{"revision":0,"dirty":false}}

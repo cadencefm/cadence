@@ -1,0 +1,11 @@
+{"label":"Keep the placement grid, then reveal the evaluated song","keys":"<Home>:deck off<Enter>ga:arrange overview<Enter>gg","wait_ms":900,"expect":{"patterns":11,"placements":5,"revision":0}}
+{"label":"Select a scheduled note and inspect its origin","keys":"w<Enter>","wait_ms":1000,"expect":{"revision":0}}
+{"label":"Follow the motif input at its own wrapped source position","keys":"js","wait_ms":900,"expect":{"revision":0}}
+{"label":"Return through provenance to the same song event","keys":"<Esc><Esc>","wait_ms":700,"expect":{"revision":0}}
+{"label":"Switch to the selected lane's song-time piano roll","keys":"vr","wait_ms":1000,"expect":{"revision":0}}
+{"label":"Inspect the final occurrence and its local ending","keys":"geb<Enter>","wait_ms":1000,"expect":{"revision":0}}
+{"label":"Open that exact local occurrence and adjust its expression","keys":"o.","wait_ms":900,"expect":{"revision":1}}
+{"label":"Undo the gesture; preserve the retained composition","keys":"u<Esc><Esc>","wait_ms":800,"expect":{"revision":2,"patterns":11,"placements":5}}
+{"label":"Follow playback across a song page with the edit cursor parked","keys":":follow on<Enter>:play 4<Enter>","wait_ms":2600,"screen":["Follow on"],"expect":{"revision":2}}
+{"label":"Manual time navigation returns to the editing page","keys":"h","wait_ms":800,"screen":["Follow suspended"],"expect":{"revision":2}}
+{"label":"Resume, then return the transport to Song start","keys":"tf<Home>","wait_ms":700,"screen":["Follow on"],"expect":{"revision":2,"ready":true}}

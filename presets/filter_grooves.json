@@ -1,0 +1,230 @@
+{
+  "version": 1,
+  "grooves": [
+    {
+      "id": 0,
+      "name": "00 Quarter Pump",
+      "category": "Pulses",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [127, 0, 0, 0, 112, 0, 0, 0, 120, 0, 0, 0, 112, 0, 0, 0]
+    },
+    {
+      "id": 1,
+      "name": "01 Offbeat House",
+      "category": "Pulses",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [48, 0, 124, 0, 0, 0, 118, 0, 42, 0, 127, 0, 0, 0, 114, 0]
+    },
+    {
+      "id": 2,
+      "name": "02 Accented 8ths",
+      "category": "Pulses",
+      "resolution": 8,
+      "length": 8,
+      "smooth_attack": false,
+      "steps": [127, 74, 104, 68, 120, 78, 110, 88]
+    },
+    {
+      "id": 3,
+      "name": "03 Driving 16ths",
+      "category": "Pulses",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [127, 56, 92, 64, 112, 52, 96, 72, 122, 58, 94, 66, 116, 62, 102, 82]
+    },
+    {
+      "id": 4,
+      "name": "04 Detroit Electro",
+      "category": "Grooves",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [127, 0, 0, 96, 0, 0, 118, 0, 0, 84, 122, 0, 0, 92, 0, 70]
+    },
+    {
+      "id": 5,
+      "name": "05 Deep Chord Chop",
+      "category": "Grooves",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [120, 0, 0, 108, 0, 0, 114, 0, 0, 0, 98, 0, 127, 0, 76, 0]
+    },
+    {
+      "id": 6,
+      "name": "06 Acid Squelch",
+      "category": "Grooves",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [127, 62, 0, 116, 0, 82, 124, 0, 54, 0, 118, 72, 127, 0, 96, 58]
+    },
+    {
+      "id": 7,
+      "name": "07 Two-Bar Funk",
+      "category": "Grooves",
+      "resolution": 16,
+      "length": 32,
+      "smooth_attack": false,
+      "steps": [
+        124, 0, 72, 110, 0, 58, 120, 0, 92, 0, 116, 0, 64, 102, 0, 84,
+        127, 0, 68, 114, 0, 62, 122, 76, 0, 98, 118, 66, 126, 90, 108, 0
+      ]
+    },
+    {
+      "id": 8,
+      "name": "08 Dotted Bounce",
+      "category": "Syncopation",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [127, 0, 0, 114, 0, 0, 122, 0, 0, 108, 0, 0, 118, 0, 88, 0]
+    },
+    {
+      "id": 9,
+      "name": "09 Clave Shift",
+      "category": "Syncopation",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [127, 0, 0, 112, 0, 0, 120, 0, 0, 0, 116, 0, 104, 0, 0, 74]
+    },
+    {
+      "id": 10,
+      "name": "10 Broken UKG",
+      "category": "Syncopation",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [118, 0, 0, 82, 0, 124, 0, 66, 0, 0, 112, 0, 0, 127, 0, 94]
+    },
+    {
+      "id": 11,
+      "name": "11 Dub Steppers",
+      "category": "Syncopation",
+      "resolution": 8,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [127, 0, 92, 118, 0, 86, 0, 108, 122, 0, 96, 0, 114, 78, 126, 64]
+    },
+    {
+      "id": 12,
+      "name": "12 Velvet Arch",
+      "category": "Swells",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": true,
+      "steps": [18, 30, 48, 68, 88, 106, 118, 126, 122, 108, 90, 72, 54, 38, 26, 16]
+    },
+    {
+      "id": 13,
+      "name": "13 Slow Horizon",
+      "category": "Swells",
+      "resolution": 8,
+      "length": 16,
+      "smooth_attack": true,
+      "steps": [12, 20, 32, 46, 62, 78, 94, 108, 118, 126, 120, 102, 82, 62, 42, 24]
+    },
+    {
+      "id": 14,
+      "name": "14 Rising Ramp",
+      "category": "Swells",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": true,
+      "steps": [14, 22, 30, 38, 46, 54, 62, 70, 78, 86, 94, 102, 110, 116, 122, 127]
+    },
+    {
+      "id": 15,
+      "name": "15 Auto-Wah Glide",
+      "category": "Swells",
+      "resolution": 16,
+      "length": 16,
+      "smooth_attack": true,
+      "steps": [40, 84, 120, 96, 52, 28, 68, 104, 88, 44, 76, 127, 110, 74, 46, 26]
+    },
+    {
+      "id": 16,
+      "name": "16 Trance Shutter",
+      "category": "32nd Gates",
+      "resolution": 32,
+      "length": 16,
+      "smooth_attack": false,
+      "steps": [127, 0, 108, 0, 120, 82, 0, 0, 124, 0, 96, 114, 0, 74, 118, 0]
+    },
+    {
+      "id": 17,
+      "name": "17 Glitch Ratchet",
+      "category": "32nd Gates",
+      "resolution": 32,
+      "length": 32,
+      "smooth_attack": false,
+      "steps": [
+        127, 0, 0, 0, 98, 0, 0, 0, 118, 92, 110, 76, 0, 0, 102, 0,
+        124, 0, 0, 88, 0, 0, 112, 0, 120, 104, 116, 96, 127, 84, 108, 0
+      ]
+    },
+    {
+      "id": 18,
+      "name": "18 Liquid Flutter",
+      "category": "32nd Gates",
+      "resolution": 32,
+      "length": 16,
+      "smooth_attack": true,
+      "steps": [36, 72, 112, 127, 98, 62, 34, 58, 94, 122, 108, 76, 48, 86, 118, 80]
+    },
+    {
+      "id": 19,
+      "name": "19 Trap Roll Gate",
+      "category": "32nd Gates",
+      "resolution": 32,
+      "length": 24,
+      "smooth_attack": false,
+      "steps": [
+        127, 0, 0, 0, 86, 0, 108, 0, 122, 0, 0, 78,
+        114, 0, 92, 0, 120, 88, 104, 116, 126, 94, 110, 72
+      ]
+    },
+    {
+      "id": 20,
+      "name": "20 Five-Step Cycle",
+      "category": "Polyrhythms",
+      "resolution": 16,
+      "length": 5,
+      "smooth_attack": false,
+      "steps": [127, 0, 96, 114, 0]
+    },
+    {
+      "id": 21,
+      "name": "21 Seven-Step Drift",
+      "category": "Polyrhythms",
+      "resolution": 16,
+      "length": 7,
+      "smooth_attack": false,
+      "steps": [127, 0, 84, 0, 118, 72, 0]
+    },
+    {
+      "id": 22,
+      "name": "22 Waltz Swell 12",
+      "category": "Polyrhythms",
+      "resolution": 16,
+      "length": 12,
+      "smooth_attack": true,
+      "steps": [28, 58, 96, 126, 104, 72, 42, 64, 108, 120, 84, 46]
+    },
+    {
+      "id": 23,
+      "name": "23 Fifteen-Step Bloom",
+      "category": "Polyrhythms",
+      "resolution": 16,
+      "length": 15,
+      "smooth_attack": true,
+      "steps": [22, 48, 86, 118, 92, 54, 30, 68, 112, 127, 102, 64, 38, 78, 52]
+    }
+  ]
+}
