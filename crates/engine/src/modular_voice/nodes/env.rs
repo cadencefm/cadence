@@ -2,7 +2,7 @@
 
 use super::{
     write_copy_module_normalized, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks,
-    VoiceModule,
+    VoiceModule, TRIG_THRESHOLD,
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{acid_filter_decay_ms, smooth_step_f32, ModularEnv};
@@ -136,9 +136,9 @@ impl VoiceModule for EnvNode {
     fn process(&mut self, inputs: &NodeInputs, ctx: &mut ProcessCtx<'_>) -> [f64; 2] {
         let env_p = self.current;
         if self.has_trig_in {
-            if self.prev_trig < 0.5 && inputs.trig_in >= 0.5 {
+            if self.prev_trig < TRIG_THRESHOLD && inputs.trig_in >= TRIG_THRESHOLD {
                 self.env.retrigger(ctx.sample_rate, env_p.to_dsp_params());
-            } else if self.prev_trig >= 0.5 && inputs.trig_in < 0.5 {
+            } else if self.prev_trig >= TRIG_THRESHOLD && inputs.trig_in < TRIG_THRESHOLD {
                 self.env.release();
             }
             self.prev_trig = inputs.trig_in;

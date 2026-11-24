@@ -5,7 +5,7 @@ use cadence_core::dsp::{
     drive_transfer_sample, eval_modular_env_curve, filter_magnitude_db, filter_mix_magnitude_db,
     fm_depth_from_amount, ideal_waveform, lofi_transfer_sample, log_to_norm, midi_to_hz,
     norm_to_log, phase_wrap, resonator_mode_descriptors, sanitize_sample_rate,
-    semitones_to_ratio_f64, unison_detune_ratio,
+    semitones_to_ratio_f64, unison_detune_ratio, NYQUIST_SAFE_RATIO,
 };
 use cadence_core::material::Id;
 use cadence_core::params::{format_hz, InstrumentParam, RackParam};
@@ -150,7 +150,7 @@ impl App {
         } else {
             sanitize_sample_rate(f64::from(snapshot.sample_rate))
         };
-        let high_hz = (sr * 0.45).clamp(4_000.0, 20_000.0) as f32;
+        let high_hz = (sr * NYQUIST_SAFE_RATIO).clamp(4_000.0, 20_000.0) as f32;
         let live_waveform = sanitize_wave(snapshot.track_waveform(inst_id));
         let ctx = VisualCtx {
             inst_id,

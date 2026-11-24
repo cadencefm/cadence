@@ -3,12 +3,16 @@
 use super::*;
 use crate::modular_voice::ModularVoice;
 use cadence_core::dsp::{
-    flush_denormal_f32, one_pole_coeff_ms, pan_stereo_balance_f64, sanitize_sample,
-    sanitize_sample_rate, LogSmoother, Smoother, Svf, SvfCoeffs,
+    control_stride_mask, flush_denormal_f32, one_pole_coeff_ms, pan_stereo_balance_f64,
+    sanitize_sample, sanitize_sample_rate, LogSmoother, Smoother, Svf, SvfCoeffs,
 };
 use cadence_core::rack::FilterMode;
 use cadence_core::sampler::SampleData;
 use std::sync::Arc;
+
+/// Target Rack-bus SVF coefficient update cadence (`6 kHz`:
+/// `8` frames @ 44.1/48 kHz, `16` @ 96 kHz, `32` @ 192 kHz).
+const RACK_SVF_CTRL_TARGET_HZ: f64 = 6_000.0;
 
 /// Unified polyphonic/monophonic Rack voice slot.
 ///
@@ -43,11 +47,13 @@ pub(super) struct Voice {
     /// Dedicated Rack-bus LowPass SVF (transparent bypass at >= 19.9 kHz & res <= 0.001).
     pub(super) rack_svf: Svf,
     pub(super) rack_svf_coeffs: SvfCoeffs,
+    pub(super) cached_rack_svf_key: (u64, u32),
     pub(super) rack_cutoff: LogSmoother,
     pub(super) rack_cutoff_target_hz: f64,
     pub(super) rack_cutoff_coeff: f64,
     pub(super) rack_res_sm: Smoother,
-    pub(super) rack_svf_ctrl: u8,
+    pub(super) rack_svf_ctrl: u32,
+    pub(super) rack_svf_mask: u32,
     pub(super) rack_svf_was_active: bool,
     pub(super) sample_rate: f64,
     pub(super) live_key: Option<u8>,
@@ -82,11 +88,13 @@ impl Voice {
             cached_rack_pan_lr: [1.0, 1.0],
             rack_svf: Svf::default(),
             rack_svf_coeffs: SvfCoeffs::new(sr, 20_000.0, 0.0),
+            cached_rack_svf_key: (20_000.0_f64.to_bits(), 0.0_f32.to_bits()),
             rack_cutoff: LogSmoother::new_clamped(20_000.0, 20.0, 20_000.0),
             rack_cutoff_target_hz: 20_000.0,
             rack_cutoff_coeff: one_pole_coeff_ms(4.0, sr),
             rack_res_sm: Smoother::new(0.0, 4.0, sr),
             rack_svf_ctrl: 0,
+            rack_svf_mask: control_stride_mask(sr, RACK_SVF_CTRL_TARGET_HZ),
             rack_svf_was_active: false,
             sample_rate: sr,
             live_key: None,
@@ -156,8 +164,10 @@ impl Voice {
         self.rack_res_sm = Smoother::new(f64::from(res), 4.0, sr);
         self.rack_svf.reset();
         self.rack_svf_ctrl = 0;
+        self.rack_svf_mask = control_stride_mask(sr, RACK_SVF_CTRL_TARGET_HZ);
         self.rack_svf_was_active = fc < 19_900.0 || res > 0.001;
         if self.rack_svf_was_active {
+            self.cached_rack_svf_key = (fc.to_bits(), res.to_bits());
             self.rack_svf_coeffs = SvfCoeffs::new(sr, fc, res);
         }
     }
@@ -227,13 +237,14 @@ impl Voice {
 
         let mut stereo = [f64::from(raw[0]), f64::from(raw[1])];
         if filter_active {
+            let svf_key = (fc.to_bits(), res.to_bits());
             let need_coeff = !self.rack_svf_was_active
-                || (self.rack_svf_ctrl == 0
-                    && (!self.rack_cutoff.is_settled() || !self.rack_res_sm.is_settled()));
+                || (self.rack_svf_ctrl == 0 && svf_key != self.cached_rack_svf_key);
             if need_coeff {
+                self.cached_rack_svf_key = svf_key;
                 self.rack_svf_coeffs = SvfCoeffs::new(self.sample_rate, fc, res);
             }
-            self.rack_svf_ctrl = (self.rack_svf_ctrl + 1) & 7;
+            self.rack_svf_ctrl = self.rack_svf_ctrl.wrapping_add(1) & self.rack_svf_mask;
             self.rack_svf_was_active = true;
             stereo =
                 self.rack_svf

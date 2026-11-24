@@ -26,13 +26,75 @@ pub(super) use vca::VcaNode;
 pub(super) use vco::VcoNode;
 
 use super::{ModuleParams, VoiceLockKey};
-use cadence_core::dsp::ModalResonator;
-use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam};
+use cadence_core::dsp::{midi_to_hz, sanitize_clamp_f64, semitones_to_ratio_f64, ModalResonator};
+use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking};
 use cadence_core::runtime::SampleBank;
 use cadence_core::sampler::SampleData;
 use std::sync::Arc;
 
-pub(super) const SILENCE_FLOOR: f64 = 1e-7;
+/// Rising/falling gate trigger threshold for `InPort::TrigIn` edge detection.
+pub(super) const TRIG_THRESHOLD: f64 = 0.5;
+
+/// Inputs for resolving a pitch-tracked (`Fixed` or `Chromatic`) module's base frequency.
+#[derive(Clone, Copy)]
+pub(super) struct TrackedPitch {
+    pub mode: PitchTracking,
+    pub fixed_hz: f64,
+    pub note_pitch: f64,
+    pub rack_tune: f64,
+    pub tune_semitones: f32,
+    pub fine_cents: f32,
+    pub pitch_cv: f64,
+}
+
+/// Compute the cache-keyable `(pitch_arg, fixed_hz_for_mode)` coordinate for a pitch-tracked node:
+/// - `Fixed`: `(semitone_offset ∈ [-96, 96], sanitized fixed_hz)`
+/// - `Chromatic`: `(midi_note ∈ [-64, 180], 0.0)`
+#[inline]
+pub(super) fn tracked_pitch_arg(p: TrackedPitch) -> (f64, f64) {
+    let offset =
+        p.rack_tune + f64::from(p.tune_semitones) + f64::from(p.fine_cents) * 0.01 + p.pitch_cv;
+    match p.mode {
+        PitchTracking::Fixed => (
+            sanitize_clamp_f64(offset, -96.0, 96.0, 0.0),
+            sanitize_clamp_f64(p.fixed_hz, 0.0, 1e9, 440.0),
+        ),
+        PitchTracking::Chromatic => (
+            sanitize_clamp_f64(p.note_pitch + offset, -64.0, 180.0, 69.0),
+            0.0,
+        ),
+    }
+}
+
+/// Convert a [`tracked_pitch_arg`] coordinate into a sanitized frequency clamped to `[min_hz, max_hz]`.
+#[inline]
+pub(super) fn tracked_pitch_arg_to_hz(
+    mode: PitchTracking,
+    pitch_arg: f64,
+    fixed_hz: f64,
+    min_hz: f64,
+    max_hz: f64,
+    fallback_hz: f64,
+) -> f64 {
+    let raw_hz = match mode {
+        PitchTracking::Fixed => fixed_hz * semitones_to_ratio_f64(pitch_arg),
+        PitchTracking::Chromatic => midi_to_hz(pitch_arg),
+    };
+    sanitize_clamp_f64(raw_hz, min_hz, max_hz, fallback_hz)
+}
+
+/// Resolve a pitch-tracked (`Fixed` or `Chromatic`) module's base frequency in Hz,
+/// clamped safely into `[min_hz, max_hz]`.
+#[inline]
+pub(super) fn resolve_tracked_pitch_hz(
+    pitch: TrackedPitch,
+    min_hz: f64,
+    max_hz: f64,
+    fallback_hz: f64,
+) -> f64 {
+    let (pitch_arg, fixed_hz) = tracked_pitch_arg(pitch);
+    tracked_pitch_arg_to_hz(pitch.mode, pitch_arg, fixed_hz, min_hz, max_hz, fallback_hz)
+}
 
 /// Read-only view of the voice's inline per-voice P-lock table.
 #[derive(Clone, Copy)]
@@ -77,7 +139,6 @@ pub(super) struct TriggerCtx {
 pub(super) struct TriggerState<'a> {
     pub resonator_banks: &'a mut [ModalResonator],
     pub next_res_bank: usize,
-    pub max_res_decay_ms: f64,
 }
 
 /// Summed stereo audio and CV inputs gathered from a module's incoming patch cables.

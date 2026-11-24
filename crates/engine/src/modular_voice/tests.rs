@@ -2010,3 +2010,495 @@ fn drive_node_parallel_mix_stays_phase_aligned_across_sample_rates() {
         );
     }
 }
+
+#[test]
+fn control_stride_and_filter_cv_subrate_scale_across_sample_rates() {
+    let bank: SampleBank = Vec::new();
+    let zone = build_zone(
+        vec![
+            RackModule::new(1, "VCO", ModuleKind::Vco(VcoModule::default())),
+            RackModule::new(
+                2,
+                "LPF",
+                ModuleKind::Filter(FilterModule {
+                    mode: FilterMode::LowPass,
+                    cutoff_hz: 1_200.0,
+                    resonance: 0.35,
+                    mix: 0.75,
+                    ..FilterModule::default()
+                }),
+            ),
+            RackModule::new(
+                3,
+                "ModLfo",
+                ModuleKind::Lfo(LfoModule {
+                    shape: LfoShape::Sine,
+                    rate_hz: 6.0,
+                    retrigger: true,
+                    bipolar: true,
+                    ..LfoModule::default()
+                }),
+            ),
+            RackModule::new(4, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 3, 2, InPort::Cv, 1.5),
+            PatchCable::new(3, 2, 4, InPort::In, 1.0),
+        ],
+    );
+    let graph = compile_zone_graph(&zone).unwrap();
+    let filter_slot = graph.slot_for_module(2).unwrap();
+
+    let expected_cases = [
+        (8_000.0_f64, 1_u32, 0_u32),
+        (44_100.0, 15, 3),
+        (48_000.0, 15, 3),
+        (96_000.0, 31, 7),
+        (192_000.0, 63, 15),
+    ];
+
+    for (sr, exp_ctrl_mask, exp_flt_mask) in expected_cases {
+        let inactive = ModularVoice::new_boxed_inactive(sr);
+        assert_eq!(
+            inactive.control_mask, exp_ctrl_mask,
+            "sr={sr}: unexpected inactive control_mask"
+        );
+
+        let mut voice = ModularVoice::new_boxed(&spec(&zone, &graph, sr, 120.0), start(60, None));
+        assert_eq!(
+            voice.control_mask, exp_ctrl_mask,
+            "sr={sr}: unexpected triggered control_mask"
+        );
+        match voice.nodes[filter_slot] {
+            ModuleNode::Filter(ref flt) => assert_eq!(
+                flt.cv_subrate_mask(),
+                exp_flt_mask,
+                "sr={sr}: unexpected FilterNode cv_subrate_mask"
+            ),
+            _ => panic!("expected FilterNode at slot {filter_slot}"),
+        }
+
+        // Stepping one full control stride wraps control_counter back to 0 cleanly.
+        let stride = (exp_ctrl_mask + 1) as usize;
+        for step in 0..(stride * 2) {
+            assert_eq!(
+                voice.control_counter,
+                (step as u32) & exp_ctrl_mask,
+                "sr={sr} step={step}: control_counter cadence mismatch"
+            );
+            let f = voice.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+        }
+    }
+
+    // Retargeting across sample-rate switches refreshes both voice and filter masks with zero allocs.
+    let mut voice = ModularVoice::new_boxed(&spec(&zone, &graph, 48_000.0, 120.0), start(60, None));
+    assert_no_heap_operations(|| {
+        for (sr, exp_ctrl_mask, exp_flt_mask) in [
+            (96_000.0, 31_u32, 7_u32),
+            (192_000.0, 63, 15),
+            (44_100.0, 15, 3),
+            (48_000.0, 15, 3),
+        ] {
+            voice.retarget_from_zone(&spec(&zone, &graph, sr, 120.0), start(64, None), true);
+            assert_eq!(voice.control_mask, exp_ctrl_mask);
+            if let ModuleNode::Filter(ref flt) = voice.nodes[filter_slot] {
+                assert_eq!(flt.cv_subrate_mask(), exp_flt_mask);
+            } else {
+                panic!("expected FilterNode");
+            }
+            for _ in 0..128 {
+                let f = voice.next_frame(&bank, None);
+                assert!(f[0].is_finite() && f[1].is_finite());
+            }
+        }
+    });
+}
+
+#[test]
+fn resonator_high_pitch_cv_clamps_to_max_hz_without_recompute_thrash() {
+    use cadence_core::dsp::{NYQUIST_SAFE_RATIO, RESONATOR_MAX_HZ};
+
+    let bank: SampleBank = Vec::new();
+    let make_zone = |pitch_tracking: PitchTracking, fixed_hz: f32| {
+        build_zone(
+            vec![
+                RackModule::new(1, "Noise", ModuleKind::Noise(NoiseModule::default())),
+                RackModule::new(
+                    2,
+                    "PitchLfo",
+                    ModuleKind::Lfo(LfoModule {
+                        shape: LfoShape::Sine,
+                        rate_hz: 12.0,
+                        retrigger: true,
+                        bipolar: false,
+                        ..LfoModule::default()
+                    }),
+                ),
+                RackModule::new(
+                    3,
+                    "Res",
+                    ModuleKind::Resonator(ResonatorModule {
+                        mode: ResonatorMode::String,
+                        pitch_tracking,
+                        fixed_hz,
+                        decay_ms: 250.0,
+                        brightness: 0.5,
+                        mix: 1.0,
+                        ..ResonatorModule::default()
+                    }),
+                ),
+                RackModule::new(4, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 3, InPort::In, 1.0),
+                PatchCable::new(2, 2, 3, InPort::PitchCv, 48.0), // sweeps +0..+48 st above base!
+                PatchCable::new(3, 3, 4, InPort::In, 1.0),
+            ],
+        )
+    };
+
+    let chrom_zone = make_zone(PitchTracking::Chromatic, 440.0);
+    let fixed_zone = make_zone(PitchTracking::Fixed, RESONATOR_MAX_HZ);
+    let g_chrom = compile_zone_graph(&chrom_zone).unwrap();
+    let g_fixed = compile_zone_graph(&fixed_zone).unwrap();
+    let res_slot_c = g_chrom.slot_for_module(3).unwrap();
+    let res_slot_f = g_fixed.slot_for_module(3).unwrap();
+
+    for sr in [8_000.0_f64, 44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+        let expected_ceiling = (sr * NYQUIST_SAFE_RATIO).min(f64::from(RESONATOR_MAX_HZ));
+
+        // 1. Chromatic MIDI 127 (~12.54 kHz) + sweeping +0..+48 st PitchCv stays pinned at ceiling.
+        let mut vc =
+            ModularVoice::new_boxed(&spec(&chrom_zone, &g_chrom, sr, 120.0), start(127, None));
+        assert_no_heap_operations(|| {
+            for _ in 0..512 {
+                let f = vc.next_frame(&bank, None);
+                assert!(f[0].is_finite() && f[1].is_finite());
+            }
+        });
+        match vc.nodes[res_slot_c] {
+            ModuleNode::Resonator(ref res) => {
+                assert!(
+                    (res.applied_f0_hz() - expected_ceiling).abs() < 1e-6,
+                    "sr={sr}: chromatic applied_f0_hz={} != {expected_ceiling}",
+                    res.applied_f0_hz()
+                );
+                assert_eq!(
+                    res.param_update_count(),
+                    1,
+                    "sr={sr}: high PitchCv above {expected_ceiling} Hz must not thrash resonator recomputes"
+                );
+            }
+            _ => panic!("expected ResonatorNode"),
+        }
+
+        // 2. Fixed 12 kHz + sweeping +0..+48 st PitchCv stays pinned at ceiling.
+        let mut vf =
+            ModularVoice::new_boxed(&spec(&fixed_zone, &g_fixed, sr, 120.0), start(60, None));
+        assert_no_heap_operations(|| {
+            for _ in 0..512 {
+                let f = vf.next_frame(&bank, None);
+                assert!(f[0].is_finite() && f[1].is_finite());
+            }
+        });
+        match vf.nodes[res_slot_f] {
+            ModuleNode::Resonator(ref res) => {
+                assert!(
+                    (res.applied_f0_hz() - expected_ceiling).abs() < 1e-6,
+                    "sr={sr}: fixed applied_f0_hz={} != {expected_ceiling}",
+                    res.applied_f0_hz()
+                );
+                assert_eq!(
+                    res.param_update_count(),
+                    1,
+                    "sr={sr}: fixed high PitchCv above {expected_ceiling} Hz must not thrash resonator recomputes"
+                );
+            }
+            _ => panic!("expected ResonatorNode"),
+        }
+    }
+}
+
+#[test]
+fn pooled_resonator_voice_reuse_clears_prior_long_decay_tail_budget() {
+    let bank: SampleBank = Vec::new();
+    let make_res_zone = |decay_ms: f32, brightness: f32| {
+        build_zone(
+            vec![
+                RackModule::new(1, "Strike", ModuleKind::Noise(NoiseModule::default())),
+                RackModule::new(2, "StrikeVca", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(
+                    3,
+                    "StrikeEnv",
+                    ModuleKind::Env(EnvModule {
+                        mode: EnvMode::HoldDecay,
+                        attack_ms: 0.5,
+                        hold_ms: 0.0,
+                        decay_ms: 10.0,
+                        sustain: 0.0,
+                        release_ms: 10.0,
+                        trigger_mode: TriggerMode::OneShot,
+                        ..EnvModule::default()
+                    }),
+                ),
+                RackModule::new(
+                    4,
+                    "Plate",
+                    ModuleKind::Resonator(ResonatorModule {
+                        mode: ResonatorMode::Plate,
+                        decay_ms,
+                        brightness,
+                        mix: 1.0,
+                        ..ResonatorModule::default()
+                    }),
+                ),
+                RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+                PatchCable::new(4, 4, 5, InPort::In, 1.0),
+            ],
+        )
+    };
+
+    let long_zone = make_res_zone(8_000.0, 1.0);
+    let short_zone = make_res_zone(50.0, 0.5);
+    let g_long = compile_zone_graph(&long_zone).unwrap();
+    let g_short = compile_zone_graph(&short_zone).unwrap();
+
+    for sr in [44_100.0_f64, 48_000.0, 96_000.0, 192_000.0] {
+        let mut voice = ModularVoice::new_boxed_inactive(sr);
+        let default_tail = (sr * DEFAULT_TAIL_TIMEOUT_SEC) as u32;
+        let max_tail = (sr * MAX_RESONATOR_TAIL_SEC) as u32;
+
+        assert_no_heap_operations(|| {
+            // 1. Trigger 8000 ms bright Plate resonator: tail_frames must cover bright RT60 (> 20 s).
+            voice.begin_trigger_from_zone(&spec(&long_zone, &g_long, sr, 120.0));
+            voice.finalize_trigger(start(60, Some(480)), false, false);
+            assert!(
+                voice.tail_frames > (sr * 20.0) as u32 && voice.tail_frames <= max_tail,
+                "sr={sr}: 8000 ms resonator expected > 20 s tail budget, got {}",
+                voice.tail_frames
+            );
+            for _ in 0..256 {
+                let f = voice.next_frame(&bank, None);
+                assert!(f[0].is_finite() && f[1].is_finite());
+            }
+
+            // 2. Reuse inactive pooled slot for fresh 50 ms resonator: must NOT inherit 8000 ms tail!
+            voice.deactivate();
+            voice.begin_trigger_from_zone(&spec(&short_zone, &g_short, sr, 120.0));
+            voice.finalize_trigger(start(60, Some(480)), false, false);
+            assert_eq!(
+                voice.tail_frames, default_tail,
+                "sr={sr}: fresh 50 ms pooled slot inherited stale long tail_frames"
+            );
+
+            // 3. Re-trigger 8000 ms, then non-legato retarget while active to 50 ms: must snap tail!
+            voice.begin_trigger_from_zone(&spec(&long_zone, &g_long, sr, 120.0));
+            voice.finalize_trigger(start(60, Some(480)), false, false);
+            assert!(voice.tail_frames > (sr * 20.0) as u32);
+            voice.retarget_from_zone(
+                &spec(&short_zone, &g_short, sr, 120.0),
+                start(62, Some(480)),
+                false,
+            );
+            assert_eq!(
+                voice.tail_frames, default_tail,
+                "sr={sr}: non-legato retarget to 50 ms inherited stale long tail_frames"
+            );
+        });
+    }
+}
+
+#[test]
+fn post_trigger_upward_resonator_decay_modulation_preserves_tail_zero_alloc() {
+    let bank: SampleBank = Vec::new();
+    let short_zone = build_zone(
+        vec![
+            RackModule::new(1, "Strike", ModuleKind::Noise(NoiseModule::default())),
+            RackModule::new(2, "StrikeVca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(
+                3,
+                "StrikeEnv",
+                ModuleKind::Env(EnvModule {
+                    mode: EnvMode::HoldDecay,
+                    attack_ms: 0.5,
+                    hold_ms: 0.0,
+                    decay_ms: 10.0,
+                    sustain: 0.0,
+                    release_ms: 10.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(
+                4,
+                "Plate",
+                ModuleKind::Resonator(ResonatorModule {
+                    mode: ResonatorMode::Plate,
+                    decay_ms: 50.0,
+                    brightness: 0.85,
+                    mix: 1.0,
+                    ..ResonatorModule::default()
+                }),
+            ),
+            RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+            PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            PatchCable::new(4, 4, 5, InPort::In, 1.0),
+        ],
+    );
+    let graph = compile_zone_graph(&short_zone).unwrap();
+    let norm_4000 = ModuleParam::ResonatorDecay.normalize(4_000.0);
+
+    // 1. Across 44.1 / 48 / 96 / 192 kHz, raising ResonatorDecay post-trigger extends tail_frames
+    //    when entering tail countdown, with zero heap allocations.
+    for sr in [44_100.0_f64, 48_000.0, 96_000.0, 192_000.0] {
+        let mut voice =
+            ModularVoice::new_boxed(&spec(&short_zone, &graph, sr, 120.0), start(60, Some(480)));
+        let default_tail = (sr * DEFAULT_TAIL_TIMEOUT_SEC) as u32;
+        assert_eq!(voice.tail_frames, default_tail);
+
+        assert_no_heap_operations(|| {
+            // Run 2 ms (StrikeEnv still active), then raise ResonatorDecay to 4000 ms.
+            let pre_frames = (sr * 0.002) as usize;
+            for _ in 0..pre_frames {
+                let f = voice.next_frame(&bank, None);
+                assert!(f[0].is_finite() && f[1].is_finite());
+            }
+            voice.apply_continuous_module_param(4, ModuleParam::ResonatorDecay, norm_4000);
+
+            // Run 50 ms so StrikeEnv completes and enters tail countdown.
+            let enter_frames = (sr * 0.050) as usize;
+            for _ in 0..enter_frames {
+                let f = voice.next_frame(&bank, None);
+                assert!(f[0].is_finite() && f[1].is_finite());
+            }
+        });
+        assert!(
+            voice.is_active(),
+            "sr={sr}: voice should remain active during modulated 4000 ms tail"
+        );
+        assert!(
+            voice.tail_frames > (sr * 10.0) as u32,
+            "sr={sr}: tail_frames did not extend for post-trigger 4000 ms decay (got {})",
+            voice.tail_frames
+        );
+    }
+
+    // 2. End-to-end ringout check past 2.3 s (exceeding 2.0 s default cap) when decay is raised
+    //    BOTH before and AFTER StrikeEnv finishes!
+    let sr = 48_000.0_f64;
+    let mut long_zone = short_zone.clone();
+    if let ModuleKind::Resonator(ref mut res) = long_zone.modules[3].kind {
+        res.decay_ms = 5_000.0;
+    }
+    let mut voice_after_tail =
+        ModularVoice::new_boxed(&spec(&short_zone, &graph, sr, 120.0), start(60, Some(480)));
+    let mut late_peak = 0.0_f32;
+    assert_no_heap_operations(|| {
+        // Run 25 ms so StrikeEnv (10 ms) is already Done and tail countdown has begun.
+        for _ in 0..(sr * 0.025) as usize {
+            let f = voice_after_tail.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+        }
+        assert!(
+            voice_after_tail.tail_elapsed_frames > 0,
+            "expected voice to have entered tail countdown before modulation"
+        );
+        voice_after_tail.update_continuous_from_zone(&long_zone, 0.0, 0.0, 120.0);
+
+        let total = (sr * 2.3) as usize;
+        let window_start = (sr * 2.1) as usize;
+        for i in 0..total {
+            let f = voice_after_tail.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+            if i >= window_start {
+                late_peak = late_peak.max(f[0].abs()).max(f[1].abs());
+            }
+        }
+    });
+    assert!(
+        voice_after_tail.is_active() && late_peak > 1e-4,
+        "post-tail upward ResonatorDecay modulation must outlive 2.0 s cap (active={}, late_peak={late_peak})",
+        voice_after_tail.is_active()
+    );
+
+    // 3. Even if continuous modulation repeatedly wiggles ResonatorDecay on a stuck feedback loop,
+    //    tail_elapsed_frames caps total tail duration cleanly at MAX_RESONATOR_TAIL_SEC.
+    let stuck_sr = 8_000.0_f64;
+    let stuck_zone = build_zone(
+        vec![
+            RackModule::new(1, "Strike", ModuleKind::Noise(NoiseModule::default())),
+            RackModule::new(2, "StrikeVca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(
+                3,
+                "StrikeEnv",
+                ModuleKind::Env(EnvModule {
+                    mode: EnvMode::HoldDecay,
+                    attack_ms: 0.5,
+                    hold_ms: 0.0,
+                    decay_ms: 10.0,
+                    sustain: 0.0,
+                    release_ms: 10.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(
+                4,
+                "Plate",
+                ModuleKind::Resonator(ResonatorModule {
+                    mode: ResonatorMode::Plate,
+                    decay_ms: 8_000.0,
+                    brightness: 1.0,
+                    mix: 1.0,
+                    ..ResonatorModule::default()
+                }),
+            ),
+            RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+            PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            PatchCable::new(4, 4, 4, InPort::In, 2.0), // Ungated self-oscillating feedback!
+            PatchCable::new(5, 4, 5, InPort::In, 1.0),
+        ],
+    );
+    let g_stuck = compile_zone_graph(&stuck_zone).unwrap();
+    let mut v_stuck = ModularVoice::new_boxed(
+        &spec(&stuck_zone, &g_stuck, stuck_sr, 120.0),
+        start(60, Some(80)),
+    );
+    let norm_8000 = ModuleParam::ResonatorDecay.normalize(8_000.0);
+    let norm_7500 = ModuleParam::ResonatorDecay.normalize(7_500.0);
+    let max_frames = (stuck_sr * (MAX_RESONATOR_TAIL_SEC + 0.5)) as usize;
+    for i in 0..max_frames {
+        if !v_stuck.is_active() {
+            break;
+        }
+        if i % 256 == 0 {
+            let norm = if (i / 256) % 2 == 0 {
+                norm_8000
+            } else {
+                norm_7500
+            };
+            v_stuck.apply_continuous_module_param(4, ModuleParam::ResonatorDecay, norm);
+        }
+        let f = v_stuck.next_frame(&bank, None);
+        assert!(f[0].is_finite() && f[1].is_finite());
+    }
+    assert!(
+        !v_stuck.is_active(),
+        "ungated feedback resonator with continuous decay modulation must terminate by MAX_RESONATOR_TAIL_SEC"
+    );
+}

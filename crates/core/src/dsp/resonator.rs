@@ -13,8 +13,8 @@
 //!   with natural radial-asymmetry doublet splittings and bell-to-edge strike weighting.
 
 use crate::dsp::math::{
-    flush_denormal_f64, sanitize_clamp_f64, sanitize_sample_f64, sanitize_sample_rate,
-    DECAY_LN_60DB, LIN_FLOOR_F64, SMOOTH_SETTLE_EPS_F64,
+    flush_denormal_f64, mix_stereo_f64, sanitize_clamp_f64, sanitize_sample_f64,
+    sanitize_sample_rate, DECAY_LN_60DB, LIN_FLOOR_F64, SMOOTH_SETTLE_EPS_F64,
 };
 use crate::rack::ResonatorMode;
 use std::f64::consts::{PI, TAU};
@@ -350,7 +350,7 @@ impl ModalResonator {
             }
         }
 
-        [dry_l * (1.0 - m) + wet_l * m, dry_r * (1.0 - m) + wet_r * m]
+        mix_stereo_f64([dry_l, dry_r], [wet_l, wet_r], m)
     }
 
     /// Whether every active mode on both channels has decayed below `-120 dB` (`1e-6`).

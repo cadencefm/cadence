@@ -572,6 +572,7 @@ fn rising_edge_audio_health_alerts_midi_out_error_and_outcome_merge() {
             overloaded: true,
             failed: false,
             error_code: AudioErrorCode::OverloadCircuitBreaker,
+            ..AudioHealth::default()
         },
         ..AudioSnapshot::default()
     };

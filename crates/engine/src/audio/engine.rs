@@ -8,14 +8,22 @@ use super::voice_pool::{automation_position, LiveNote, TriggerRequest, VoicePool
 use super::voices::Voice;
 use super::*;
 use crate::mix_engine::MixerEngine;
-use cadence_core::dsp::{one_pole_decay_ms, sanitize_sample};
+use cadence_core::dsp::{control_stride_mask, one_pole_decay_ms, sanitize_sample};
 use cadence_core::mixer::ChannelRef;
 use cadence_core::runtime::{AudioInputStatus, CapturePhase};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
 use std::sync::atomic::{fence, Ordering};
 use std::sync::Arc;
 
-const METER_PUBLISH_STRIDE: usize = 256;
+/// Target continuous control / automation evaluation cadence (`750 Hz`:
+/// `64` frames @ 44.1/48 kHz, `128` @ 96 kHz, `256` @ 192 kHz).
+const CONTROL_TARGET_HZ: f64 = 750.0;
+/// Target live mixer meter seqlock publication cadence (`187.5 Hz`:
+/// `256` frames @ 44.1/48 kHz, `512` @ 96 kHz, `1024` @ 192 kHz).
+const METER_PUBLISH_TARGET_HZ: f64 = 187.5;
+/// Target master oscilloscope downsampling cadence (`1_500 Hz`:
+/// `32` frames @ 44.1/48 kHz, `64` @ 96 kHz, `128` @ 192 kHz).
+const WAVE_DOWNSAMPLE_TARGET_HZ: f64 = 1_500.0;
 
 /// Construct a [`ZoneTriggerCtx`] borrowing only read-only fields of `Engine`
 /// so callers can simultaneously borrow `voice_pool`, `scheduler`, or `mixer` mutably.
@@ -43,13 +51,16 @@ pub(super) struct Engine {
     sample_rate: f64,
     voice_pool: VoicePool,
     scheduler: StepScheduler,
-    control_counter: usize,
+    control_counter: u32,
+    control_mask: u32,
     mixer: Box<MixerEngine>,
     rendered_frames: u64,
     play_step: u64,
-    wave_counter: usize,
+    wave_counter: u32,
+    wave_mask: u32,
     wave_peak: f32,
-    meter_counter: usize,
+    meter_counter: u32,
+    meter_mask: u32,
     output_meter_decay: f32,
     level: f32,
     level_left: f32,
@@ -71,6 +82,10 @@ impl Engine {
         shared
             .prepared_delays
             .store(mixer.allocated_delay_count(), Ordering::Release);
+        shared.pdc_latency_frames.store(
+            mixer.total_output_latency_frames().min(u32::MAX as usize) as u32,
+            Ordering::Release,
+        );
         let sr = f64::from(sample_rate);
         let project_generation = shared.input_generation.load(Ordering::Acquire);
         let mut engine = Self {
@@ -92,12 +107,15 @@ impl Engine {
             voice_pool: VoicePool::new(sr),
             scheduler: StepScheduler::new(),
             control_counter: 0,
+            control_mask: control_stride_mask(sr, CONTROL_TARGET_HZ),
             mixer,
             rendered_frames: 0,
             play_step: 0,
             wave_counter: 0,
+            wave_mask: control_stride_mask(sr, WAVE_DOWNSAMPLE_TARGET_HZ),
             wave_peak: 0.0,
             meter_counter: 0,
+            meter_mask: control_stride_mask(sr, METER_PUBLISH_TARGET_HZ),
             output_meter_decay: one_pole_decay_ms(300.0, sr) as f32,
             level: 0.0,
             level_left: 0.0,
@@ -187,6 +205,12 @@ impl Engine {
             }
             let boundary = self.project_generation != self.publication.generation;
             self.mixer.adopt(&self.project, boundary);
+            self.shared.pdc_latency_frames.store(
+                self.mixer
+                    .total_output_latency_frames()
+                    .min(u32::MAX as usize) as u32,
+                Ordering::Release,
+            );
             if boundary {
                 self.project_generation = self.publication.generation;
                 self.voice_pool.clear_all();
@@ -669,7 +693,7 @@ impl Engine {
         if self.control_counter == 0 {
             self.update_control_block(playing);
         }
-        self.control_counter = (self.control_counter + 1) % CONTROL_BLOCK;
+        self.control_counter = self.control_counter.wrapping_add(1) & self.control_mask;
         if playing {
             self.scheduler
                 .advance_frame(self.project.step_seconds(), self.sample_rate);
@@ -732,13 +756,13 @@ impl Engine {
         self.level_right = (self.level_right * decay).max(out[1].abs());
         self.level = self.level_left.max(self.level_right);
 
-        // Peak-preserving signed-max waveform downsample over a 32-sample window.
+        // Peak-preserving signed-max waveform downsample at ~1_500 Hz across sample rates.
         let mono_sample = (out[0] + out[1]) * 0.5;
         if mono_sample.abs() >= self.wave_peak.abs() {
             self.wave_peak = mono_sample;
         }
-        self.wave_counter = self.wave_counter.wrapping_add(1);
-        if self.wave_counter.is_multiple_of(32) {
+        self.wave_counter = self.wave_counter.wrapping_add(1) & self.wave_mask;
+        if self.wave_counter == 0 {
             let index = self.shared.wave_write.load(Ordering::Relaxed);
             self.shared.waveform[index].store(self.wave_peak.to_bits(), Ordering::Relaxed);
             self.shared
@@ -747,9 +771,9 @@ impl Engine {
             self.wave_peak = 0.0;
         }
 
-        // Throttle mixer meter seqlock publication to once per 256 frames (~187 Hz @ 48 kHz).
-        self.meter_counter = self.meter_counter.wrapping_add(1);
-        if self.meter_counter.is_multiple_of(METER_PUBLISH_STRIDE) {
+        // Throttle mixer meter seqlock publication to ~187.5 Hz across sample rates.
+        self.meter_counter = self.meter_counter.wrapping_add(1) & self.meter_mask;
+        if self.meter_counter == 0 {
             self.shared
                 .peak
                 .store(self.level.to_bits(), Ordering::Relaxed);

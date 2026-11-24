@@ -7,9 +7,10 @@
 
 use crate::dsp::biquad::{DcBlocker, TptOnePoleLpf};
 use crate::dsp::math::{
-    db_to_lin, db_to_lin_f64, flush_denormal_f64, sanitize_clamp_f64, sanitize_frame,
-    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS,
-    LIN_FLOOR_F64,
+    clamp_freq_hz, control_stride_mask, db_to_lin, db_to_lin_f64, flush_denormal_f64,
+    mix_stereo_f64, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame, sanitize_sample,
+    sanitize_sample_f64, sanitize_sample_rate, BypassFader, BypassStep, LogSmoother, Smoother,
+    LIN_FLOOR_F64, NYQUIST_SAFE_RATIO,
 };
 use crate::mixer::{DriveMode, DrivePatch};
 
@@ -580,15 +581,17 @@ pub struct Drive {
     asymmetry: Smoother,
     output_gain: Smoother,
     mix: Smoother,
-    tone_hz: Smoother,
-    bypass_wet: Smoother,
+    tone_hz: LogSmoother,
+    tone_coeff: f64,
+    bypass: BypassFader,
     os: Halfband2x,
     dry_align: Halfband2xDryAlign,
     tone_lpf: TptOnePoleLpf,
     dc_blocker: DcBlocker,
+    last_patch: DrivePatch,
     has_processed: bool,
-    was_active: bool,
-    ctrl_count: u8,
+    ctrl_count: u32,
+    ctrl_mask: u32,
     cached_shaper_key: (u64, u64, DriveMode),
     cached_shaper: DriveShaperCoeffs,
     cached_tone_bits: u64,
@@ -600,6 +603,12 @@ impl Drive {
         let default = DrivePatch::default();
         let init_drive = f64::from(sanitize_sample(default.drive).clamp(0.0, 1.0));
         let init_asym = f64::from(sanitize_sample(default.asymmetry).clamp(-1.0, 1.0));
+        let init_tone = clamp_freq_hz(
+            f64::from(default.tone_hz),
+            f64::from(DRIVE_MIN_TONE_HZ),
+            sr,
+            f64::from(DRIVE_MAX_TONE_HZ),
+        );
         let mut d = Self {
             sample_rate: sr,
             mode: default.mode,
@@ -609,21 +618,37 @@ impl Drive {
             asymmetry: Smoother::new(init_asym, 4.0, sr),
             output_gain: Smoother::new(db_to_lin_f64(f64::from(default.output_db)), 4.0, sr),
             mix: Smoother::new(f64::from(default.mix), 4.0, sr),
-            tone_hz: Smoother::new(f64::from(default.tone_hz), 4.0, sr),
-            bypass_wet: Smoother::new(1.0, 1.5, sr),
+            tone_hz: LogSmoother::new_clamped(
+                init_tone,
+                f64::from(DRIVE_MIN_TONE_HZ),
+                sr * NYQUIST_SAFE_RATIO,
+            ),
+            tone_coeff: one_pole_coeff_ms(4.0, sr),
+            bypass: BypassFader::new(sr),
             os: Halfband2x::new(),
             dry_align: Halfband2xDryAlign::new(),
-            tone_lpf: TptOnePoleLpf::new(sr, f64::from(default.tone_hz)),
+            tone_lpf: TptOnePoleLpf::new(sr, init_tone),
             dc_blocker: DcBlocker::new(sr),
+            last_patch: default,
             has_processed: false,
-            was_active: false,
             ctrl_count: 0,
+            ctrl_mask: control_stride_mask(sr, 6_000.0),
             cached_shaper_key: (init_drive.to_bits(), init_asym.to_bits(), default.mode),
             cached_shaper: DriveShaperCoeffs::new(init_drive, init_asym, default.mode),
-            cached_tone_bits: f64::from(default.tone_hz).to_bits(),
+            cached_tone_bits: init_tone.to_bits(),
         };
         d.set_parameters(default);
         d
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_idle(&self) -> bool {
+        self.bypass.is_idle()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn tone_hz_current(&self) -> f64 {
+        self.tone_hz.current()
     }
 
     pub fn reset(&mut self) {
@@ -637,17 +662,16 @@ impl Drive {
         self.asymmetry.snap(self.asymmetry.target());
         self.output_gain.snap(self.output_gain.target());
         self.mix.snap(self.mix.target());
-        self.tone_hz.snap(self.tone_hz.target());
-        self.tone_lpf
-            .set_cutoff(self.sample_rate, self.tone_hz.current());
-        self.cached_tone_bits = self.tone_hz.current().to_bits();
+        self.tone_hz.snap(f64::from(self.last_patch.tone_hz));
+        let tone = self.tone_hz.current();
+        self.tone_lpf.set_cutoff(self.sample_rate, tone);
+        self.cached_tone_bits = tone.to_bits();
         let d = self.drive.current();
         let a = self.asymmetry.current();
         self.cached_shaper_key = (d.to_bits(), a.to_bits(), self.mode);
         self.cached_shaper = DriveShaperCoeffs::new(d, a, self.mode);
-        self.bypass_wet.snap(1.0);
+        self.bypass.reset();
         self.has_processed = false;
-        self.was_active = false;
         self.ctrl_count = 0;
     }
 
@@ -660,19 +684,32 @@ impl Drive {
             1.0,
             f64::from(def.asymmetry),
         );
-        let out_gain = db_to_lin_f64(sanitize_clamp_f64(
+        let out_db = sanitize_clamp_f64(
             f64::from(patch.output_db),
             f64::from(DRIVE_MIN_OUTPUT_DB),
             f64::from(DRIVE_MAX_OUTPUT_DB),
             f64::from(def.output_db),
-        ));
+        );
         let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
-        let tone = sanitize_clamp_f64(
+        let tone = clamp_freq_hz(
             f64::from(patch.tone_hz),
             f64::from(DRIVE_MIN_TONE_HZ),
-            self.sample_rate * 0.45,
+            self.sample_rate,
             f64::from(DRIVE_MAX_TONE_HZ),
         );
+        let sanitized = DrivePatch {
+            mode: patch.mode,
+            drive: drive as f32,
+            asymmetry: asym as f32,
+            tone_hz: tone as f32,
+            output_db: out_db as f32,
+            mix: mix as f32,
+        };
+        if self.has_processed && sanitized == self.last_patch {
+            return;
+        }
+        self.last_patch = sanitized;
+        let out_gain = db_to_lin_f64(out_db);
         if !self.has_processed {
             self.mode = patch.mode;
             self.prev_mode = patch.mode;
@@ -704,28 +741,24 @@ impl Drive {
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
-        if bypassed && !self.was_active {
-            self.bypass_wet.snap(0.0);
-            return dry;
-        }
-        self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
-        let bypass_w = self.bypass_wet.next();
-        if bypassed && bypass_w <= BYPASS_SETTLE_EPS {
-            self.bypass_wet.snap(0.0);
-            self.os.reset();
-            self.dry_align.reset();
-            self.tone_lpf.reset();
-            self.dc_blocker.reset();
-            self.was_active = false;
-            return dry;
-        }
-        self.was_active = true;
+        let bypass_w = match self.bypass.step(bypassed) {
+            BypassStep::Idle => return dry,
+            BypassStep::SettledBypass => {
+                self.os.reset();
+                self.dry_align.reset();
+                self.tone_lpf.reset();
+                self.dc_blocker.reset();
+                self.bypass.mark_idle();
+                return dry;
+            }
+            BypassStep::Active(w) => w,
+        };
 
         let drv = self.drive.next();
         let asym = self.asymmetry.next();
         let out_g = self.output_gain.next();
         let mix = self.mix.next();
-        let tone = self.tone_hz.next();
+        let tone = self.tone_hz.step(self.tone_coeff);
         let m_xf = self.mode_xfade.next();
         if self.ctrl_count == 0 {
             let tone_bits = tone.to_bits();
@@ -734,7 +767,7 @@ impl Drive {
                 self.tone_lpf.set_cutoff(self.sample_rate, tone);
             }
         }
-        self.ctrl_count = (self.ctrl_count + 1) & 7;
+        self.ctrl_count = self.ctrl_count.wrapping_add(1) & self.ctrl_mask;
 
         let dry64 = [f64::from(dry[0]), f64::from(dry[1])];
         let dry_aligned = self.dry_align.process_stereo(dry64);
@@ -761,24 +794,9 @@ impl Drive {
         let dc_free = self.dc_blocker.process_stereo(shaped);
         let toned = self.tone_lpf.process_stereo(dc_free);
         let wet = [toned[0] * out_g, toned[1] * out_g];
-        let active_out = if mix >= 1.0 - LIN_FLOOR_F64 {
-            wet
-        } else {
-            let inv_mix = 1.0 - mix;
-            [
-                dry_aligned[0] * inv_mix + wet[0] * mix,
-                dry_aligned[1] * inv_mix + wet[1] * mix,
-            ]
-        };
-        if bypass_w >= 1.0 - LIN_FLOOR_F64 {
-            [active_out[0] as f32, active_out[1] as f32]
-        } else {
-            let dry_bypass = 1.0 - bypass_w;
-            [
-                (dry64[0] * dry_bypass + active_out[0] * bypass_w) as f32,
-                (dry64[1] * dry_bypass + active_out[1] * bypass_w) as f32,
-            ]
-        }
+        let active_out = mix_stereo_f64(dry_aligned, wet, mix);
+        let out = mix_stereo_f64(dry64, active_out, bypass_w);
+        [out[0] as f32, out[1] as f32]
     }
 }
 
@@ -1454,6 +1472,82 @@ mod tests {
                     "sr={sr} freq={freq:.0} Hz: parallel Drive(drive=0, mix=0.5) combed to {gain_db:+.2} dB"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn drive_tone_smooths_logarithmically_and_bypass_idles_across_sample_rates() {
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            let mut drv = Drive::new(sr);
+            assert!(drv.is_idle());
+            let start_hz = 800.0_f32;
+            let target_hz = 12_800.0_f32;
+            let base = DrivePatch {
+                mode: DriveMode::Tape,
+                drive: 0.6,
+                asymmetry: 0.2,
+                tone_hz: start_hz,
+                output_db: 0.0,
+                mix: 0.75,
+            };
+            drv.set_parameters(base);
+            let _ = drv.process([0.3, -0.3], false);
+            assert!(!drv.is_idle());
+            assert!((drv.tone_hz_current() - f64::from(start_hz)).abs() < 1e-6);
+
+            let swept = DrivePatch {
+                tone_hz: target_hz,
+                ..base
+            };
+            drv.set_parameters(swept);
+
+            // At t = tau * ln(2) (tau = 4 ms), LogSmoother sits at geometric mean sqrt(800 * 12800) = 3200 Hz.
+            let half_frames = (0.004 * 2.0_f64.ln() * sr).round() as usize;
+            let mut prev = drv.tone_hz_current();
+            for _ in 0..half_frames {
+                let y = drv.process([0.2, -0.2], false);
+                assert!(y[0].is_finite() && y[1].is_finite());
+                let cur = drv.tone_hz_current();
+                assert!(cur >= prev - 1e-9 && cur <= f64::from(target_hz) + 1e-6);
+                prev = cur;
+            }
+            let geo_mean = (f64::from(start_hz) * f64::from(target_hz)).sqrt();
+            assert!(
+                (drv.tone_hz_current() - geo_mean).abs() / geo_mean < 0.05,
+                "sr={sr}: expected log midpoint ~{geo_mean:.1} Hz, got {:.1} Hz",
+                drv.tone_hz_current()
+            );
+
+            for _ in 0..((sr * 0.15) as usize) {
+                let _ = drv.process([0.2, -0.2], false);
+            }
+            assert!(
+                (drv.tone_hz_current() - f64::from(target_hz)).abs() < 1e-2,
+                "sr={sr}: tone_hz did not settle to {target_hz}, got {}",
+                drv.tone_hz_current()
+            );
+
+            // Bypass fades cleanly to idle and clears oversampler/filter state.
+            for _ in 0..((sr * 0.03) as usize) {
+                let y = drv.process([0.4, -0.4], true);
+                assert!(y[0].is_finite() && y[1].is_finite());
+            }
+            assert!(drv.is_idle(), "sr={sr}: bypassed Drive must idle");
+            assert_eq!(drv.process([0.4, -0.4], true), [0.4, -0.4]);
+
+            // Repeated NaN patches sanitize deterministically without poisoning state.
+            let nan_patch = DrivePatch {
+                mode: DriveMode::Tape,
+                drive: f32::NAN,
+                asymmetry: f32::NAN,
+                tone_hz: f32::NAN,
+                output_db: f32::NAN,
+                mix: f32::NAN,
+            };
+            drv.set_parameters(nan_patch);
+            drv.set_parameters(nan_patch);
+            let y = drv.process([0.5, -0.5], false);
+            assert!(y[0].is_finite() && y[1].is_finite());
         }
     }
 }

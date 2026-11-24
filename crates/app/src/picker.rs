@@ -1464,7 +1464,7 @@ impl App {
 
     pub(crate) fn open_audio_buffer_size_picker(&mut self) -> Result<Outcome> {
         let sr = self.effective_audio_sample_rate(0);
-        let auto_fr = cadence_core::runtime::default_auto_buffer_frames();
+        let auto_fr = cadence_core::runtime::default_auto_buffer_frames(sr);
         let mut sizes: Vec<Option<u32>> = vec![None];
         let mut items: Vec<(Id, String, String)> = vec![(
             0,

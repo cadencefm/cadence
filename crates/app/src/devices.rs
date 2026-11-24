@@ -138,7 +138,7 @@ pub fn format_buffer_latency(frames: u32, sample_rate: u32) -> String {
 
 /// Canonical label for the automatic buffer size option (`None` in `UserConfig`).
 pub(crate) const fn auto_buffer_label() -> &'static str {
-    "Auto (512 / 1024 dbg)"
+    "Auto (SR-scaled)"
 }
 
 /// Cycle `[None, Some(items[0]), Some(items[1]), ...]` cyclically by `dir`.
@@ -404,7 +404,7 @@ impl App {
             }
             None => format!(
                 "Audio Buffer Size → Auto ({})",
-                format_buffer_latency(default_auto_buffer_frames(), sr)
+                format_buffer_latency(default_auto_buffer_frames(sr), sr)
             ),
         };
         Outcome {

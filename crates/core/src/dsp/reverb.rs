@@ -10,8 +10,9 @@
 use crate::dsp::biquad::TptOnePoleLpf;
 use crate::dsp::gain::stereo_ms_width_uncorrelated;
 use crate::dsp::math::{
-    flush_denormal_f32, hann_fade_in, log_to_norm, sanitize_clamp_f64, sanitize_frame,
-    sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS, TAIL_SILENCE_FLOOR_F32,
+    clamp_freq_hz, control_stride_mask, flush_denormal_f32, hann_fade_in, log_to_norm,
+    mix_stereo_f32, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame, sanitize_sample_rate,
+    BypassFader, BypassStep, LogSmoother, Smoother, NYQUIST_SAFE_RATIO, TAIL_SILENCE_FLOOR_F32,
 };
 use crate::mixer::ReverbPatch;
 
@@ -199,16 +200,18 @@ pub struct Reverb {
     size_xfade: f64,
     size_xfade_step: f64,
     feedback: [Smoother; LINES],
-    damping_hz: Smoother,
+    damping_hz: LogSmoother,
+    damping_coeff: f64,
+    cached_damping_bits: u64,
     predelay_frames: Smoother,
     mix: Smoother,
     width: Smoother,
-    bypass_wet: Smoother,
+    bypass: BypassFader,
     target: ReverbPatch,
-    ctrl_count: u8,
+    ctrl_count: u32,
+    ctrl_mask: u32,
     silent_bypass_frames: u32,
     has_processed: bool,
-    was_active: bool,
 }
 
 impl Reverb {
@@ -221,6 +224,12 @@ impl Reverb {
         let diff_cap = (sr * 0.008).ceil() as usize;
         let diffuser_lengths = coprime_scaled_lengths(BASE_DIFFUSER_48K, 1.0, sr, diff_cap);
         let default = ReverbPatch::default();
+        let init_damp = clamp_freq_hz(
+            f64::from(default.damping_hz),
+            200.0,
+            sr,
+            f64::from(default.damping_hz),
+        );
         let initial_lengths = coprime_scaled_lengths(
             BASE_FDN_48K,
             0.65 + 1.35 * f64::from(default.size),
@@ -234,25 +243,25 @@ impl Reverb {
             predelay: std::array::from_fn(|_| MonoRing::new(predelay_cap)),
             diffuser: std::array::from_fn(|_| MonoRing::new(diff_cap)),
             diffuser_lengths,
-            damping_lpf: std::array::from_fn(|_| {
-                TptOnePoleLpf::new(sr, f64::from(default.damping_hz))
-            }),
+            damping_lpf: std::array::from_fn(|_| TptOnePoleLpf::new(sr, init_damp)),
             lengths_a: initial_lengths,
             lengths_b: initial_lengths,
             target_lengths: initial_lengths,
             size_xfade: 1.0,
             size_xfade_step: 1.0 / xfade_frames,
             feedback: std::array::from_fn(|_| Smoother::new(0.0, 5.0, sr)),
-            damping_hz: Smoother::new(f64::from(default.damping_hz), 5.0, sr),
+            damping_hz: LogSmoother::new_clamped(init_damp, 200.0, sr * NYQUIST_SAFE_RATIO),
+            damping_coeff: one_pole_coeff_ms(5.0, sr),
+            cached_damping_bits: init_damp.to_bits(),
             predelay_frames: Smoother::new(0.0, 5.0, sr),
             mix: Smoother::new(f64::from(default.mix), 5.0, sr),
             width: Smoother::new(f64::from(default.width), 5.0, sr),
-            bypass_wet: Smoother::new(1.0, 1.5, sr),
+            bypass: BypassFader::new(sr),
             target: default,
             ctrl_count: 0,
+            ctrl_mask: control_stride_mask(sr, 3_000.0),
             silent_bypass_frames: 0,
             has_processed: false,
-            was_active: false,
         };
         effect.set_parameters(default);
         effect
@@ -260,7 +269,12 @@ impl Reverb {
 
     #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
-        !self.was_active
+        self.bypass.is_idle()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn damping_hz_current(&self) -> f64 {
+        self.damping_hz.current()
     }
 
     /// Integer-prime Schroeder diffuser delay lengths in frames at the active sample rate.
@@ -293,19 +307,19 @@ impl Reverb {
         for fb in &mut self.feedback {
             fb.snap(fb.target());
         }
-        self.damping_hz.snap(self.damping_hz.target());
+        self.damping_hz.snap(f64::from(self.target.damping_hz));
         let damp = self.damping_hz.current();
+        self.cached_damping_bits = damp.to_bits();
         for lpf in &mut self.damping_lpf {
             lpf.set_cutoff(self.sample_rate, damp);
         }
         self.predelay_frames.snap(self.predelay_frames.target());
         self.mix.snap(self.mix.target());
         self.width.snap(self.width.target());
-        self.bypass_wet.snap(1.0);
+        self.bypass.reset();
         self.ctrl_count = 0;
         self.silent_bypass_frames = 0;
         self.has_processed = false;
-        self.was_active = false;
         self.set_parameters(self.target);
     }
 
@@ -318,10 +332,10 @@ impl Reverb {
             30.0,
             f64::from(def.decay_seconds),
         );
-        let damp_hz = sanitize_clamp_f64(
+        let damp_hz = clamp_freq_hz(
             f64::from(patch.damping_hz),
             200.0,
-            self.sample_rate * 0.45,
+            self.sample_rate,
             f64::from(def.damping_hz),
         );
         let predelay_ms = sanitize_clamp_f64(
@@ -368,6 +382,7 @@ impl Reverb {
                 fb.snap(val);
             }
             self.damping_hz.snap(damp_hz);
+            self.cached_damping_bits = self.damping_hz.current().to_bits();
             for lpf in &mut self.damping_lpf {
                 lpf.set_cutoff(self.sample_rate, damp_hz);
             }
@@ -392,33 +407,31 @@ impl Reverb {
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
-        if bypassed && !self.was_active {
-            self.bypass_wet.snap(0.0);
-            self.lengths_a = self.target_lengths;
-            self.lengths_b = self.target_lengths;
-            self.size_xfade = 1.0;
-            return dry;
-        }
+        let (bypass_w, bypass_settled) = match self.bypass.step(bypassed) {
+            BypassStep::Idle => {
+                self.lengths_a = self.target_lengths;
+                self.lengths_b = self.target_lengths;
+                self.size_xfade = 1.0;
+                return dry;
+            }
+            BypassStep::SettledBypass => (0.0, true),
+            BypassStep::Active(w) => {
+                self.silent_bypass_frames = 0;
+                (w, false)
+            }
+        };
 
-        self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
-        let bypass_w = self.bypass_wet.next();
-        let bypass_settled = bypassed && bypass_w <= BYPASS_SETTLE_EPS;
-        if !bypassed {
-            self.was_active = true;
-            self.silent_bypass_frames = 0;
-        } else if bypass_settled {
-            self.bypass_wet.snap(0.0);
-        } else {
-            self.silent_bypass_frames = 0;
-        }
-
-        let damp = self.damping_hz.next();
-        if self.ctrl_count == 0 && !self.damping_hz.is_settled() {
-            for lpf in &mut self.damping_lpf {
-                lpf.set_cutoff(self.sample_rate, damp);
+        let damp = self.damping_hz.step(self.damping_coeff);
+        if self.ctrl_count == 0 {
+            let damp_bits = damp.to_bits();
+            if damp_bits != self.cached_damping_bits {
+                self.cached_damping_bits = damp_bits;
+                for lpf in &mut self.damping_lpf {
+                    lpf.set_cutoff(self.sample_rate, damp);
+                }
             }
         }
-        self.ctrl_count = (self.ctrl_count + 1) & 15;
+        self.ctrl_count = self.ctrl_count.wrapping_add(1) & self.ctrl_mask;
 
         let predelay_frames = self.predelay_frames.next();
         let mix = self.mix.next();
@@ -531,7 +544,7 @@ impl Reverb {
                     self.lengths_b = self.target_lengths;
                     self.size_xfade = 1.0;
                     self.silent_bypass_frames = 0;
-                    self.was_active = false;
+                    self.bypass.mark_idle();
                 }
             } else {
                 self.silent_bypass_frames = 0;
@@ -540,12 +553,7 @@ impl Reverb {
         }
 
         wet = stereo_ms_width_uncorrelated(wet, width);
-        let eff_wet = (mix * bypass_w) as f32;
-        let eff_dry = 1.0 - eff_wet;
-        [
-            dry[0] * eff_dry + wet[0] * eff_wet,
-            dry[1] * eff_dry + wet[1] * eff_wet,
-        ]
+        mix_stereo_f32(dry, wet, (mix * bypass_w) as f32)
     }
 }
 
@@ -598,8 +606,8 @@ mod tests {
                 }
             }
 
-            // Direct Schroeder allpass magnitude verification near Nyquist (0.45 * sr) & midband.
-            for &freq in &[400.0_f64, 4_000.0, f64::from(sr) * 0.45] {
+            // Direct Schroeder allpass magnitude verification near Nyquist (NYQUIST_SAFE_RATIO * sr) & midband.
+            for &freq in &[400.0_f64, 4_000.0, f64::from(sr) * NYQUIST_SAFE_RATIO] {
                 let mut ap = MonoRing::new(diffs[0] + 8);
                 let warmup = sr as usize / 4;
                 let measure = sr as usize / 4;
@@ -741,6 +749,70 @@ mod tests {
             });
             let y = verb.process([0.5, -0.5], false);
             assert!(y[0].is_finite() && y[1].is_finite());
+        }
+    }
+
+    #[test]
+    fn reverb_damping_smooths_logarithmically_across_sample_rates() {
+        for sr in [44_100u32, 48_000, 96_000, 192_000] {
+            let sr_f = f64::from(sr);
+            let mut verb = Reverb::new(sr);
+            let start_hz = 400.0_f32;
+            let target_hz = 10_000.0_f32;
+            verb.set_parameters(ReverbPatch {
+                damping_hz: start_hz,
+                mix: 1.0,
+                ..ReverbPatch::default()
+            });
+            let _ = verb.process([0.2, -0.2], false);
+            assert!((verb.damping_hz_current() - f64::from(start_hz)).abs() < 1e-6);
+
+            verb.set_parameters(ReverbPatch {
+                damping_hz: target_hz,
+                mix: 1.0,
+                ..ReverbPatch::default()
+            });
+
+            // At t = tau * ln(2) (tau = 5 ms), LogSmoother reaches geometric mean sqrt(400 * 10000) = 2000 Hz.
+            let half_frames = (0.005 * 2.0_f64.ln() * sr_f).round() as usize;
+            let mut prev = verb.damping_hz_current();
+            for _ in 0..half_frames {
+                let y = verb.process([0.0, 0.0], false);
+                assert!(y[0].is_finite() && y[1].is_finite());
+                let cur = verb.damping_hz_current();
+                assert!(cur >= prev - 1e-9 && cur <= f64::from(target_hz) + 1e-6);
+                prev = cur;
+            }
+            let geo_mean = (f64::from(start_hz) * f64::from(target_hz)).sqrt();
+            assert!(
+                (verb.damping_hz_current() - geo_mean).abs() / geo_mean < 0.05,
+                "sr={sr}: expected log midpoint ~{geo_mean:.1} Hz, got {:.1} Hz",
+                verb.damping_hz_current()
+            );
+
+            for _ in 0..((sr_f * 0.20) as usize) {
+                let _ = verb.process([0.0, 0.0], false);
+            }
+            assert!(
+                (verb.damping_hz_current() - f64::from(target_hz)).abs() < 1e-2,
+                "sr={sr}: damping_hz did not settle to {target_hz}, got {}",
+                verb.damping_hz_current()
+            );
+
+            // Out-of-range frequency clamps cleanly to NYQUIST_SAFE_RATIO * sr.
+            verb.set_parameters(ReverbPatch {
+                damping_hz: 1_000_000.0,
+                mix: 1.0,
+                ..ReverbPatch::default()
+            });
+            for _ in 0..((sr_f * 0.20) as usize) {
+                let _ = verb.process([0.0, 0.0], false);
+            }
+            assert!(
+                verb.damping_hz_current() <= sr_f * NYQUIST_SAFE_RATIO + 1e-6,
+                "sr={sr}: damping_hz exceeded Nyquist cap: {}",
+                verb.damping_hz_current()
+            );
         }
     }
 }

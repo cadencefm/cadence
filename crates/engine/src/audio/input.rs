@@ -315,7 +315,9 @@ pub(super) fn process_input_slice<T: InputSample>(
     if state.clipped {
         shared.input_clipped.store(true, Ordering::Relaxed);
     }
-    shared.input_callbacks.fetch_add(1, Ordering::Relaxed);
+    shared
+        .input_frames_seen
+        .fetch_add(frames as u64, Ordering::Relaxed);
     if any_nonzero {
         shared.input_nonzero_seen.store(true, Ordering::Relaxed);
     }
@@ -563,8 +565,9 @@ pub(super) fn resolve_input_stream(
 
     // Use the OS hardware's native input buffer size when Buffer Size is `Auto` (`None`) so
     // CoreAudio/Bluetooth HFP/USB interfaces never fight an explicit fixed input buffer size.
-    let target_buf = preferred_buffer_frames
-        .and_then(|_| resolve_target_buffer_frames(preferred_buffer_frames, buffer_range));
+    let target_buf = preferred_buffer_frames.and_then(|_| {
+        resolve_target_buffer_frames(preferred_buffer_frames, buffer_range, sample_rate)
+    });
     let buffer_size = match target_buf {
         Some(frames) => cpal::BufferSize::Fixed(frames),
         None => cpal::BufferSize::Default,

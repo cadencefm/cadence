@@ -3,7 +3,7 @@
 
 use crate::dsp::math::{
     decay_coeff_60db_ms, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_sample_f64,
-    sanitize_sample_rate, DECAY_LN_60DB, TAIL_SILENCE_FLOOR_F64,
+    sanitize_sample_rate, CHOKE_MS, DECAY_LN_60DB, TAIL_SILENCE_FLOOR_F64,
 };
 use crate::filter_patterns::CompiledFilterPattern;
 use crate::rack::TriggerMode;
@@ -112,10 +112,10 @@ impl AdsrState {
     pub fn choke(&mut self, sample_rate: f64) {
         if self.stage != AdsrStage::Done {
             let sr = sanitize_sample_rate(sample_rate);
-            let frames = (0.0035 * sr).round().max(1.0) as u64;
+            let frames = (CHOKE_MS * 0.001 * sr).round().max(1.0) as u64;
             self.stage = AdsrStage::Release;
             self.release_frames = frames;
-            self.release_coeff = decay_coeff_60db_ms(3.5, sr);
+            self.release_coeff = decay_coeff_60db_ms(CHOKE_MS, sr);
             self.remaining = frames;
         }
     }
@@ -250,7 +250,7 @@ impl HoldDecayEnv {
             self.hold_frames -= 1;
         } else {
             self.level *= self.decay_coeff;
-            if self.level < 1e-12 {
+            if self.level < ENV_SILENCE {
                 self.level = 0.0;
             }
         }
@@ -645,7 +645,7 @@ impl ModularEnv {
             EnvMode::Adsr => self.adsr.choke(sr),
             EnvMode::HoldDecay => {
                 if !self.hd_done {
-                    self.hd_release_coeff = decay_coeff_60db_ms(3.5, sr);
+                    self.hd_release_coeff = decay_coeff_60db_ms(CHOKE_MS, sr);
                     self.hd_releasing = true;
                 }
             }
@@ -960,6 +960,7 @@ pub struct RhythmicEnv {
     sample_rate: f64,
     pattern: CompiledFilterPattern,
     decay_coef: f64,
+    cached_decay_tau_bits: u64,
     fast_attack: f64,
     smooth_attack: f64,
     env_raw: f64,
@@ -995,10 +996,12 @@ impl RhythmicEnv {
 
     pub fn new(sample_rate: f64) -> Self {
         let sr = sanitize_sample_rate(sample_rate);
+        let default_tau = Self::DEFAULT_DECAY_MS * 0.001;
         Self {
             sample_rate: sr,
             pattern: CompiledFilterPattern::default(),
-            decay_coef: (-1.0 / (0.24 * sr)).exp(),
+            decay_coef: (-1.0 / (default_tau * sr)).exp(),
+            cached_decay_tau_bits: default_tau.to_bits(),
             fast_attack: one_pole_coeff_ms(Self::FAST_ATTACK_MS, sr),
             smooth_attack: one_pole_coeff_ms(Self::SMOOTH_ATTACK_MS, sr),
             env_raw: 0.0,
@@ -1025,7 +1028,11 @@ impl RhythmicEnv {
     pub fn set_pattern(&mut self, compiled: CompiledFilterPattern, env_decay_ms: f32) {
         self.pattern = compiled;
         let tau = Self::sanitize_decay_sec(env_decay_ms);
-        self.decay_coef = (-1.0 / (tau * self.sample_rate)).exp();
+        let tau_bits = tau.to_bits();
+        if tau_bits != self.cached_decay_tau_bits {
+            self.cached_decay_tau_bits = tau_bits;
+            self.decay_coef = (-1.0 / (tau * self.sample_rate)).exp();
+        }
     }
 
     /// Synchronize the rhythmic envelope to the transport clock (called once per control block).
@@ -1532,5 +1539,78 @@ mod tests {
         assert!(prev
             .iter()
             .all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+    }
+
+    #[test]
+    fn choke_and_hold_decay_silence_floor_stay_aligned_across_sample_rates() {
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            let choke_frames = (CHOKE_MS * 0.001 * sr).round() as usize;
+
+            // 1. AdsrState choke decays at CHOKE_MS to -60 dB and finishes cleanly.
+            let mut adsr = AdsrState::new(sr, 0.5, 40.0, 500.0, TriggerMode::Gate);
+            for _ in 0..((sr * 0.002) as usize) {
+                adsr.next(1.0);
+            }
+            assert!((adsr.level() - 1.0).abs() < 1e-6);
+            adsr.choke(sr);
+            let mut prev = adsr.level();
+            for _ in 0..(choke_frames.saturating_sub(1)) {
+                let v = adsr.next(1.0);
+                assert!(v <= prev && !adsr.is_done());
+                prev = v;
+            }
+            assert!(
+                (prev - 1e-3).abs() < 1e-3,
+                "sr={sr}: expected ~-60 dB near end of CHOKE_MS, got {prev}"
+            );
+            assert_eq!(adsr.next(1.0), 0.0);
+            assert!(adsr.is_done());
+
+            // 2. ModularEnv HoldDecay choke uses identical CHOKE_MS rate and terminates at TAIL_SILENCE_FLOOR_F64.
+            let mut mod_hd = ModularEnv::new(
+                sr,
+                ModularEnvParams {
+                    mode: EnvMode::HoldDecay,
+                    hold_ms: 50.0,
+                    decay_ms: 500.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..ModularEnvParams::default()
+                },
+            );
+            let _ = mod_hd.next(0.0);
+            mod_hd.choke(sr);
+            for _ in 0..choke_frames {
+                let _ = mod_hd.next(0.0);
+            }
+            assert!(
+                (mod_hd.level() - 1e-3).abs() < 5e-4,
+                "sr={sr}: HoldDecay choke after CHOKE_MS expected ~1e-3, got {}",
+                mod_hd.level()
+            );
+            let full_drain = (CHOKE_MS * 0.001 * 2.5 * sr).ceil() as usize;
+            for _ in 0..full_drain {
+                let _ = mod_hd.next(0.0);
+            }
+            assert!(mod_hd.is_done(), "sr={sr}: HoldDecay choke must complete");
+            assert_eq!(mod_hd.level(), 0.0);
+
+            // 3. Standalone HoldDecayEnv flushes cleanly to 0.0 once below TAIL_SILENCE_FLOOR_F64.
+            let mut hd = HoldDecayEnv::new(sr, 0.0, 20.0);
+            let mut saw_floor_flush = false;
+            let limit = (sr * 0.08) as usize;
+            for _ in 0..limit {
+                let _ = hd.next_sample();
+                let lvl = hd.level();
+                assert!(lvl == 0.0 || lvl >= TAIL_SILENCE_FLOOR_F64);
+                if lvl == 0.0 {
+                    saw_floor_flush = true;
+                    break;
+                }
+            }
+            assert!(
+                saw_floor_flush,
+                "sr={sr}: HoldDecayEnv must flush cleanly at TAIL_SILENCE_FLOOR_F64"
+            );
+        }
     }
 }

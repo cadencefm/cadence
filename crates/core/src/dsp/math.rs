@@ -16,6 +16,17 @@ pub const DENORMAL_FLOOR_F64: f64 = 1e-24;
 
 /// Natural logarithm of `1000` (`ln(1000)`), yielding `-60 dB` (`1e-3`) attenuation at stage end.
 pub const DECAY_LN_60DB: f64 = 6.907_755_278_982_137;
+/// Natural logarithm of `100` (`ln(100)`), yielding 99% (`-40 dB`) settling at stage end.
+pub const LN_100: f64 = 4.605_170_185_988_092;
+
+/// Maximum safe discrete-time filter/oscillator frequency ratio relative to sample rate (`0.45 * sr`).
+pub const NYQUIST_SAFE_RATIO: f64 = 0.45;
+/// Drum-kit choke exponential fade-out duration (`3.5 ms` to `-60 dB`).
+pub const CHOKE_MS: f64 = 3.5;
+/// Fast forced-release duration (`10.0 ms` to `-60 dB`) used for voice stop/steal cleanup.
+pub const FAST_RELEASE_MS: f64 = 10.0;
+/// Click-free insert effect bypass crossfade time constant (`1.5 ms`).
+pub const BYPASS_FADE_MS: f32 = 1.5;
 
 /// Relative settle tolerance for single-precision 1-pole parameter smoothers (`-120 dB` at unity).
 pub const SMOOTH_SETTLE_EPS_F32: f32 = 1e-6;
@@ -154,6 +165,63 @@ pub fn sanitize_clamp_f64(x: f64, lo: f64, hi: f64, fallback: f64) -> f64 {
     } else {
         fallback.clamp(lo, hi)
     }
+}
+
+/// Sanitize and clamp a frequency in Hz into `[min_hz, sample_rate * NYQUIST_SAFE_RATIO]`,
+/// replacing non-finite inputs with `fallback_hz` clamped to the same safe range.
+#[inline]
+pub fn clamp_freq_hz(freq_hz: f64, min_hz: f64, sample_rate: f64, fallback_hz: f64) -> f64 {
+    let sr = sanitize_sample_rate(sample_rate);
+    let lo = if min_hz.is_finite() {
+        min_hz.max(0.0)
+    } else {
+        0.0
+    };
+    let hi = (sr * NYQUIST_SAFE_RATIO).max(lo);
+    sanitize_clamp_f64(freq_hz, lo, hi, fallback_hz)
+}
+
+/// Linear dry/wet stereo blend in `f64` with exact endpoint snapping (`mix <= 1e-6` -> `dry`,
+/// `mix >= 1 - 1e-6` -> `wet`). Non-finite `mix` defaults to `1.0`.
+#[inline]
+pub fn mix_stereo_f64(dry: [f64; 2], wet: [f64; 2], mix: f64) -> [f64; 2] {
+    let m = sanitize_clamp_f64(mix, 0.0, 1.0, 1.0);
+    if m >= 1.0 - LIN_FLOOR_F64 {
+        wet
+    } else if m <= LIN_FLOOR_F64 {
+        dry
+    } else {
+        let inv = 1.0 - m;
+        [dry[0] * inv + wet[0] * m, dry[1] * inv + wet[1] * m]
+    }
+}
+
+/// Linear dry/wet stereo blend in `f32` with exact endpoint snapping (`mix <= 1e-6` -> `dry`,
+/// `mix >= 1 - 1e-6` -> `wet`). Non-finite `mix` defaults to `1.0`.
+#[inline]
+pub fn mix_stereo_f32(dry: [f32; 2], wet: [f32; 2], mix: f32) -> [f32; 2] {
+    let m = sanitize_clamp_f32(mix, 0.0, 1.0, 1.0);
+    if m >= 1.0 - LIN_FLOOR_F32 {
+        wet
+    } else if m <= LIN_FLOOR_F32 {
+        dry
+    } else {
+        let inv = 1.0 - m;
+        [dry[0] * inv + wet[0] * m, dry[1] * inv + wet[1] * m]
+    }
+}
+
+/// Compute a power-of-two bitmask (`stride - 1`, where `stride >= 1`) targeting a
+/// sample-rate-invariant control update cadence of `target_hz` Hz.
+///
+/// Use as `counter = (counter.wrapping_add(1)) & mask` so `counter == 0` ticks every
+/// `mask + 1` frames (`44.1 / 48 kHz` keep exact base strides; `96 / 192 / 384 kHz` scale by `2×` per octave).
+#[inline]
+pub fn control_stride_mask(sample_rate: f64, target_hz: f64) -> u32 {
+    let sr = sanitize_sample_rate(sample_rate);
+    let hz = sanitize_clamp_f64(target_hz, 1.0, sr, 1_000.0);
+    let exp = (sr / hz).max(1.0).log2().round().clamp(0.0, 16.0) as u32;
+    (1u32 << exp) - 1
 }
 
 /// Flush subnormal/tiny values (`|x| < 1e-24`) and non-finite numbers to `0.0`.
@@ -305,7 +373,6 @@ pub fn one_pole_decay_ms(ms: f32, sample_rate: f64) -> f64 {
 /// Used as `pitch += (target - pitch) * coeff`. Returns `1.0` (instant snap) when `ms <= 0.0`.
 #[inline]
 pub fn glide_coeff_ms(ms: f32, sample_rate: f64) -> f64 {
-    const LN_100: f64 = 4.605_170_185_988_092;
     let sr = sanitize_sample_rate(sample_rate);
     if !ms.is_finite() || ms <= 0.0 {
         return 1.0;
@@ -460,6 +527,73 @@ impl Smoother {
     #[inline]
     pub fn is_settled(&self) -> bool {
         (self.target - self.current).abs() <= self.settle_tol()
+    }
+}
+
+/// Per-frame state returned by [`BypassFader::step`] for unified click-free effect bypass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum BypassStep {
+    /// Effect is already idle and bypassed (`0%` DSP processing needed).
+    Idle,
+    /// Effect is bypassed and its crossfade has settled at `0.0`:
+    /// instant-reset effects clear state and call [`BypassFader::mark_idle`] immediately,
+    /// while tail-draining effects (`Delay`, `Reverb`) keep feeding silence until quiet
+    /// and then call `mark_idle()`.
+    SettledBypass,
+    /// Effect is active or crossfading with smoothed wet weight in `(0.0, 1.0]`.
+    Active(f64),
+}
+
+/// Shared click-free `1.5 ms` bypass crossfader and idle state machine composed by all
+/// 8 native [`crate::dsp::StereoEffect`] processors.
+#[derive(Clone, Copy, Debug)]
+pub struct BypassFader {
+    wet: Smoother,
+    was_active: bool,
+}
+
+impl BypassFader {
+    #[inline]
+    pub fn new(sample_rate: f64) -> Self {
+        Self {
+            wet: Smoother::new(1.0, BYPASS_FADE_MS, sample_rate),
+            was_active: false,
+        }
+    }
+
+    #[inline]
+    pub fn reset(&mut self) {
+        self.wet.snap(1.0);
+        self.was_active = false;
+    }
+
+    #[inline]
+    pub fn is_idle(&self) -> bool {
+        !self.was_active
+    }
+
+    /// Transition cleanly to idle-bypassed state after resetting internal effect buffers.
+    #[inline]
+    pub fn mark_idle(&mut self) {
+        self.wet.snap(0.0);
+        self.was_active = false;
+    }
+
+    /// Advance bypass state by one audio sample.
+    #[inline]
+    pub fn step(&mut self, bypassed: bool) -> BypassStep {
+        if bypassed && !self.was_active {
+            self.wet.snap(0.0);
+            return BypassStep::Idle;
+        }
+        self.wet.set_target(if bypassed { 0.0 } else { 1.0 });
+        let w = self.wet.next();
+        if bypassed && w <= BYPASS_SETTLE_EPS {
+            self.wet.snap(0.0);
+            return BypassStep::SettledBypass;
+        }
+        self.was_active = true;
+        BypassStep::Active(w)
     }
 }
 
@@ -967,5 +1101,56 @@ mod tests {
             sanitize_clamp_f64(f64::NEG_INFINITY, 20.0, 20_000.0, 5.0),
             20.0
         );
+    }
+
+    #[test]
+    fn clamp_freq_mix_stereo_control_stride_and_bypass_fader_work_across_sample_rates() {
+        assert_eq!(
+            clamp_freq_hz(50_000.0, 20.0, 48_000.0, 1_000.0),
+            48_000.0 * NYQUIST_SAFE_RATIO
+        );
+        assert_eq!(clamp_freq_hz(f64::NAN, 20.0, 48_000.0, 1_000.0), 1_000.0);
+        assert_eq!(clamp_freq_hz(5.0, 20.0, 48_000.0, 1_000.0), 20.0);
+
+        assert_eq!(mix_stereo_f64([1.0, -1.0], [0.2, 0.4], 0.0), [1.0, -1.0]);
+        assert_eq!(mix_stereo_f64([1.0, -1.0], [0.2, 0.4], 1.0), [0.2, 0.4]);
+        assert_eq!(mix_stereo_f64([1.0, -1.0], [0.2, 0.4], 0.5), [0.6, -0.3]);
+        assert_eq!(
+            mix_stereo_f64([1.0, -1.0], [0.2, 0.4], f64::NAN),
+            [0.2, 0.4]
+        );
+        assert_eq!(mix_stereo_f32([1.0, -1.0], [0.0, 0.0], 0.5), [0.5, -0.5]);
+
+        // Control stride masks double cleanly per sample-rate octave.
+        assert_eq!(control_stride_mask(44_100.0, 750.0), 63);
+        assert_eq!(control_stride_mask(48_000.0, 750.0), 63);
+        assert_eq!(control_stride_mask(96_000.0, 750.0), 127);
+        assert_eq!(control_stride_mask(192_000.0, 750.0), 255);
+        assert_eq!(control_stride_mask(48_000.0, 3_000.0), 15);
+        assert_eq!(control_stride_mask(192_000.0, 3_000.0), 63);
+        assert_eq!(control_stride_mask(48_000.0, 12_000.0), 3);
+        assert_eq!(control_stride_mask(192_000.0, 12_000.0), 15);
+
+        // BypassFader starts idle on initial bypass, ramps smoothly when bypassed after activity,
+        // and reaches SettledBypass cleanly across sample rates.
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            let mut bf = BypassFader::new(sr);
+            assert!(bf.is_idle());
+            assert_eq!(bf.step(true), BypassStep::Idle);
+            assert!(matches!(bf.step(false), BypassStep::Active(w) if w > 0.0));
+            assert!(!bf.is_idle());
+
+            let mut settled = false;
+            for _ in 0..((sr * 0.03) as usize) {
+                if bf.step(true) == BypassStep::SettledBypass {
+                    settled = true;
+                    bf.mark_idle();
+                    break;
+                }
+            }
+            assert!(settled, "sr={sr}: BypassFader did not settle");
+            assert!(bf.is_idle());
+            assert_eq!(bf.step(true), BypassStep::Idle);
+        }
     }
 }

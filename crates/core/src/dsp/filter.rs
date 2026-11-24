@@ -6,10 +6,12 @@
 use crate::dsp::biquad::{DcBlocker, TptOnePoleLpf};
 use crate::dsp::env::RhythmicEnv;
 use crate::dsp::math::{
-    flush_denormal_f64, lin_to_db_f64, sanitize_clamp_f64, sanitize_frame, sanitize_sample_f64,
-    sanitize_sample_rate, Smoother, BYPASS_SETTLE_EPS, TAIL_SILENCE_FLOOR_F64,
+    clamp_freq_hz, control_stride_mask, flush_denormal_f64, lin_to_db_f64, mix_stereo_f64,
+    one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame, sanitize_sample, sanitize_sample_f64,
+    sanitize_sample_rate, BypassFader, BypassStep, LogSmoother, Smoother, LIN_FLOOR_F64,
+    NYQUIST_SAFE_RATIO, TAIL_SILENCE_FLOOR_F64,
 };
-use crate::dsp::saturate::soft_clip_drive_f64;
+use crate::dsp::saturate::SoftClipCoeffs;
 use crate::filter_patterns::CompiledFilterPattern;
 use crate::mixer::FilterPatch;
 use crate::rack::FilterMode;
@@ -149,7 +151,7 @@ impl SvfCoeffs {
     #[inline]
     pub fn with_damping(sample_rate: f64, cutoff_hz: f64, k: f64) -> Self {
         let sr = sanitize_sample_rate(sample_rate);
-        let fc = sanitize_sample_f64(cutoff_hz).clamp(20.0, sr * 0.45);
+        let fc = clamp_freq_hz(cutoff_hz, 20.0, sr, 20.0);
         let k = if k.is_finite() {
             k.clamp(0.05, 4.0)
         } else {
@@ -235,7 +237,7 @@ impl AcidCoeffs {
     #[inline]
     pub fn new(sample_rate: f64, cutoff_hz: f64, resonance: f32) -> Self {
         let sr = sanitize_sample_rate(sample_rate);
-        let fc = sanitize_sample_f64(cutoff_hz).clamp(20.0, sr * 0.45);
+        let fc = clamp_freq_hz(cutoff_hz, 20.0, sr, 20.0);
         let res = f64::from(if resonance.is_finite() {
             resonance.clamp(0.0, 0.95)
         } else {
@@ -318,7 +320,7 @@ pub fn svf_transfer(
     sample_rate: f64,
 ) -> (f64, f64) {
     let sr = sanitize_sample_rate(sample_rate);
-    let fc = sanitize_clamp_f64(f64::from(cutoff_hz), 20.0, sr * 0.45, 1_000.0);
+    let fc = clamp_freq_hz(f64::from(cutoff_hz), 20.0, sr, 1_000.0);
     let f = sanitize_clamp_f64(freq_hz, 0.0, sr * 0.499, 0.0);
     let u = (PI * f / sr).tan() / (PI * fc / sr).tan().max(1e-12);
     let res = sanitize_clamp_f64(f64::from(resonance), 0.0, 0.95, 0.0);
@@ -340,7 +342,7 @@ pub fn svf_transfer(
 #[inline]
 pub fn one_pole_lpf_transfer(cutoff_hz: f32, freq_hz: f64, sample_rate: f64) -> (f64, f64) {
     let sr = sanitize_sample_rate(sample_rate);
-    let fc = sanitize_clamp_f64(f64::from(cutoff_hz), 20.0, sr * 0.45, 1_000.0);
+    let fc = clamp_freq_hz(f64::from(cutoff_hz), 20.0, sr, 1_000.0);
     let f = sanitize_clamp_f64(freq_hz, 0.0, sr * 0.499, 0.0);
     let u = (PI * f / sr).tan() / (PI * fc / sr).tan().max(1e-12);
     let denom = (1.0 + u * u).max(1e-24);
@@ -357,7 +359,7 @@ pub fn acid_ladder_transfer(
     sample_rate: f64,
 ) -> (f64, f64) {
     let sr = sanitize_sample_rate(sample_rate);
-    let fc = sanitize_clamp_f64(f64::from(cutoff_hz), 20.0, sr * 0.45, 1_000.0);
+    let fc = clamp_freq_hz(f64::from(cutoff_hz), 20.0, sr, 1_000.0);
     let f = sanitize_clamp_f64(freq_hz, 0.0, sr * 0.499, 0.0);
     let u = (PI * f / sr).tan() / (PI * fc / sr).tan().max(1e-12);
     let res = sanitize_clamp_f64(f64::from(resonance), 0.0, 0.95, 0.0);
@@ -437,18 +439,19 @@ pub fn filter_mix_magnitude_db(
 }
 
 /// Stereo resonant multi-mode rhythmic filter insert processor composing
-/// [`Svf`], [`AcidLadder`], [`RhythmicEnv`], [`soft_clip_drive_f64`], [`DcBlocker`],
+/// [`Svf`], [`AcidLadder`], [`RhythmicEnv`], [`SoftClipCoeffs`], [`DcBlocker`],
 /// smooth parameter slewing, and click-free mode & bypass crossfades. Zero heap allocations.
 pub struct RhythmicFilter {
     sample_rate: f64,
     mode: FilterMode,
     prev_mode: FilterMode,
     mode_xfade: Smoother,
-    cutoff_log: Smoother,
+    cutoff: LogSmoother,
+    cutoff_coeff: f64,
     resonance: Smoother,
     drive: Smoother,
     mix: Smoother,
-    bypass_wet: Smoother,
+    bypass: BypassFader,
     env: RhythmicEnv,
     env_amount_ln2: f64,
     svf: Svf,
@@ -457,41 +460,76 @@ pub struct RhythmicFilter {
     dc_blocker: DcBlocker,
     svf_coeffs: SvfCoeffs,
     acid_coeffs: AcidCoeffs,
-    ctrl_count: u8,
+    cached_drive_bits: u64,
+    cached_drive_coeffs: SoftClipCoeffs,
+    cached_coeff_key: (u64, u64, u64, FilterMode, FilterMode, bool),
+    last_patch: FilterPatch,
+    ctrl_count: u32,
+    ctrl_mask: u32,
     has_processed: bool,
-    was_active: bool,
+    #[cfg(test)]
+    coeff_recomputes: u64,
 }
 
 impl RhythmicFilter {
     pub fn new(sample_rate: f64) -> Self {
         let sr = sanitize_sample_rate(sample_rate);
         let default = FilterPatch::default();
-        let cutoff_log =
-            sanitize_clamp_f64(f64::from(default.cutoff_hz), 20.0, sr * 0.45, 1_000.0).ln();
+        let init_fc = clamp_freq_hz(f64::from(default.cutoff_hz), 20.0, sr, 1_000.0);
+        let init_drive = sanitize_clamp_f64(f64::from(default.drive), 0.0, 1.0, 0.0);
         let mut f = Self {
             sample_rate: sr,
             mode: default.mode,
             prev_mode: default.mode,
             mode_xfade: Smoother::new(1.0, 3.0, sr),
-            cutoff_log: Smoother::new(cutoff_log, 4.0, sr),
+            cutoff: LogSmoother::new_clamped(init_fc, 20.0, sr * NYQUIST_SAFE_RATIO),
+            cutoff_coeff: one_pole_coeff_ms(4.0, sr),
             resonance: Smoother::new(f64::from(default.resonance), 4.0, sr),
-            drive: Smoother::new(f64::from(default.drive), 4.0, sr),
+            drive: Smoother::new(init_drive, 4.0, sr),
             mix: Smoother::new(f64::from(default.mix), 4.0, sr),
-            bypass_wet: Smoother::new(1.0, 1.5, sr),
+            bypass: BypassFader::new(sr),
             env: RhythmicEnv::new(sr),
             env_amount_ln2: 0.0,
             svf: Svf::default(),
             acid: AcidLadder::default(),
-            one_pole: TptOnePoleLpf::new(sr, f64::from(default.cutoff_hz)),
+            one_pole: TptOnePoleLpf::new(sr, init_fc),
             dc_blocker: DcBlocker::new(sr),
-            svf_coeffs: SvfCoeffs::new(sr, f64::from(default.cutoff_hz), default.resonance),
-            acid_coeffs: AcidCoeffs::new(sr, f64::from(default.cutoff_hz), default.resonance),
+            svf_coeffs: SvfCoeffs::new(sr, init_fc, default.resonance),
+            acid_coeffs: AcidCoeffs::new(sr, init_fc, default.resonance),
+            cached_drive_bits: init_drive.to_bits(),
+            cached_drive_coeffs: SoftClipCoeffs::new(init_drive),
+            cached_coeff_key: (
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                default.mode,
+                default.mode,
+                false,
+            ),
+            last_patch: default,
             ctrl_count: 0,
+            ctrl_mask: control_stride_mask(sr, 6_000.0),
             has_processed: false,
-            was_active: false,
+            #[cfg(test)]
+            coeff_recomputes: 0,
         };
         f.set_parameters(default);
         f
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_idle(&self) -> bool {
+        self.bypass.is_idle()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cutoff_hz_current(&self) -> f64 {
+        self.cutoff.current()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn coeff_recomputes(&self) -> u64 {
+        self.coeff_recomputes
     }
 
     pub fn reset(&mut self) {
@@ -500,28 +538,29 @@ impl RhythmicFilter {
         self.one_pole.reset();
         self.dc_blocker.reset();
         self.env.reset();
-        self.cutoff_log.snap(self.cutoff_log.target());
+        self.cutoff.snap(f64::from(self.last_patch.cutoff_hz));
         self.resonance.snap(self.resonance.target());
         self.drive.snap(self.drive.target());
+        let d = self.drive.current();
+        self.cached_drive_bits = d.to_bits();
+        self.cached_drive_coeffs = SoftClipCoeffs::new(d);
         self.mix.snap(self.mix.target());
         self.prev_mode = self.mode;
         self.mode_xfade.snap(1.0);
-        self.bypass_wet.snap(1.0);
+        self.bypass.reset();
         self.has_processed = false;
-        self.was_active = false;
         self.ctrl_count = 0;
-        self.recompute_coefficients(0.0);
+        self.recompute_coefficients_inner(0.0, true);
     }
 
     fn set_parameters_common(&mut self, patch: FilterPatch) {
         let def = FilterPatch::default();
-        let fc = sanitize_clamp_f64(
+        let fc = clamp_freq_hz(
             f64::from(patch.cutoff_hz),
             20.0,
-            self.sample_rate * 0.45,
+            self.sample_rate,
             f64::from(def.cutoff_hz),
         );
-        let cutoff_log = fc.ln();
         let res = sanitize_clamp_f64(
             f64::from(patch.resonance),
             0.0,
@@ -536,17 +575,40 @@ impl RhythmicFilter {
             4.0,
             f64::from(def.env_amount),
         );
+        let env_decay_ms = sanitize_clamp_f64(
+            f64::from(patch.env_decay_ms),
+            15.0,
+            1500.0,
+            f64::from(def.env_decay_ms),
+        );
+        let sanitized = FilterPatch {
+            mode: patch.mode,
+            cutoff_hz: fc as f32,
+            resonance: res as f32,
+            drive: drv as f32,
+            mix: mix as f32,
+            env_pattern: patch.env_pattern,
+            env_pattern_id: patch.env_pattern_id,
+            env_amount: amt as f32,
+            env_decay_ms: env_decay_ms as f32,
+        };
+        if self.has_processed && sanitized == self.last_patch {
+            return;
+        }
+        self.last_patch = sanitized;
         self.env_amount_ln2 = if amt.abs() < 1e-4 { 0.0 } else { amt * LN_2 };
 
         if !self.has_processed {
             self.mode = patch.mode;
             self.prev_mode = patch.mode;
             self.mode_xfade.snap(1.0);
-            self.cutoff_log.snap(cutoff_log);
+            self.cutoff.snap(fc);
             self.resonance.snap(res);
             self.drive.snap(drv);
+            self.cached_drive_bits = drv.to_bits();
+            self.cached_drive_coeffs = SoftClipCoeffs::new(drv);
             self.mix.snap(mix);
-            self.recompute_coefficients(self.env.current());
+            self.recompute_coefficients_inner(self.env.current(), true);
         } else {
             if patch.mode != self.mode {
                 let topo = |m: FilterMode| match m {
@@ -565,8 +627,9 @@ impl RhythmicFilter {
                 self.mode = patch.mode;
                 self.mode_xfade.snap(0.0);
                 self.mode_xfade.set_target(1.0);
+                self.ctrl_count = 0;
             }
-            self.cutoff_log.set_target(cutoff_log);
+            self.cutoff.set_target(fc);
             self.resonance.set_target(res);
             self.drive.set_target(drv);
             self.mix.set_target(mix);
@@ -593,15 +656,39 @@ impl RhythmicFilter {
     }
 
     #[inline]
-    fn recompute_coefficients(&mut self, env_level: f64) {
-        let log_fc = if self.env_amount_ln2 == 0.0 {
-            self.cutoff_log.current()
+    fn recompute_coefficients_inner(&mut self, env_level: f64, force: bool) {
+        let raw_env_mod = if self.env_amount_ln2 == 0.0 {
+            0.0
         } else {
-            self.cutoff_log.current() + env_level * self.env_amount_ln2
+            env_level * self.env_amount_ln2
         };
-        let fc = sanitize_clamp_f64(log_fc.exp(), 20.0, self.sample_rate * 0.45, 1_000.0);
-        let res = self.resonance.current() as f32;
+        let env_mod = if raw_env_mod == 0.0 { 0.0 } else { raw_env_mod };
         let fading = !self.mode_xfade.is_settled();
+        let base_fc = self.cutoff.current();
+        let res_f64 = self.resonance.current();
+        let key = (
+            base_fc.to_bits(),
+            res_f64.to_bits(),
+            env_mod.to_bits(),
+            self.mode,
+            self.prev_mode,
+            fading,
+        );
+        if !force && key == self.cached_coeff_key {
+            return;
+        }
+        self.cached_coeff_key = key;
+        #[cfg(test)]
+        {
+            self.coeff_recomputes += 1;
+        }
+
+        let fc = if env_mod == 0.0 {
+            base_fc
+        } else {
+            clamp_freq_hz(base_fc * env_mod.exp(), 20.0, self.sample_rate, 1_000.0)
+        };
+        let res = res_f64 as f32;
         let is_svf = |m: FilterMode| !matches!(m, FilterMode::AcidLowPass | FilterMode::LowPass6);
         let need_acid = self.mode == FilterMode::AcidLowPass
             || (fading && self.prev_mode == FilterMode::AcidLowPass);
@@ -628,45 +715,46 @@ impl RhythmicFilter {
             0.0
         };
 
-        if bypassed && !self.was_active {
-            self.bypass_wet.snap(0.0);
-            return dry;
-        }
-        self.bypass_wet.set_target(if bypassed { 0.0 } else { 1.0 });
-        let bypass_w = self.bypass_wet.next();
-        if bypassed && bypass_w <= BYPASS_SETTLE_EPS {
-            self.bypass_wet.snap(0.0);
-            self.svf.reset();
-            self.acid.reset();
-            self.one_pole.reset();
-            self.dc_blocker.reset();
-            self.was_active = false;
-            return dry;
-        }
-        self.was_active = true;
+        let bypass_w = match self.bypass.step(bypassed) {
+            BypassStep::Idle => return dry,
+            BypassStep::SettledBypass => {
+                self.svf.reset();
+                self.acid.reset();
+                self.one_pole.reset();
+                self.dc_blocker.reset();
+                self.bypass.mark_idle();
+                return dry;
+            }
+            BypassStep::Active(w) => w,
+        };
 
-        self.cutoff_log.next();
+        self.cutoff.step(self.cutoff_coeff);
         self.resonance.next();
         let drv = self.drive.next();
         let mix = self.mix.next();
         let m_xf = self.mode_xfade.next();
 
         if self.ctrl_count == 0 {
-            self.recompute_coefficients(env_level);
+            self.recompute_coefficients_inner(env_level, false);
         }
-        self.ctrl_count = (self.ctrl_count + 1) & 7;
+        self.ctrl_count = self.ctrl_count.wrapping_add(1) & self.ctrl_mask;
 
+        let drv_bits = drv.to_bits();
+        if drv_bits != self.cached_drive_bits {
+            self.cached_drive_bits = drv_bits;
+            self.cached_drive_coeffs = SoftClipCoeffs::new(drv);
+        }
         let dry64 = [f64::from(dry[0]), f64::from(dry[1])];
         let driven = if drv > 0.0 {
             [
-                soft_clip_drive_f64(dry64[0], drv),
-                soft_clip_drive_f64(dry64[1], drv),
+                self.cached_drive_coeffs.shape(dry64[0]),
+                self.cached_drive_coeffs.shape(dry64[1]),
             ]
         } else {
             dry64
         };
 
-        let filtered = if m_xf >= 1.0 - 1e-6 {
+        let filtered = if m_xf >= 1.0 - LIN_FLOOR_F64 {
             match self.mode {
                 FilterMode::AcidLowPass => self.acid.process_stereo(driven, self.acid_coeffs),
                 FilterMode::LowPass6 => self.one_pole.process_stereo(driven),
@@ -715,12 +803,14 @@ impl RhythmicFilter {
         };
 
         let dc_free = self.dc_blocker.process_stereo(filtered);
-        let wet = [dc_free[0].clamp(-4.0, 4.0), dc_free[1].clamp(-4.0, 4.0)];
-        let eff_wet = mix * bypass_w;
-        let eff_dry = 1.0 - eff_wet;
+        let wet = [
+            sanitize_sample_f64(dc_free[0]),
+            sanitize_sample_f64(dc_free[1]),
+        ];
+        let out = mix_stereo_f64(dry64, wet, mix * bypass_w);
         [
-            (dry64[0] * eff_dry + wet[0] * eff_wet) as f32,
-            (dry64[1] * eff_dry + wet[1] * eff_wet) as f32,
+            sanitize_sample(out[0] as f32),
+            sanitize_sample(out[1] as f32),
         ]
     }
 }
@@ -1032,6 +1122,139 @@ mod tests {
                 let y = rf.process([0.5, -0.5], false);
                 assert!(y[0].is_finite() && y[1].is_finite());
             }
+        }
+    }
+
+    #[test]
+    fn rhythmic_filter_preserves_unclipped_resonant_headroom_and_caches_static_coeffs() {
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            // 1. High-resonance LowPass sine at cutoff exceeds +12 dBFS (> 4.0) without clipping
+            //    and matches analytical filter_magnitude_db across all sample rates.
+            let mut rf = RhythmicFilter::new(sr);
+            let patch = FilterPatch {
+                mode: FilterMode::LowPass,
+                cutoff_hz: 1_000.0,
+                resonance: 0.95,
+                drive: 0.0,
+                mix: 1.0,
+                env_amount: 0.0,
+                ..FilterPatch::default()
+            };
+            rf.set_parameters(patch);
+
+            let warmup = (sr * 0.12) as usize;
+            let measure = (sr * 0.05) as usize;
+            let mut in_sq = 0.0_f64;
+            let mut out_sq = 0.0_f64;
+            let mut peak = 0.0_f32;
+            for i in 0..(warmup + measure) {
+                let x = (TAU * 1_000.0 * i as f64 / sr).sin() as f32 * 0.7;
+                let y = rf.process([x, -x], false);
+                assert!(y[0].is_finite() && y[1].is_finite());
+                if i >= warmup {
+                    peak = peak.max(y[0].abs()).max(y[1].abs());
+                    in_sq += f64::from(x) * f64::from(x);
+                    out_sq += f64::from(y[0]) * f64::from(y[0]);
+                }
+            }
+            assert!(
+                peak > 4.5,
+                "sr={sr}: expected unclipped resonant peak > 4.5, got {peak}"
+            );
+            let measured_db = lin_to_db_f64((out_sq / in_sq).sqrt());
+            let expected_db = filter_magnitude_db(FilterMode::LowPass, 1_000.0, 0.95, 1_000.0, sr);
+            assert!(
+                (measured_db - expected_db).abs() < 0.5,
+                "sr={sr}: resonant gain measured={measured_db:.2} dB vs predicted={expected_db:.2} dB"
+            );
+
+            // 2. Static settled parameters incur zero redundant coefficient recomputations,
+            //    even when set_parameters is re-called every control block.
+            let recomputes_after_steady = rf.coeff_recomputes();
+            for i in 0..2048 {
+                if i % 64 == 0 {
+                    rf.set_parameters(patch);
+                }
+                let _ = rf.process([0.2, -0.2], false);
+            }
+            assert_eq!(
+                rf.coeff_recomputes(),
+                recomputes_after_steady,
+                "sr={sr}: static settled filter must not recompute coefficients"
+            );
+
+            // 3. Bypass settles cleanly to idle via BypassFader.
+            assert!(!rf.is_idle());
+            for _ in 0..((sr * 0.03) as usize) {
+                let _ = rf.process([0.3, -0.3], true);
+            }
+            assert!(rf.is_idle(), "sr={sr}: bypassed filter must idle");
+            assert_eq!(rf.process([0.3, -0.3], true), [0.3, -0.3]);
+        }
+    }
+
+    #[test]
+    fn rhythmic_filter_cutoff_smooths_logarithmically_across_sample_rates() {
+        for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
+            let mut rf = RhythmicFilter::new(sr);
+            let start_hz = 200.0_f32;
+            let target_hz = 8_000.0_f32;
+            rf.set_parameters(FilterPatch {
+                mode: FilterMode::LowPass,
+                cutoff_hz: start_hz,
+                resonance: 0.25,
+                drive: 0.4,
+                mix: 1.0,
+                env_amount: 0.0,
+                ..FilterPatch::default()
+            });
+            let _ = rf.process([0.1, -0.1], false);
+            assert!((rf.cutoff_hz_current() - f64::from(start_hz)).abs() < 1e-6);
+
+            let recomputes_before = rf.coeff_recomputes();
+            rf.set_parameters(FilterPatch {
+                mode: FilterMode::LowPass,
+                cutoff_hz: target_hz,
+                resonance: 0.25,
+                drive: 0.4,
+                mix: 1.0,
+                env_amount: 0.0,
+                ..FilterPatch::default()
+            });
+
+            // After t = tau * ln(2) (tau = 4 ms), a log-domain smoother sits at geometric mean
+            // sqrt(200 * 8000) = 1264.9 Hz (not arithmetic midpoint 4100 Hz).
+            let half_frames = (0.004 * 2.0_f64.ln() * sr).round() as usize;
+            let mut prev = rf.cutoff_hz_current();
+            for _ in 0..half_frames {
+                let y = rf.process([0.1, -0.1], false);
+                assert!(y[0].is_finite() && y[1].is_finite());
+                let cur = rf.cutoff_hz_current();
+                assert!(cur >= prev - 1e-9 && cur <= f64::from(target_hz) + 1e-6);
+                prev = cur;
+            }
+            let geo_mean = (f64::from(start_hz) * f64::from(target_hz)).sqrt();
+            assert!(
+                (rf.cutoff_hz_current() - geo_mean).abs() / geo_mean < 0.05,
+                "sr={sr}: expected log midpoint ~{geo_mean:.1} Hz, got {:.1} Hz",
+                rf.cutoff_hz_current()
+            );
+
+            // Settles cleanly to exact target and then stops recomputing coefficients.
+            for _ in 0..((sr * 0.15) as usize) {
+                let _ = rf.process([0.1, -0.1], false);
+            }
+            assert!(
+                (rf.cutoff_hz_current() - f64::from(target_hz)).abs() < 1e-3,
+                "sr={sr}: cutoff did not settle to {target_hz}, got {}",
+                rf.cutoff_hz_current()
+            );
+            assert!(rf.coeff_recomputes() > recomputes_before);
+            let settled_count = rf.coeff_recomputes();
+            for _ in 0..1024 {
+                let _ = rf.process([0.1, -0.1], false);
+            }
+            assert_eq!(rf.coeff_recomputes(), settled_count);
         }
     }
 }

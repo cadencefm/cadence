@@ -6,10 +6,10 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    db_to_lin_f64, sanitize_clamp_f32, sanitize_clamp_f64, shape_drive_oversampled_2x_coeffs,
-    smooth_step_f32, DcBlocker, DriveShaperCoeffs, Halfband2x, Halfband2xDryAlign, LogSmoother,
-    ModalResonator, TptOnePoleLpf, DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB,
-    DRIVE_MIN_TONE_HZ, SMOOTH_SETTLE_EPS_F32,
+    db_to_lin_f64, mix_stereo_f64, sanitize_clamp_f32, sanitize_clamp_f64,
+    shape_drive_oversampled_2x_coeffs, smooth_step_f32, DcBlocker, DriveShaperCoeffs, Halfband2x,
+    Halfband2xDryAlign, LogSmoother, ModalResonator, TptOnePoleLpf, DRIVE_MAX_OUTPUT_DB,
+    DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ,
 };
 use cadence_core::mixer::DriveMode;
 use cadence_core::rack::{DriveModule, ModuleKind, ModuleKindTag, ModuleParam};
@@ -205,16 +205,8 @@ impl VoiceModule for DriveNode {
             self.cached_out_gain = db_to_lin_f64(f64::from(clamped_db));
         }
         let out_g = self.cached_out_gain;
-        let mix = f64::from(sanitize_clamp_f32(drv.mix, 0.0, 1.0, 1.0));
-        if mix >= 1.0 - f64::from(SMOOTH_SETTLE_EPS_F32) {
-            [toned[0] * out_g, toned[1] * out_g]
-        } else {
-            let inv = 1.0 - mix;
-            [
-                dry_aligned[0] * inv + toned[0] * out_g * mix,
-                dry_aligned[1] * inv + toned[1] * out_g * mix,
-            ]
-        }
+        let wet = [toned[0] * out_g, toned[1] * out_g];
+        mix_stereo_f64(dry_aligned, wet, f64::from(drv.mix))
     }
 
     #[inline]

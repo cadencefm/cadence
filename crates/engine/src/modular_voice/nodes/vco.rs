@@ -1,17 +1,21 @@
 //! Bandlimited PolyBLEP/PolyBLAMP VCO voice node with unison and 2x oversampled through-zero FM.
 
 use super::{
-    write_copy_module_normalized, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks,
-    VoiceModule,
+    resolve_tracked_pitch_hz, tracked_pitch_arg, tracked_pitch_arg_to_hz,
+    write_copy_module_normalized, NodeInputs, ProcessCtx, TrackedPitch, TriggerCtx, TriggerState,
+    VoiceLocks, VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    midi_to_hz, mix_seed, pan_mono_equal_power_f64, phase_wrap, sanitize_clamp_f64,
-    semitones_to_ratio_f64, smooth_step_f32, step_vco_bank, step_vco_bank_fm_2x, unison_gain_comp,
-    unison_offsets, Halfband2x, LogSmoother, VcoStepParams, XorShift32, MAX_UNISON,
+    mix_seed, pan_mono_equal_power_f64, phase_wrap, sanitize_clamp_f64, smooth_step_f32,
+    step_vco_bank, step_vco_bank_fm_2x, unison_gain_comp, unison_offsets, Halfband2x, LogSmoother,
+    VcoStepParams, XorShift32, MAX_UNISON, NYQUIST_SAFE_RATIO,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking, VcoModule};
 use std::f64::consts::SQRT_2;
+
+const VCO_MIN_HZ: f64 = 0.01;
+const VCO_FALLBACK_HZ: f64 = 440.0;
 
 /// Irregular phase offsets for unison copies `1..MAX_UNISON` so zero-detune
 /// unison never cancels the fundamental.
@@ -61,22 +65,20 @@ impl VcoNode {
                 u32::from(ctx.mod_id).wrapping_mul(cadence_core::dsp::SECONDARY_WEYL_SALT_32),
             ));
         let phase0_deg = phase_wrap(f64::from(vco.phase_deg) / 360.0);
-        let base_hz = match vco.pitch_tracking {
-            PitchTracking::Fixed => {
-                f64::from(vco.fixed_hz)
-                    * semitones_to_ratio_f64(
-                        ctx.target_rack_tune
-                            + f64::from(vco.tune_semitones)
-                            + f64::from(vco.fine_cents) * 0.01,
-                    )
-            }
-            PitchTracking::Chromatic => midi_to_hz(
-                ctx.target_note_pitch
-                    + ctx.target_rack_tune
-                    + f64::from(vco.tune_semitones)
-                    + f64::from(vco.fine_cents) * 0.01,
-            ),
-        };
+        let base_hz = resolve_tracked_pitch_hz(
+            TrackedPitch {
+                mode: vco.pitch_tracking,
+                fixed_hz: f64::from(vco.fixed_hz),
+                note_pitch: ctx.target_note_pitch,
+                rack_tune: ctx.target_rack_tune,
+                tune_semitones: vco.tune_semitones,
+                fine_cents: vco.fine_cents,
+                pitch_cv: 0.0,
+            },
+            VCO_MIN_HZ,
+            ctx.sample_rate * NYQUIST_SAFE_RATIO,
+            VCO_FALLBACK_HZ,
+        );
         let p0 = if ctx.phase_reset {
             phase0_deg
         } else {
@@ -253,25 +255,15 @@ impl VoiceModule for VcoNode {
     fn process(&mut self, inputs: &NodeInputs, ctx: &mut ProcessCtx<'_>) -> [f64; 2] {
         let vco = self.current;
         let sr = ctx.sample_rate;
-        let (pitch_arg, fixed_hz_val) = match vco.pitch_tracking {
-            PitchTracking::Fixed => (
-                (ctx.rack_tune
-                    + f64::from(vco.tune_semitones)
-                    + f64::from(vco.fine_cents) * 0.01
-                    + inputs.pitch_cv)
-                    .clamp(-96.0, 96.0),
-                self.fixed_hz.current(),
-            ),
-            PitchTracking::Chromatic => (
-                (ctx.note_pitch
-                    + ctx.rack_tune
-                    + f64::from(vco.tune_semitones)
-                    + f64::from(vco.fine_cents) * 0.01
-                    + inputs.pitch_cv)
-                    .clamp(-64.0, 180.0),
-                0.0,
-            ),
-        };
+        let (pitch_arg, fixed_hz_val) = tracked_pitch_arg(TrackedPitch {
+            mode: vco.pitch_tracking,
+            fixed_hz: self.fixed_hz.current(),
+            note_pitch: ctx.note_pitch,
+            rack_tune: ctx.rack_tune,
+            tune_semitones: vco.tune_semitones,
+            fine_cents: vco.fine_cents,
+            pitch_cv: inputs.pitch_cv,
+        });
         let pitch_key = (
             vco.pitch_tracking,
             pitch_arg.to_bits(),
@@ -280,12 +272,14 @@ impl VoiceModule for VcoNode {
         );
         if pitch_key != self.cached_pitch_key {
             self.cached_pitch_key = pitch_key;
-            self.cached_base_hz = match vco.pitch_tracking {
-                PitchTracking::Fixed => {
-                    (fixed_hz_val * semitones_to_ratio_f64(pitch_arg)).clamp(0.01, sr * 0.45)
-                }
-                PitchTracking::Chromatic => midi_to_hz(pitch_arg).clamp(0.01, sr * 0.45),
-            };
+            self.cached_base_hz = tracked_pitch_arg_to_hz(
+                vco.pitch_tracking,
+                pitch_arg,
+                fixed_hz_val,
+                VCO_MIN_HZ,
+                sr * NYQUIST_SAFE_RATIO,
+                VCO_FALLBACK_HZ,
+            );
         }
         let base_hz = self.cached_base_hz;
         let pw = sanitize_clamp_f64(f64::from(vco.pulse_width) + inputs.pw_cv, 0.02, 0.98, 0.5);

@@ -20,7 +20,8 @@ pub(super) const MAILBOXES: usize = 64;
 pub(super) const TRANSPORT_MAILBOXES: usize = 16;
 pub(super) const SILENT_RATE: u32 = 48_000;
 pub(super) const SILENT_BLOCK: usize = 256;
-pub(super) const CONTROL_BLOCK: usize = 64;
+/// Sustained bit-for-bit `0.0` input duration (`0.25 s`) before flagging `digital_silence`.
+pub(super) const INPUT_DIGITAL_SILENCE_SEC: f64 = 0.25;
 pub(super) const PREVIEW_TRACK: u8 = 254;
 pub(super) const EVENT_RESERVED: u64 = 1 << 63;
 /// Transport positions are unbounded; 40 bits is millennia of music at 300 BPM.
@@ -373,6 +374,7 @@ pub(super) struct Shared {
     pub(super) overload_tripped: AtomicBool,
     pub(super) error_code: AtomicU8,
     pub(super) buffer_frames: AtomicU32,
+    pub(super) pdc_latency_frames: AtomicU32,
     pub(super) channels: AtomicU16,
     pub(super) bit_depth: AtomicU16,
     pub(super) sample_format_is_float: AtomicBool,
@@ -393,7 +395,7 @@ pub(super) struct Shared {
     pub(super) input_peak_hold: [AtomicU32; 2],
     pub(super) input_clipped: AtomicBool,
     pub(super) input_clear_meters: AtomicBool,
-    pub(super) input_callbacks: AtomicU64,
+    pub(super) input_frames_seen: AtomicU64,
     pub(super) input_nonzero_seen: AtomicBool,
     /// Off-RT-only diagnostic message for the audio input stream.
     pub(super) input_last_error: Mutex<Option<String>>,
@@ -511,6 +513,7 @@ impl Shared {
             overload_tripped: AtomicBool::new(false),
             error_code: AtomicU8::new(AudioErrorCode::None as u8),
             buffer_frames: AtomicU32::new(0),
+            pdc_latency_frames: AtomicU32::new(0),
             channels: AtomicU16::new(0),
             bit_depth: AtomicU16::new(0),
             sample_format_is_float: AtomicBool::new(false),
@@ -527,7 +530,7 @@ impl Shared {
             input_peak_hold: std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())),
             input_clipped: AtomicBool::new(false),
             input_clear_meters: AtomicBool::new(false),
-            input_callbacks: AtomicU64::new(0),
+            input_frames_seen: AtomicU64::new(0),
             input_nonzero_seen: AtomicBool::new(false),
             input_last_error: Mutex::new(None),
             capture_phase: AtomicU8::new(CapturePhase::Idle as u8),
@@ -588,9 +591,13 @@ impl Shared {
     /// and capture gate state.
     pub(super) fn read_input_telemetry(&self) -> AudioInputTelemetry {
         let status = AudioInputStatus::from_u8(self.input_status.load(Ordering::Acquire));
+        let sample_rate = self.input_sample_rate.load(Ordering::Relaxed);
+        let silence_threshold_frames = (f64::from(sample_rate) * INPUT_DIGITAL_SILENCE_SEC)
+            .round()
+            .max(1.0) as u64;
         AudioInputTelemetry {
             status,
-            sample_rate: self.input_sample_rate.load(Ordering::Relaxed),
+            sample_rate,
             channels: self.input_channels.load(Ordering::Relaxed),
             buffer_frames: self.input_buffer_frames.load(Ordering::Relaxed),
             peak: [
@@ -603,7 +610,8 @@ impl Shared {
             ],
             clipped: self.input_clipped.load(Ordering::Relaxed),
             digital_silence: status == AudioInputStatus::Running
-                && self.input_callbacks.load(Ordering::Relaxed) >= 24
+                && sample_rate > 0
+                && self.input_frames_seen.load(Ordering::Relaxed) >= silence_threshold_frames
                 && !self.input_nonzero_seen.load(Ordering::Relaxed),
             mode: AudioInputMode::from_u8(self.input_mode.load(Ordering::Relaxed)),
             monitor_mode: InputMonitorMode::from_u8(
@@ -633,7 +641,7 @@ impl Shared {
             slot.store(0.0_f32.to_bits(), Ordering::Relaxed);
         }
         self.input_clipped.store(false, Ordering::Relaxed);
-        self.input_callbacks.store(0, Ordering::Relaxed);
+        self.input_frames_seen.store(0, Ordering::Relaxed);
         self.input_nonzero_seen.store(false, Ordering::Relaxed);
     }
 
@@ -683,6 +691,7 @@ impl Shared {
             peak_cpu_load: self.peak_cpu_permille.load(Ordering::Relaxed) as f32 / 1000.0,
             xrun_count: self.xrun_count.load(Ordering::Relaxed),
             buffer_frames: self.buffer_frames.load(Ordering::Relaxed),
+            pdc_latency_frames: self.pdc_latency_frames.load(Ordering::Relaxed),
             channels: self.channels.load(Ordering::Relaxed),
             bit_depth: self.bit_depth.load(Ordering::Relaxed),
             sample_format_is_float: self.sample_format_is_float.load(Ordering::Relaxed),
@@ -727,6 +736,7 @@ impl Shared {
         self.cpu_load_permille.store(0, Ordering::Relaxed);
         self.peak_cpu_permille.store(0, Ordering::Relaxed);
         self.xrun_count.store(0, Ordering::Relaxed);
+        self.pdc_latency_frames.store(0, Ordering::Relaxed);
         self.peak.store(0.0_f32.to_bits(), Ordering::Relaxed);
         self.peak_left.store(0.0_f32.to_bits(), Ordering::Relaxed);
         self.peak_right.store(0.0_f32.to_bits(), Ordering::Relaxed);

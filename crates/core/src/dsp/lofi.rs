@@ -2,7 +2,9 @@
 //! decimator (`LoFiProcessor`) plus transfer-curve evaluation (`lofi_transfer_sample`)
 //! shared by `cadence-engine` and `cadence-app` UI visualizers.
 
-use crate::dsp::math::{sanitize_sample, sanitize_sample_f64, sanitize_sample_rate};
+use crate::dsp::math::{
+    mix_stereo_f64, sanitize_sample, sanitize_sample_f64, sanitize_sample_rate,
+};
 
 /// Minimum continuous bit-depth for [`LoFiProcessor`].
 pub const LOFI_MIN_BITS: f32 = 2.0;
@@ -162,12 +164,7 @@ impl LoFiProcessor {
             lofi_quantize_f64(decimated[0], b),
             lofi_quantize_f64(decimated[1], b),
         ];
-        if m >= 1.0 {
-            wet
-        } else {
-            let inv = 1.0 - m;
-            [dry[0] * inv + wet[0] * m, dry[1] * inv + wet[1] * m]
-        }
+        mix_stereo_f64(dry, wet, m)
     }
 
     /// Process one mono sample at `f64` precision.
