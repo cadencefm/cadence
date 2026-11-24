@@ -12,10 +12,13 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    db_to_lin_f64, pan_mono_equal_power_f64, sanitize_clamp_f64, smooth_step_f32,
-    stereo_ms_decode_f64, stereo_ms_encode_f64, voice_guard_f64, DcBlocker, ModalResonator,
+    db_to_lin_f64, pan_mono_equal_power_f64, sanitize_clamp_f32, sanitize_clamp_f64,
+    smooth_step_f32, stereo_ms_decode_f64, stereo_ms_encode_f64, voice_guard_f64, DcBlocker,
+    ModalResonator,
 };
-use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, OutModule};
+use cadence_core::rack::{
+    ModuleKind, ModuleKindTag, ModuleParam, OutModule, OUT_MAX_GAIN_DB, OUT_MIN_GAIN_DB,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::modular_voice) struct OutNode {
@@ -39,13 +42,14 @@ impl OutNode {
     #[inline]
     pub(super) fn new(params: OutModule, sample_rate: f64) -> Self {
         let pan = sanitize_clamp_f64(f64::from(params.pan), -1.0, 1.0, 0.0);
+        let gain_db = sanitize_clamp_f32(params.gain_db, OUT_MIN_GAIN_DB, OUT_MAX_GAIN_DB, 0.0);
         Self {
             current: params,
             target: params,
             dc_blocker: DcBlocker::new(sample_rate),
             has_cv: false,
-            cached_gain_db_bits: params.gain_db.to_bits(),
-            cached_gain_lin: db_to_lin_f64(f64::from(params.gain_db)),
+            cached_gain_db_bits: gain_db.to_bits(),
+            cached_gain_lin: db_to_lin_f64(f64::from(gain_db)),
             cached_pan_bits: pan.to_bits(),
             cached_pan: pan_mono_equal_power_f64(pan),
         }
@@ -105,6 +109,7 @@ impl VoiceModule for OutNode {
             self.current = self.target;
         }
         if ctx.eff_retarget {
+            self.dc_blocker.set_sample_rate(ctx.sample_rate);
             self.has_cv = ctx.has_cv;
             return;
         }
@@ -136,10 +141,11 @@ impl VoiceModule for OutNode {
             sig = stereo_ms_decode_f64(mid, side * (1.0 + spread));
         }
         let centered = self.dc_blocker.process_stereo(sig);
-        let gain_db_bits = out_p.gain_db.to_bits();
+        let gain_db = sanitize_clamp_f32(out_p.gain_db, OUT_MIN_GAIN_DB, OUT_MAX_GAIN_DB, 0.0);
+        let gain_db_bits = gain_db.to_bits();
         if gain_db_bits != self.cached_gain_db_bits {
             self.cached_gain_db_bits = gain_db_bits;
-            self.cached_gain_lin = db_to_lin_f64(f64::from(out_p.gain_db));
+            self.cached_gain_lin = db_to_lin_f64(f64::from(gain_db));
         }
         let gain = self.cached_gain_lin * ctx.velocity;
         let eff_pan = sanitize_clamp_f64(

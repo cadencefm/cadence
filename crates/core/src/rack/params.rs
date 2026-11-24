@@ -14,7 +14,7 @@ use crate::params::{
     nudge_log, nudge_quantized, parse_choice_index, parse_db, parse_hz, parse_ms, parse_pan,
     parse_percent_or_unit,
 };
-use crate::rack::modules::ModuleKindTag;
+use crate::rack::modules::{ModuleKindTag, OUT_MAX_GAIN_DB, OUT_MIN_GAIN_DB};
 use crate::rack::types::{
     FilterMode, LfoShape, NoiseColor, PitchTracking, RackPatch, RackZone, ResonatorMode,
     TriggerMode, Unit, UpdatePolicy, VoiceMode, VoiceSettings, Waveform,
@@ -626,7 +626,7 @@ define_module_params! {
     Bits           => ("bits",             "Bits",          Continuous, (Linear LOFI_MIN_BITS, LOFI_MAX_BITS),               Bits),
     SampleRateHz   => ("sample_rate_hz",   "Clock",         Continuous, (Log LOFI_MIN_RATE_HZ, LOFI_MAX_RATE_HZ),            Hz),
     // Out (54..57)
-    GainDb         => ("gain_db",          "Gain",          Continuous, (Linear -36.0, 12.0),                                Db),
+    GainDb         => ("gain_db",          "Gain",          Continuous, (Linear OUT_MIN_GAIN_DB, OUT_MAX_GAIN_DB),           Db),
     Pan            => ("pan",              "Pan",           Continuous, (Linear -1.0, 1.0),                                  Pan),
     Spread         => ("spread",           "Spread",        Continuous, (Linear 0.0, 1.0),                                   Percent),
     // Resonator (57..62)

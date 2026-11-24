@@ -227,6 +227,18 @@ impl ModalResonator {
         self.stereo_diverged = false;
     }
 
+    /// Update sample rate without clearing ringing mode states; returns `true` if the
+    /// sanitized sample rate changed (signaling the caller to refresh mode phasors).
+    #[inline]
+    pub fn set_sample_rate(&mut self, sample_rate: f64) -> bool {
+        let sr = sanitize_sample_rate(sample_rate);
+        if sr.to_bits() == self.sample_rate.to_bits() {
+            return false;
+        }
+        self.sample_rate = sr;
+        true
+    }
+
     /// Recompute per-mode phasor rotation (`cos_r`, `sin_r`), energy-preserving input
     /// coupling (`input_b`), and spatial/brightness weights (`gain`) from the SPOT descriptors.
     #[inline]
@@ -685,5 +697,22 @@ mod tests {
             (-15.15..=-14.85).contains(&drop_db),
             "192 kHz 8000 ms RT60 expected -15.0 dB at 2.0 s, got {drop_db:.3} dB"
         );
+    }
+
+    #[test]
+    fn modal_resonator_set_sample_rate_preserves_ringing_state() {
+        let mut res = ModalResonator::new(48_000.0);
+        res.set_parameters(ResonatorMode::String, 220.0, 0.25, 1000.0, 0.6, 0.35);
+        let _ = res.process_stereo([1.0, 0.5], 1.0);
+        assert!(!res.quiet());
+        assert!(!res.set_sample_rate(48_000.0));
+        assert!(res.set_sample_rate(96_000.0));
+        assert!(
+            !res.quiet(),
+            "set_sample_rate must preserve ringing resonator state"
+        );
+        res.set_parameters(ResonatorMode::String, 220.0, 0.25, 1000.0, 0.6, 0.35);
+        let y = res.process_stereo([0.0, 0.0], 1.0);
+        assert!(y[0].is_finite() && y[1].is_finite() && y[0].abs() + y[1].abs() > 1e-4);
     }
 }

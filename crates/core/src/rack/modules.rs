@@ -980,6 +980,11 @@ impl Default for ResonatorModule {
     }
 }
 
+/// Minimum `OutModule::gain_db` in decibels shared by parameter metadata and `OutNode`.
+pub const OUT_MIN_GAIN_DB: f32 = -36.0;
+/// Maximum `OutModule::gain_db` in decibels shared by parameter metadata and `OutNode`.
+pub const OUT_MAX_GAIN_DB: f32 = 12.0;
+
 /// Terminal zone output module (DC block + voice safety guard + stereo gain/pan/spread).
 /// Exactly one `OutModule` is required per [`crate::rack::RackZone`].
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

@@ -675,7 +675,7 @@ fn finish_sample(
         let mut hi = 0.0_f32;
         for i in start..end {
             let mono = if let Some(r) = &right {
-                (left[i] + r[i]) * 0.5
+                crate::dsp::stereo_mid_f32([left[i], r[i]])
             } else {
                 left[i]
             };

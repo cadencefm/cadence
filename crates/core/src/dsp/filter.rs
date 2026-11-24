@@ -538,7 +538,7 @@ impl RhythmicFilter {
         self.one_pole.reset();
         self.dc_blocker.reset();
         self.env.reset();
-        self.cutoff.snap(f64::from(self.last_patch.cutoff_hz));
+        self.cutoff.snap_to_target();
         self.resonance.snap(self.resonance.target());
         self.drive.snap(self.drive.target());
         let d = self.drive.current();

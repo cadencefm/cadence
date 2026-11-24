@@ -1,7 +1,7 @@
 //! Lock-free, zero-allocation CPAL audio input capture, live stereo metering,
 //! and drift-tolerant software input monitoring.
 use super::shared::*;
-use cadence_core::dsp::{one_pole_decay_ms, sanitize_sample, sanitize_sample_rate};
+use cadence_core::dsp::{one_pole_decay_ms, sanitize_sample, sanitize_sample_rate, PeakHold};
 use cadence_core::runtime::{
     AudioInputMode, AudioInputStatus, CapturePhase, InputMonitorMode, MAX_AUDIO_SAMPLE_RATE,
     MIN_AUDIO_SAMPLE_RATE,
@@ -81,8 +81,7 @@ pub(super) fn monitor_watermarks(in_sr: f64, in_buf: u64) -> (u64, u64) {
 /// Strictly RT-safe, zero-allocation state owned by the audio input callback thread.
 pub(super) struct InputMeterState {
     peak: [f32; 2],
-    peak_hold: [f32; 2],
-    hold_frames: [u32; 2],
+    peak_hold: [PeakHold; 2],
     clipped: bool,
     decay_coeff: f32,
     hold_decay_coeff: f32,
@@ -94,8 +93,7 @@ impl InputMeterState {
     pub(super) fn new(sample_rate: u32) -> Self {
         let mut s = Self {
             peak: [0.0; 2],
-            peak_hold: [0.0; 2],
-            hold_frames: [0; 2],
+            peak_hold: [PeakHold::new(); 2],
             clipped: false,
             decay_coeff: 0.999,
             hold_decay_coeff: 0.999,
@@ -121,8 +119,8 @@ impl InputMeterState {
     #[inline]
     pub(super) fn clear(&mut self) {
         self.peak = [0.0; 2];
-        self.peak_hold = [0.0; 2];
-        self.hold_frames = [0; 2];
+        self.peak_hold[0].reset();
+        self.peak_hold[1].reset();
         self.clipped = false;
     }
 
@@ -134,15 +132,13 @@ impl InputMeterState {
                 self.clipped = true;
             }
             self.peak[ch] = (self.peak[ch] * self.decay_coeff).max(a);
-            if a >= self.peak_hold[ch] {
-                self.peak_hold[ch] = a;
-                self.hold_frames[ch] = self.hold_duration_frames;
-            } else if self.hold_frames[ch] > 0 {
-                self.hold_frames[ch] -= 1;
-            } else {
-                self.peak_hold[ch] =
-                    (self.peak_hold[ch] * self.hold_decay_coeff).max(self.peak[ch]);
-            }
+            self.peak_hold[ch].observe(
+                a,
+                self.peak[ch],
+                self.hold_duration_frames,
+                self.hold_decay_coeff,
+                PeakHold::DEFAULT_ZERO_FLOOR,
+            );
         }
     }
 }
@@ -310,8 +306,8 @@ pub(super) fn process_input_slice<T: InputSample>(
 
     shared.input_peak[0].store(state.peak[0].to_bits(), Ordering::Relaxed);
     shared.input_peak[1].store(state.peak[1].to_bits(), Ordering::Relaxed);
-    shared.input_peak_hold[0].store(state.peak_hold[0].to_bits(), Ordering::Relaxed);
-    shared.input_peak_hold[1].store(state.peak_hold[1].to_bits(), Ordering::Relaxed);
+    shared.input_peak_hold[0].store(state.peak_hold[0].value().to_bits(), Ordering::Relaxed);
+    shared.input_peak_hold[1].store(state.peak_hold[1].value().to_bits(), Ordering::Relaxed);
     if state.clipped {
         shared.input_clipped.store(true, Ordering::Relaxed);
     }

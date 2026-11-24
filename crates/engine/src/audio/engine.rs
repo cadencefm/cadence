@@ -8,7 +8,7 @@ use super::voice_pool::{automation_position, LiveNote, TriggerRequest, VoicePool
 use super::voices::Voice;
 use super::*;
 use crate::mix_engine::MixerEngine;
-use cadence_core::dsp::{control_stride_mask, one_pole_decay_ms, stereo_mid_f32};
+use cadence_core::dsp::{control_stride_mask, stereo_mid_f32};
 use cadence_core::mixer::ChannelRef;
 use cadence_core::runtime::{AudioInputStatus, CapturePhase};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
@@ -61,10 +61,6 @@ pub(super) struct Engine {
     wave_peak: f32,
     meter_counter: u32,
     meter_mask: u32,
-    output_meter_decay: f32,
-    level: f32,
-    level_left: f32,
-    level_right: f32,
     audition_serial: u32,
     monitor_drain: InputMonitorDrain,
 }
@@ -116,10 +112,6 @@ impl Engine {
             wave_peak: 0.0,
             meter_counter: 0,
             meter_mask: control_stride_mask(sr, METER_PUBLISH_TARGET_HZ),
-            output_meter_decay: one_pole_decay_ms(300.0, sr) as f32,
-            level: 0.0,
-            level_left: 0.0,
-            level_right: 0.0,
             audition_serial: 0,
             monitor_drain: InputMonitorDrain::new(),
         };
@@ -216,9 +208,6 @@ impl Engine {
                 self.voice_pool.clear_all();
                 self.voice_pool.clear_held_notes();
                 self.scheduler.clear_pending();
-                self.level = 0.0;
-                self.level_left = 0.0;
-                self.level_right = 0.0;
             }
             self.voice_pool.remap_tracks(&self.project);
             self.publish_scope_tracks(boundary);
@@ -296,9 +285,6 @@ impl Engine {
         self.scheduler.clear_pending();
         self.mixer.reset();
         self.monitor_drain.reset();
-        self.level = 0.0;
-        self.level_left = 0.0;
-        self.level_right = 0.0;
         self.wave_peak = 0.0;
         self.shared.peak.store(0.0_f32.to_bits(), Ordering::Relaxed);
         self.shared
@@ -749,11 +735,6 @@ impl Engine {
                 self.shared.tap_dropped.fetch_add(1, Ordering::Relaxed);
             }
         }
-        let decay = self.output_meter_decay;
-        self.level_left = (self.level_left * decay).max(out[0].abs());
-        self.level_right = (self.level_right * decay).max(out[1].abs());
-        self.level = self.level_left.max(self.level_right);
-
         // Peak-preserving signed-max waveform downsample at ~1_500 Hz across sample rates.
         let mono_sample = stereo_mid_f32(out);
         if mono_sample.abs() >= self.wave_peak.abs() {
@@ -772,15 +753,15 @@ impl Engine {
         // Throttle mixer meter seqlock publication to ~187.5 Hz across sample rates.
         self.meter_counter = self.meter_counter.wrapping_add(1) & self.meter_mask;
         if self.meter_counter == 0 {
-            self.shared
-                .peak
-                .store(self.level.to_bits(), Ordering::Relaxed);
+            let [level_left, level_right] = self.mixer.master_output_peaks();
+            let level = level_left.max(level_right);
+            self.shared.peak.store(level.to_bits(), Ordering::Relaxed);
             self.shared
                 .peak_left
-                .store(self.level_left.to_bits(), Ordering::Relaxed);
+                .store(level_left.to_bits(), Ordering::Relaxed);
             self.shared
                 .peak_right
-                .store(self.level_right.to_bits(), Ordering::Relaxed);
+                .store(level_right.to_bits(), Ordering::Relaxed);
             self.publish_mixer_meters();
         }
         out

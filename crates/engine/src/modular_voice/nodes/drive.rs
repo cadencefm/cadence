@@ -138,6 +138,7 @@ impl VoiceModule for DriveNode {
         }
 
         if ctx.eff_retarget {
+            self.dc_blocker.set_sample_rate(ctx.sample_rate);
             self.tone.set_target(f64::from(drv.tone_hz));
             if !ctx.eff_legato {
                 self.tone.snap_to_target();

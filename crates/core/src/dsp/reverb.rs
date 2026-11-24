@@ -307,7 +307,7 @@ impl Reverb {
         for fb in &mut self.feedback {
             fb.snap(fb.target());
         }
-        self.damping_hz.snap(f64::from(self.target.damping_hz));
+        self.damping_hz.snap_to_target();
         let damp = self.damping_hz.current();
         self.cached_damping_bits = damp.to_bits();
         for lpf in &mut self.damping_lpf {
