@@ -8,6 +8,7 @@
 //! bypass crossfade.
 
 use crate::dsp::biquad::TptOnePoleLpf;
+use crate::dsp::gain::stereo_mid_f64;
 use crate::dsp::math::{
     flush_denormal_f32, hann_fade_in, hermite4_f32, mix_stereo_f32, sanitize_clamp_f64,
     sanitize_frame, sanitize_sample_rate, BypassFader, BypassStep, Smoother,
@@ -384,7 +385,7 @@ impl Delay {
         // Smooth convex blend between Stereo (independent dual-channel feedback) and
         // PingPong (mono-summed Left injection bouncing L -> R -> L). Provably BIBO-stable
         // for every blend weight in [0, 1] because row L1 norm == fb <= 0.95.
-        let ping_in = f64::from(feed[0] + feed[1]) * 0.5;
+        let ping_in = stereo_mid_f64([f64::from(feed[0]), f64::from(feed[1])]);
         let pp_l = ping_in + damped[1] * fb;
         let pp_r = damped[0] * fb;
         let st_l = f64::from(feed[0]) + damped[0] * fb;

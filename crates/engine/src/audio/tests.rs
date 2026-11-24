@@ -3788,3 +3788,351 @@ fn watchdog_ema_time_based_overload_sr_scaled_fade_and_engine_pdc_telemetry() {
         );
     }
 }
+
+#[test]
+fn mono_dac_downmix_sums_before_clamping_and_master_meters_live_monitor() {
+    use crate::audio::input::{process_input_slice, InputMeterState};
+    use crate::audio::runtime::{
+        overload_fade_frames, render_output_slice_with_elapsed, CallbackWatchdog,
+    };
+    use crate::audio::shared::SharedChannelMeter;
+    use cadence_core::runtime::{AudioInputMode, InputMonitorMode};
+
+    let sr = 48_000u32;
+    let score = rack_project(vec![Step::default(); 16], RackPatch::default_synth())
+        .compile()
+        .unwrap();
+
+    let make_monitored_engine = || {
+        let shared = Shared::new_arc();
+        shared
+            .input_mode
+            .store(AudioInputMode::Stereo.to_u8(), Ordering::Release);
+        shared
+            .input_monitor_mode
+            .store(InputMonitorMode::On.to_u8(), Ordering::Release);
+        let engine = Engine::new(score.clone(), Vec::new(), sr, Arc::clone(&shared));
+        let in_state = InputMeterState::new(sr);
+        let watchdog = CallbackWatchdog::new();
+        (shared, engine, in_state, watchdog)
+    };
+
+    let feed_constant_stereo =
+        |in_state: &mut InputMeterState, shared: &Shared, frame: [f32; 2], count: usize| {
+            let mut interleaved = Vec::with_capacity(count * 2);
+            for _ in 0..count {
+                interleaved.push(frame[0]);
+                interleaved.push(frame[1]);
+            }
+            process_input_slice(in_state, shared, &interleaved, 2, sr);
+        };
+
+    // 1. [1.2, -0.4]: mono DAC (1 ch) sums BEFORE clamping -> exact 0.4 (NOT pre-clamped 0.3),
+    //    while stereo DAC (2 ch) clamps each channel independently -> [1.0, -0.4].
+    //    Also confirm live monitor exceeding 1.0 latches Master meter `clipped` end-to-end.
+    let (sh_mo, mut eng_mo, mut in_mo, mut wd_mo) = make_monitored_engine();
+    let (sh_st, mut eng_st, mut in_st, mut wd_st) = make_monitored_engine();
+    feed_constant_stereo(&mut in_mo, &sh_mo, [1.2, -0.4], 320);
+    feed_constant_stereo(&mut in_st, &sh_st, [1.2, -0.4], 320);
+
+    let frames = 256usize;
+    let mut mono = vec![0.0_f32; frames];
+    let mut stereo = vec![0.0_f32; frames * 2];
+    let fast = || Duration::from_micros(50);
+
+    render_output_slice_with_elapsed(&mut eng_mo, &mut wd_mo, &sh_mo, &mut mono, 1, sr, fast);
+    render_output_slice_with_elapsed(&mut eng_st, &mut wd_st, &sh_st, &mut stereo, 2, sr, fast);
+
+    // Past the 1.5 ms (~72-frame) monitor ramp-in, frames 100..256 carry full-gain [1.2, -0.4].
+    for f in 100..frames {
+        assert!(
+            (mono[f] - 0.4).abs() < 1e-5,
+            "mono frame {f} must downmix [1.2, -0.4] before clamping to 0.4, got {}",
+            mono[f]
+        );
+        assert!(
+            (stereo[f * 2] - 1.0).abs() < 1e-6 && (stereo[f * 2 + 1] - (-0.4)).abs() < 1e-5,
+            "stereo frame {f} must clamp per channel to [1.0, -0.4], got [{}, {}]",
+            stereo[f * 2],
+            stereo[f * 2 + 1]
+        );
+    }
+
+    let master_meter = sh_mo
+        .mixer_meters
+        .iter()
+        .filter_map(SharedChannelMeter::read)
+        .find(|m| m.channel == ChannelRef::Master)
+        .expect("master meter published");
+    assert!(
+        master_meter.clipped && master_meter.output_peak_hold[0] >= 1.19,
+        "Master meter must observe live monitor pushing final output > 1.0: {master_meter:?}"
+    );
+
+    // 2. Overload tail fade on mono DAC also stores unclipped stereo in watchdog.tail_stereo,
+    //    ramping smoothly from 0.4 down to exact 0.0 without stepping down to 0.3 first.
+    feed_constant_stereo(&mut in_mo, &sh_mo, [1.2, -0.4], 320);
+    let mut fade_mono = vec![0.0_f32; frames];
+    let budget = Duration::from_secs_f64(frames as f64 / f64::from(sr));
+    render_output_slice_with_elapsed(
+        &mut eng_mo,
+        &mut wd_mo,
+        &sh_mo,
+        &mut fade_mono,
+        1,
+        sr,
+        || budget.mul_f64(5.0),
+    );
+    assert!(sh_mo.read_health().overloaded);
+    let tail_start = frames - overload_fade_frames(sr);
+    assert!(
+        (fade_mono[tail_start - 1] - 0.4).abs() < 1e-5,
+        "pre-fade mono sample must be 0.4, got {}",
+        fade_mono[tail_start - 1]
+    );
+    assert!(
+        fade_mono[tail_start] > 0.38,
+        "first mono overload-fade sample must start near 0.4 (unclipped tail), got {}",
+        fade_mono[tail_start]
+    );
+    assert_eq!(fade_mono[frames - 1], 0.0);
+
+    // 3. Mono sums exceeding +/-1.0 still clamp cleanly to [-1.0, 1.0].
+    for (pair, expected) in [
+        ([1.5_f32, 1.5_f32], 1.0_f32),
+        ([-1.5_f32, -1.5_f32], -1.0_f32),
+    ] {
+        let (sh, mut eng, mut in_st, mut wd) = make_monitored_engine();
+        feed_constant_stereo(&mut in_st, &sh, pair, 320);
+        let mut out = vec![0.0_f32; frames];
+        render_output_slice_with_elapsed(&mut eng, &mut wd, &sh, &mut out, 1, sr, fast);
+        for (f, &sample) in out.iter().enumerate().take(frames).skip(100) {
+            assert_eq!(
+                sample, expected,
+                "mono sum of {pair:?} at frame {f} must clamp to {expected}, got {sample}"
+            );
+        }
+    }
+}
+
+#[test]
+fn voice_steal_micro_fade_contributes_to_track_scope() {
+    use crate::audio::shared::VOICES;
+    use crate::audio::voice_pool::{TriggerRequest, VoicePool, ZoneTriggerCtx};
+    use cadence_core::dsp::stereo_mid_f32;
+
+    let sr = 48_000u32;
+    let sr_f = f64::from(sr);
+
+    // Track 0: Stereo sampler playing a constant asymmetric [0.8, 0.2] waveform with instant attack.
+    let mut track0_rack = RackPatch::default_sampler();
+    {
+        let smp = sampler_mut(&mut track0_rack);
+        smp.path = Some("./dc_stereo.wav".into());
+        smp.sample_start = 0;
+        smp.sample_end = 512;
+        smp.loop_mode = SampleLoopMode::Forward;
+        smp.loop_start = 0;
+        smp.loop_end = 512;
+        smp.one_shot = false;
+    }
+    {
+        let flt = filter_mut(&mut track0_rack);
+        flt.cutoff_hz = 20_000.0;
+        flt.resonance = 0.0;
+    }
+    {
+        let env = amp_env_mut(&mut track0_rack);
+        env.attack_ms = 0.1;
+        env.sustain = 1.0;
+        env.release_ms = 200.0;
+    }
+
+    // Track 1: Synth with 100 ms envelope delay so newly stolen slots output exact silence initially.
+    let mut track1_rack = RackPatch::default_synth();
+    {
+        let env = amp_env_mut(&mut track1_rack);
+        env.delay_ms = 100.0;
+        env.attack_ms = 50.0;
+        env.sustain = 1.0;
+    }
+
+    let mut project = Project::empty();
+    project.bars = 1;
+    project
+        .mixer
+        .channels
+        .push(Channel::new(1, ChannelKind::Audio, "Sampler"));
+    project
+        .mixer
+        .channels
+        .push(Channel::new(2, ChannelKind::Audio, "Delayed"));
+    project.instruments.push(InstrumentInstance {
+        id: 1,
+        name: "Sampler".into(),
+        rack: track0_rack,
+        channel: 1,
+    });
+    project.instruments.push(InstrumentInstance {
+        id: 2,
+        name: "Delayed".into(),
+        rack: track1_rack,
+        channel: 2,
+    });
+    let score = project.compile().unwrap();
+
+    let stereo_dc = Arc::new(SampleData {
+        path_label: "./dc_stereo.wav".into(),
+        resolved_path: std::path::PathBuf::from("dc_stereo.wav"),
+        name: "dc_stereo".into(),
+        sample_rate: sr,
+        channels: 2,
+        frames: 512,
+        left: vec![0.8_f32; 512].into_boxed_slice(),
+        right: Some(vec![0.2_f32; 512].into_boxed_slice()),
+        peaks: vec![(0.2, 0.8); 64].into_boxed_slice(),
+        meta: SampleMetadata::default(),
+    });
+    let samples = vec![(module_sample_key(1, 1, 1), stereo_dc)];
+
+    let mut pool = VoicePool::new(sr_f);
+    let ctx = ZoneTriggerCtx {
+        project: &score,
+        samples: &samples,
+        sample_rate: sr_f,
+        rendered_frames: 0,
+    };
+
+    // Trigger one sustained voice on track 0 and advance 64 frames so it is oldest with loud last_output.
+    pool.trigger_on_track(
+        &ctx,
+        &TriggerRequest {
+            inst_index: 0,
+            live_key: None,
+            midi: 60,
+            velocity: 1.0,
+            gate_seconds: 10.0,
+            seed: 1,
+            mod_pos: None,
+            locks: &[],
+        },
+    );
+    let mut pre_steal = pool.render_frame(&samples, None);
+    for _ in 1..64 {
+        pre_steal = pool.render_frame(&samples, None);
+    }
+    assert!(
+        pre_steal.sources[0][0] > 0.2 && pre_steal.sources[0][0] > pre_steal.sources[0][1] * 2.0,
+        "expected asymmetric stereo output on track 0 before steal: {:?}",
+        pre_steal.sources[0]
+    );
+    assert!(
+        (pre_steal.track_scope[0] - stereo_mid_f32(pre_steal.sources[0])).abs() < 1e-6,
+        "active voice track_scope must match stereo_mid_f32"
+    );
+
+    // Fill the remaining VOICES - 1 slots with younger voices on track 1, then trigger one more
+    // voice on track 1 to steal track 0's oldest voice and arm a track-0 steal micro-fade.
+    for i in 0..VOICES {
+        pool.trigger_on_track(
+            &ctx,
+            &TriggerRequest {
+                inst_index: 1,
+                live_key: None,
+                midi: 60,
+                velocity: 1.0,
+                gate_seconds: 10.0,
+                seed: (i as u32) + 2,
+                mod_pos: None,
+                locks: &[],
+            },
+        );
+    }
+    assert!(
+        pool.voices().iter().all(|v| !v.active || v.track != 0),
+        "track 0 voice must have been stolen by track 1"
+    );
+
+    let expected_fade_frames = usize::from(super::voice_pool::steal_fade_frames(sr_f));
+    let mut prev_scope = f32::INFINITY;
+    for f in 0..expected_fade_frames {
+        let out = pool.render_frame(&samples, None);
+        let expected_mid = stereo_mid_f32(out.sources[0]);
+        assert!(
+            out.track_scope[0] > 0.0,
+            "frame {f}: track_scope[0] must remain non-zero throughout steal micro-fade"
+        );
+        assert!(
+            (out.track_scope[0] - expected_mid).abs() < 1e-6,
+            "frame {f}: steal fade track_scope[0]={} must equal stereo_mid_f32(sources[0])={expected_mid}",
+            out.track_scope[0]
+        );
+        assert!(
+            out.track_scope[0] < prev_scope,
+            "frame {f}: steal fade track_scope[0] must decay monotonically ({} vs {prev_scope})",
+            out.track_scope[0]
+        );
+        if f == 0 {
+            assert!(
+                (out.track_scope[0] - stereo_mid_f32(pre_steal.sources[0])).abs() < 1e-5,
+                "first steal-fade frame must start seamlessly at stolen voice mid output"
+            );
+        }
+        prev_scope = out.track_scope[0];
+    }
+
+    // After the micro-fade completes, track 0 audio and track_scope both settle to exact 0.0.
+    let done = pool.render_frame(&samples, None);
+    assert_eq!(done.sources[0], [0.0, 0.0]);
+    assert_eq!(done.track_scope[0], 0.0);
+
+    // Live track reorder and removal mid-fade must remap or drop in-flight steal fades cleanly.
+    pool.clear_all();
+    pool.trigger_on_track(
+        &ctx,
+        &TriggerRequest {
+            inst_index: 0,
+            live_key: None,
+            midi: 60,
+            velocity: 1.0,
+            gate_seconds: 10.0,
+            seed: 101,
+            mod_pos: None,
+            locks: &[],
+        },
+    );
+    for _ in 0..16 {
+        pool.render_frame(&samples, None);
+    }
+    for i in 0..VOICES {
+        pool.trigger_on_track(
+            &ctx,
+            &TriggerRequest {
+                inst_index: 1,
+                live_key: None,
+                midi: 60,
+                velocity: 1.0,
+                gate_seconds: 10.0,
+                seed: 200 + i as u32,
+                mod_pos: None,
+                locks: &[],
+            },
+        );
+    }
+    let mut swapped = score.clone();
+    swapped.instruments.swap(0, 1);
+    pool.remap_tracks(&swapped);
+    let after_swap = pool.render_frame(&samples, None);
+    assert!(
+        after_swap.track_scope[1] > 0.0
+            && (after_swap.track_scope[1] - stereo_mid_f32(after_swap.sources[1])).abs() < 1e-6,
+        "reordered steal fade must follow its track_id to index 1"
+    );
+
+    let mut removed = swapped;
+    removed.instruments.pop();
+    pool.remap_tracks(&removed);
+    let after_remove = pool.render_frame(&samples, None);
+    assert_eq!(after_remove.sources[1], [0.0, 0.0]);
+    assert_eq!(after_remove.track_scope[1], 0.0);
+}

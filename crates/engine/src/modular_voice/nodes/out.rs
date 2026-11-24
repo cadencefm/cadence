@@ -1,4 +1,10 @@
-//! Terminal zone output voice node with CV gate, M/S spread, DC blocker, equal-power pan, and guard.
+//! Terminal zone output voice node with CV gate, Mid/Side spread, DC blocker,
+//! constant-power (`-3.01 dB` center) voice/zone panner, and transparent `+12.04 dBFS`
+//! anti-blowup safety guard (`voice_guard_f64`).
+//!
+//! Uses [`pan_mono_equal_power_f64`] intentionally as the voice/zone tier of
+//! `cadence_core::dsp::gain`'s three-tier stereo pan contract, preserving constant
+//! stereo power (`L² + R² == 1.0`) across `[-1.0, 1.0]` for both mono and stereo voices.
 
 use super::{
     write_copy_module_normalized, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks,
@@ -6,8 +12,8 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    db_to_lin_f64, pan_mono_equal_power_f64, smooth_step_f32, soft_guard_f64, DcBlocker,
-    ModalResonator,
+    db_to_lin_f64, pan_mono_equal_power_f64, sanitize_clamp_f64, smooth_step_f32,
+    stereo_ms_decode_f64, stereo_ms_encode_f64, voice_guard_f64, DcBlocker, ModalResonator,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, OutModule};
 
@@ -32,7 +38,7 @@ impl Default for OutNode {
 impl OutNode {
     #[inline]
     pub(super) fn new(params: OutModule, sample_rate: f64) -> Self {
-        let pan = f64::from(params.pan).clamp(-1.0, 1.0);
+        let pan = sanitize_clamp_f64(f64::from(params.pan), -1.0, 1.0, 0.0);
         Self {
             current: params,
             target: params,
@@ -124,11 +130,10 @@ impl VoiceModule for OutNode {
         if ctx.use_fallback_gate {
             sig = [sig[0] * ctx.fallback_env, sig[1] * ctx.fallback_env];
         }
-        let spread = f64::from(out_p.spread.clamp(0.0, 1.0));
+        let spread = sanitize_clamp_f64(f64::from(out_p.spread), 0.0, 1.0, 0.0);
         if spread > 0.0 {
-            let mid = 0.5 * (sig[0] + sig[1]);
-            let side = 0.5 * (sig[0] - sig[1]) * (1.0 + spread);
-            sig = [mid + side, mid - side];
+            let [mid, side] = stereo_ms_encode_f64(sig);
+            sig = stereo_ms_decode_f64(mid, side * (1.0 + spread));
         }
         let centered = self.dc_blocker.process_stereo(sig);
         let gain_db_bits = out_p.gain_db.to_bits();
@@ -137,7 +142,12 @@ impl VoiceModule for OutNode {
             self.cached_gain_lin = db_to_lin_f64(f64::from(out_p.gain_db));
         }
         let gain = self.cached_gain_lin * ctx.velocity;
-        let eff_pan = (f64::from(out_p.pan) + f64::from(ctx.zone_pan)).clamp(-1.0, 1.0);
+        let eff_pan = sanitize_clamp_f64(
+            f64::from(out_p.pan) + f64::from(ctx.zone_pan),
+            -1.0,
+            1.0,
+            0.0,
+        );
         let pan_bits = eff_pan.to_bits();
         if pan_bits != self.cached_pan_bits {
             self.cached_pan_bits = pan_bits;
@@ -145,8 +155,8 @@ impl VoiceModule for OutNode {
         }
         let [pl, pr] = self.cached_pan;
         [
-            soft_guard_f64(centered[0] * gain * pl),
-            soft_guard_f64(centered[1] * gain * pr),
+            voice_guard_f64(centered[0] * gain * pl),
+            voice_guard_f64(centered[1] * gain * pr),
         ]
     }
 

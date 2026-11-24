@@ -44,9 +44,10 @@ pub use filter::{
 pub use gain::{
     apply_fader_gain, apply_pan_balance, apply_strip_gain, channel_gain_to_norm, format_db_value,
     format_gain_db, norm_to_channel_gain, nudge_channel_gain_db, pan_mono_equal_power,
-    pan_mono_equal_power_f64, pan_stereo_balance, pan_stereo_balance_f64,
-    stereo_ms_width_uncorrelated, stereo_ms_width_uncorrelated_f64, CHANNEL_GAIN_UNITY_NORM,
-    MAX_CHANNEL_GAIN, MAX_CHANNEL_GAIN_DB,
+    pan_mono_equal_power_f64, pan_stereo_balance, pan_stereo_balance_f64, stereo_mid_f32,
+    stereo_mid_f64, stereo_ms_decode_f64, stereo_ms_encode_f64, stereo_ms_width_uncorrelated,
+    stereo_ms_width_uncorrelated_f64, CHANNEL_GAIN_UNITY_NORM, MAX_CHANNEL_GAIN,
+    MAX_CHANNEL_GAIN_DB,
 };
 pub use lofi::{
     lofi_quantize, lofi_quantize_f64, lofi_transfer_sample, LoFiProcessor, LOFI_BYPASS_BITS,
@@ -85,9 +86,10 @@ pub use saturate::{
     asymmetric_drive_shape, asymmetric_drive_shape_f64, drive_shape_mode, drive_shape_mode_asym,
     drive_shape_mode_asym_f64, drive_shape_mode_f64, drive_transfer_sample,
     shape_drive_oversampled_2x, shape_drive_oversampled_2x_coeffs, soft_clip_drive,
-    soft_clip_drive_f64, soft_guard, soft_guard_f64, soft_knee_guard_f64, Drive, DriveShaperCoeffs,
+    soft_clip_drive_f64, soft_knee_guard_f64, voice_guard_f64, Drive, DriveShaperCoeffs,
     Halfband2x, Halfband2xDryAlign, SoftClipCoeffs, DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ,
-    DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ,
+    DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ, VOICE_GUARD_CEILING, VOICE_GUARD_HEADROOM,
+    VOICE_GUARD_KNEE,
 };
 
 /// Uniform zero-allocation stereo insert effect contract implemented by all

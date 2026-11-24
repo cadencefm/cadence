@@ -232,7 +232,7 @@ impl VoiceModule for FilterNode {
     fn process(&mut self, inputs: &NodeInputs, ctx: &mut ProcessCtx<'_>) -> [f64; 2] {
         let flt = self.current;
         let sr = ctx.sample_rate;
-        let cv_octaves = 0.5 * (inputs.cv_stereo[0] + inputs.cv_stereo[1]);
+        let cv_octaves = inputs.cv_mono();
         let cv_uninit = !self.last_cv_octaves.is_finite();
         let cv_delta = if cv_uninit {
             0.0

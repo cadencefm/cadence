@@ -184,7 +184,7 @@ impl VoiceModule for DriveNode {
     #[inline]
     fn process(&mut self, inputs: &NodeInputs, _ctx: &mut ProcessCtx<'_>) -> [f64; 2] {
         let drv = self.current;
-        let cv_mono = 0.5 * (inputs.cv_stereo[0] + inputs.cv_stereo[1]);
+        let cv_mono = inputs.cv_mono();
         let eff_drive = sanitize_clamp_f64(f64::from(drv.drive) + cv_mono, 0.0, 1.0, 0.0);
         let asym = sanitize_clamp_f64(f64::from(drv.asymmetry), -1.0, 1.0, 0.0);
         let shaper_key = (eff_drive.to_bits(), asym.to_bits(), drv.mode);

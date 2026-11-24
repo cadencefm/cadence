@@ -26,7 +26,9 @@ pub(super) use vca::VcaNode;
 pub(super) use vco::VcoNode;
 
 use super::{ModuleParams, VoiceLockKey};
-use cadence_core::dsp::{midi_to_hz, sanitize_clamp_f64, semitones_to_ratio_f64, ModalResonator};
+use cadence_core::dsp::{
+    midi_to_hz, sanitize_clamp_f64, semitones_to_ratio_f64, stereo_mid_f64, ModalResonator,
+};
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking};
 use cadence_core::runtime::SampleBank;
 use cadence_core::sampler::SampleData;
@@ -151,6 +153,14 @@ pub(super) struct NodeInputs {
     pub pw_cv: f64,
     pub trig_in: f64,
     pub filter_env_level: f64,
+}
+
+impl NodeInputs {
+    /// Voltage-average mono CV sum (`0.5 * (L + R)`), preserving exact unity for mono CV wires.
+    #[inline]
+    pub(super) fn cv_mono(&self) -> f64 {
+        stereo_mid_f64(self.cv_stereo)
+    }
 }
 
 /// Shared per-frame voice context passed into [`VoiceModule::process`].

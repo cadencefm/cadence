@@ -188,7 +188,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 7.075757,
+              "gain_db": 6.3757567,
               "pan": 0.0,
               "spread": 0.0
             }
@@ -531,7 +531,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 3.4757566,
+              "gain_db": 2.5757565,
               "pan": 0.0,
               "spread": 0.0
             }
@@ -884,7 +884,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 5.075757,
+              "gain_db": 4.8757567,
               "pan": 0.0,
               "spread": 0.0
             }
@@ -1189,7 +1189,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 5.075757,
+              "gain_db": 4.6257567,
               "pan": 0.0,
               "spread": 0.0
             }
@@ -1494,7 +1494,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 5.075757,
+              "gain_db": 4.675757,
               "pan": 0.0,
               "spread": 0.0
             }
@@ -2031,7 +2031,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 7.4757566,
+              "gain_db": 5.8757567,
               "pan": 0.0,
               "spread": 0.0
             }
@@ -2285,7 +2285,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 8.475757,
+              "gain_db": 7.075757,
               "pan": 0.0,
               "spread": 0.4
             }
@@ -2592,7 +2592,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 8.275757,
+              "gain_db": 6.775757,
               "pan": 0.0,
               "spread": 0.0
             }
@@ -2899,7 +2899,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 8.675756,
+              "gain_db": 7.9257565,
               "pan": 0.0,
               "spread": 0.0
             }
@@ -3216,7 +3216,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 7.275757,
+              "gain_db": 6.6257567,
               "pan": 0.0,
               "spread": 0.0
             }

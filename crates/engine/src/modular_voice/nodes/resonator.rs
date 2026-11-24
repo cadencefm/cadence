@@ -236,12 +236,7 @@ impl VoiceModule for ResonatorNode {
                     440.0,
                 );
                 let eff_bright = if self.has_cv {
-                    sanitize_clamp_f32(
-                        res.brightness + 0.5 * (inputs.cv_stereo[0] + inputs.cv_stereo[1]) as f32,
-                        0.0,
-                        1.0,
-                        0.65,
-                    )
+                    sanitize_clamp_f32(res.brightness + inputs.cv_mono() as f32, 0.0, 1.0, 0.65)
                 } else {
                     sanitize_clamp_f32(res.brightness, 0.0, 1.0, 0.65)
                 };

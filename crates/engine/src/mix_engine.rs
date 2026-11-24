@@ -1405,6 +1405,7 @@ impl MixerEngine {
         &mut self,
         sources: &[[f32; 2]; MAX_INSTRUMENTS],
         preview: [f32; 2],
+        monitor: [f32; 2],
     ) -> [f32; 2] {
         self.factors.fill(1.0);
         for duck in &mut self.ducks {
@@ -1524,23 +1525,35 @@ impl MixerEngine {
         }
 
         let processed = self.inserts(MASTER, master);
-        let output = if self.channels[MASTER].muted {
+        let strip_out = if self.channels[MASTER].muted {
             [0.0; 2]
         } else {
             self.strip(MASTER, processed)
         };
-        self.channels[MASTER]
-            .meter
-            .observe(master, output, true, decay, hold_frames, hold_decay);
-        if !preview[0].is_finite() || !preview[1].is_finite() {
+        let aux_non_finite = !preview[0].is_finite()
+            || !preview[1].is_finite()
+            || !monitor[0].is_finite()
+            || !monitor[1].is_finite();
+        // Preview audition and live software input monitoring sum after Master inserts/mute
+        // so muting Master never silences them, while Master meters observe the exact final
+        // stereo frame sent to DAC/WAV.
+        let final_raw = [
+            strip_out[0] + sanitize_sample(preview[0]) + sanitize_sample(monitor[0]),
+            strip_out[1] + sanitize_sample(preview[1]) + sanitize_sample(monitor[1]),
+        ];
+        self.channels[MASTER].meter.observe(
+            master,
+            final_raw,
+            true,
+            decay,
+            hold_frames,
+            hold_decay,
+        );
+        if aux_non_finite {
             self.channels[MASTER].meter.clipped = true;
         }
 
-        // Preview audition sums after Master mute/strip so muting Master never silences browser previews.
-        [
-            sanitize_sample(output[0] + preview[0]),
-            sanitize_sample(output[1] + preview[1]),
-        ]
+        sanitize_frame(final_raw)
     }
 }
 

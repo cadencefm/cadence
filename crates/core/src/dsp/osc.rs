@@ -2,11 +2,11 @@
 //! through-zero FM), ideal UI waveform evaluation, constant-power unison helpers,
 //! and 2× polyphase-halfband oversampled through-zero linear FM.
 
-use crate::dsp::gain::pan_mono_equal_power;
+use crate::dsp::gain::pan_mono_equal_power_f64;
 use crate::dsp::math::{sanitize_sample_f64, semitones_to_ratio_f64, NYQUIST_SAFE_RATIO};
 use crate::dsp::saturate::Halfband2x;
 use crate::rack::Waveform;
-use std::f64::consts::TAU;
+use std::f64::consts::{SQRT_2, TAU};
 
 /// Maximum unison voices supported per oscillator in `VcoModule`.
 pub const MAX_UNISON: usize = 7;
@@ -138,8 +138,8 @@ pub struct UnisonVoiceOffset {
     pub detune_ratio: f64,
     /// Normalized stereo pan position in `[-1.0, 1.0]`.
     pub pan_pos: f32,
-    /// Constant-power equal-power stereo gains (`L² + R² == 1.0`).
-    pub pan: [f32; 2],
+    /// Unity-centered equal-power stereo gains (`center == [1.0, 1.0]`, `L² + R² == 2.0`).
+    pub pan: [f64; 2],
 }
 
 impl Default for UnisonVoiceOffset {
@@ -147,13 +147,14 @@ impl Default for UnisonVoiceOffset {
         Self {
             detune_ratio: 1.0,
             pan_pos: 0.0,
-            pan: pan_mono_equal_power(0.0),
+            pan: [1.0, 1.0],
         }
     }
 }
 
-/// Compute symmetric detune ratios and constant-power stereo pan weights for
-/// `count` unison voices (`1..=MAX_UNISON`). Zero heap allocation.
+/// Compute symmetric detune ratios and unity-centered equal-power stereo pan weights
+/// (`center == [1.0, 1.0]`, `L² + R² == 2.0`) for `count` unison voices (`1..=MAX_UNISON`).
+/// Zero heap allocation.
 pub fn unison_offsets(
     count: usize,
     detune_cents: f32,
@@ -177,11 +178,18 @@ pub fn unison_offsets(
         } else {
             2.0 * i as f64 / (n - 1) as f64 - 1.0
         };
-        let pan_pos = (norm as f32 * w).clamp(-1.0, 1.0);
+        let raw_pan = (norm as f32 * w).clamp(-1.0, 1.0);
+        let pan_pos = if raw_pan == 0.0 { 0.0 } else { raw_pan };
+        let pan = if pan_pos == 0.0 {
+            [1.0, 1.0]
+        } else {
+            let [pl, pr] = pan_mono_equal_power_f64(f64::from(pan_pos));
+            [pl * SQRT_2, pr * SQRT_2]
+        };
         *slot = UnisonVoiceOffset {
             detune_ratio: unison_detune_ratio(norm * detune),
             pan_pos,
-            pan: pan_mono_equal_power(pan_pos),
+            pan,
         };
     }
     out
@@ -411,7 +419,7 @@ mod tests {
         let mut pan = [[1.0, 1.0]; MAX_UNISON];
         for i in 0..3 {
             ratios[i] = offsets[i].detune_ratio;
-            pan[i] = [f64::from(offsets[i].pan[0]), f64::from(offsets[i].pan[1])];
+            pan[i] = offsets[i].pan;
         }
         for sr in [44_100.0, 48_000.0, 96_000.0] {
             let params = VcoStepParams {
@@ -443,12 +451,12 @@ mod tests {
                     mod_sig * depth,
                 );
                 assert!(
-                    out[0].is_finite() && out[0].abs() <= 2.5,
+                    out[0].is_finite() && out[0].abs() <= 3.5,
                     "sr={sr} i={i}: out[0]={}",
                     out[0]
                 );
                 assert!(
-                    out[1].is_finite() && out[1].abs() <= 2.5,
+                    out[1].is_finite() && out[1].abs() <= 3.5,
                     "sr={sr} i={i}: out[1]={}",
                     out[1]
                 );
@@ -523,5 +531,107 @@ mod tests {
             reject_db < -35.0,
             "2x Halfband FM must crush 16.1 kHz foldback alias by >35 dB vs 1x: {reject_db:+.1} dB (hb={alias_hb:.6}, 1x={alias_1x:.6})"
         );
+    }
+
+    #[test]
+    fn unison_offsets_are_unity_centered_equal_power_and_match_single_voice_at_zero_width() {
+        let def = UnisonVoiceOffset::default();
+        assert_eq!(def.detune_ratio, 1.0);
+        assert_eq!(def.pan_pos, 0.0);
+        assert_eq!(def.pan, [1.0, 1.0]);
+
+        for count in 1..=MAX_UNISON {
+            for &width in &[0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+                let offsets = unison_offsets(count, 20.0, width);
+                for (i, off) in offsets.iter().take(count).enumerate() {
+                    assert!(
+                        off.pan[0] >= 0.0 && off.pan[1] >= 0.0,
+                        "count={count} width={width} i={i}: negative pan {:?}",
+                        off.pan
+                    );
+                    let power = off.pan[0] * off.pan[0] + off.pan[1] * off.pan[1];
+                    assert!(
+                        (power - 2.0).abs() < 1e-12,
+                        "count={count} width={width} i={i}: L^2 + R^2 = {power} != 2.0 (pan={:?})",
+                        off.pan
+                    );
+                    if off.pan_pos == 0.0 {
+                        assert_eq!(
+                            off.pan,
+                            [1.0, 1.0],
+                            "count={count} width={width} i={i}: center pan must equal exact [1.0, 1.0]"
+                        );
+                    }
+                    let mirror = offsets[count - 1 - i];
+                    assert!((off.pan[0] - mirror.pan[1]).abs() < 1e-12);
+                    assert!((off.pan[1] - mirror.pan[0]).abs() < 1e-12);
+                }
+                for slot in &offsets[count..] {
+                    assert_eq!(*slot, def);
+                }
+                if width == 0.0 {
+                    for off in &offsets[..count] {
+                        assert_eq!(off.pan_pos, 0.0);
+                        assert_eq!(off.pan, [1.0, 1.0]);
+                    }
+                } else if width == 1.0 && count >= 2 {
+                    assert_eq!(offsets[0].pan_pos, -1.0);
+                    assert_eq!(offsets[0].pan, [SQRT_2, 0.0]);
+                    assert_eq!(offsets[count - 1].pan_pos, 1.0);
+                    assert_eq!(offsets[count - 1].pan, [0.0, SQRT_2]);
+                }
+            }
+        }
+
+        // Non-finite inputs sanitize cleanly to unity center.
+        let nan_offsets = unison_offsets(5, f32::NAN, f32::INFINITY);
+        for off in &nan_offsets[..5] {
+            assert_eq!(off.detune_ratio, 1.0);
+            assert_eq!(off.pan_pos, 0.0);
+            assert_eq!(off.pan, [1.0, 1.0]);
+        }
+
+        // Exact parity with unison_voices == 1 when width == 0.0 in step_vco_bank.
+        let sr = 48_000.0;
+        let base_hz = 330.0;
+        let single_params = VcoStepParams {
+            waveform: Waveform::Saw,
+            unison_count: 1,
+            base_hz,
+            sample_rate: sr,
+            pw: 0.5,
+            level: 1.0,
+        };
+        let unit_ratios = [1.0; MAX_UNISON];
+        let unit_pan = [[1.0, 1.0]; MAX_UNISON];
+
+        for count in 2..=MAX_UNISON {
+            let offsets = unison_offsets(count, 0.0, 0.0);
+            let mut ratios = [1.0; MAX_UNISON];
+            let mut pan = [[1.0, 1.0]; MAX_UNISON];
+            for i in 0..count {
+                ratios[i] = offsets[i].detune_ratio;
+                pan[i] = offsets[i].pan;
+            }
+            let multi_params = VcoStepParams {
+                unison_count: count,
+                level: 1.0 / count as f64,
+                ..single_params
+            };
+            let mut p1 = [0.125; MAX_UNISON];
+            let mut pm = [0.125; MAX_UNISON];
+            for frame in 0..256 {
+                let y1 = step_vco_bank(single_params, &mut p1, &unit_ratios, &unit_pan);
+                let ym = step_vco_bank(multi_params, &mut pm, &ratios, &pan);
+                assert_eq!(
+                    ym[0], ym[1],
+                    "count={count} frame={frame}: width=0 must keep L == R"
+                );
+                assert!(
+                    (ym[0] - y1[0]).abs() < 1e-12 && (ym[1] - y1[1]).abs() < 1e-12,
+                    "count={count} frame={frame}: width=0 unison drifted from single voice: ym={ym:?} vs y1={y1:?}"
+                );
+            }
+        }
     }
 }

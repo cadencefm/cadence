@@ -6,7 +6,7 @@ use super::input::{build_input_stream_for_format, resolve_input_stream};
 use super::input::{process_input_slice, InputMeterState};
 use super::shared::*;
 use super::*;
-use cadence_core::dsp::{hann_fade_out, sanitize_sample};
+use cadence_core::dsp::{hann_fade_out, sanitize_sample, stereo_mid_f32};
 use cadence_core::mixer::MAX_EFFECT_DEVICES;
 use cadence_core::rack::{compile_zone_graph, ModuleKind, RackPatch, RackZone, SampleLoopMode};
 use cadence_core::runtime::{
@@ -232,7 +232,7 @@ impl CallbackWatchdog {
 #[inline]
 fn write_stereo_frame<T: OutputSample>(frame: &mut [T], left: f32, right: f32) {
     if frame.len() == 1 {
-        let mono = sanitize_sample((left + right) * 0.5).clamp(-1.0, 1.0);
+        let mono = stereo_mid_f32([left, right]).clamp(-1.0, 1.0);
         frame[0] = T::from_unit_f32(mono);
     } else {
         for (channel, sample) in frame.iter_mut().enumerate() {
@@ -311,16 +311,16 @@ pub(super) fn render_output_slice_with_elapsed<T: OutputSample>(
 
     for frame_idx in 0..frames {
         let [left, right] = engine.next_frame();
-        let cl = sanitize_sample(left).clamp(-1.0, 1.0);
-        let cr = sanitize_sample(right).clamp(-1.0, 1.0);
-        block_peak = block_peak.max(cl.abs()).max(cr.abs());
+        let sl = sanitize_sample(left);
+        let sr = sanitize_sample(right);
+        block_peak = block_peak.max(sl.abs()).max(sr.abs());
         if frame_idx >= tail_start {
             if let Some(slot) = watchdog.tail_stereo.get_mut(frame_idx - tail_start) {
-                *slot = [cl, cr];
+                *slot = [sl, sr];
             }
         }
         let offset = frame_idx * channels;
-        write_stereo_frame(&mut data[offset..offset + channels], cl, cr);
+        write_stereo_frame(&mut data[offset..offset + channels], sl, sr);
     }
     let used = frames * channels;
     if used < data.len() {
