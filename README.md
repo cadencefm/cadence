@@ -189,7 +189,7 @@ cadence ctl listen --live 4.0 --out /tmp/live-tap.wav
 
 - **Website & User Guide:** [cadence.fm](https://cadence.fm) · [docs/guide/README.md](docs/guide/README.md) — step-by-step chapters covering [Quick Tour](docs/guide/01-quick-tour.md), [Patterns & Algebra](docs/guide/02-patterns-and-algebra.md), [Instruments & Assets](docs/guide/03-instruments-and-assets.md), [Mixing, FX & Routing](docs/guide/04-mixing-fx-and-routing.md), [Macros & Modulation](docs/guide/05-macros-and-modulation.md), [Audio Devices, Recording & MIDI](docs/guide/06-devices-audio-and-midi.md), [Live Performance & Takes](docs/guide/07-performing-and-takes.md), and [CLI, Scripting & Live `--ctl`](docs/guide/08-cli-scripting-and-live-ctl.md).
 - **Architecture & Technical Specs:** [ARCHITECTURE.md](ARCHITECTURE.md) · [Decks, Keymap & Interaction](docs/spec/decks-and-interaction.md) · [Material & Timing](docs/spec/material-and-timing.md) · [DSP & Audio Engine](docs/spec/dsp-and-audio-engine.md) · [Protocols](docs/spec/protocols.md) · [Design Decisions](docs/design-decisions.md).
-- **Contributing & Roadmap:** [CONTRIBUTING.md](CONTRIBUTING.md) · [Verification Log](docs/verification.md) · [Roadmap (`TODO.md`)](TODO.md) · [MIT License](LICENSE).
+- **Contributing & Roadmap:** [CONTRIBUTING.md](CONTRIBUTING.md) · [Verification Log](docs/verification.md) · [Issues & Roadmap](https://github.com/cadencefm/cadence/issues) · [MIT License](LICENSE).
 
 ```sh
 cargo fmt --all -- --check

@@ -27,7 +27,7 @@ Read this before designing, editing, or reviewing code in this repository.
 - **`src/` (`cadence` host binary):** Owns CLI, OS I/O, native file dialogs, audio/MIDI host bridge, and control socket.
 
 ## 3. Code Smell Radar — Actively Hunt & Bubble Up
-While reading or modifying code for your assigned task, **keep an active eye out for structural smells** — both inside your changes and in neighboring code you inspect. Fix in-scope smells cleanly; **bubble up every out-of-scope smell** in a `### Smells / Follow-ups Spotted` section (with exact `file:line` references) in your completion report so it gets logged in `TODO.md` instead of silently accumulating.
+While reading or modifying code for your assigned task, **keep an active eye out for structural smells** — both inside your changes and in neighboring code you inspect. Fix in-scope smells cleanly; **bubble up every out-of-scope smell** in a `### Smells / Follow-ups Spotted` section (with exact `file:line` references) in your completion report so it can be tracked as a GitHub Issue instead of silently accumulating.
 
 Watch specifically for:
 1. **Snowflake paths & backdoor constructors:** A preset, Ex command, or special flag creating or mutating an entity type that isn't a first-class peer in the main model/UI (e.g., a preset backdoor spawning an instrument variant missing from `SoundChoice`, or `LoadPreset` silently changing an instrument's engine variant).
