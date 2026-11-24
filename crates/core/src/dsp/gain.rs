@@ -1,14 +1,26 @@
-//! Single-source-of-truth pan laws, channel fader headroom/taper, dB nudging,
-//! dB formatting, and channel strip gain staging.
+//! Single-source-of-truth pan laws, Mid/Side & mono summation helpers, channel fader
+//! headroom/taper, dB nudging, dB formatting, and channel strip gain staging.
 //!
-//! Two distinct, mathematically well-defined pan laws cover all stereo routing:
-//! - [`pan_mono_equal_power`][] — constant-power (`-3.01 dB` center, `L² + R² == 1.0`)
-//!   for mono sources (oscillators, unison voices, mono voices, and rack zones).
-//! - [`pan_stereo_balance`][] — unity-normalized equal-power stereo balance
-//!   (`tan((1 ∓ p) * π/4)`) preserving centered stereo fields at exact `[1.0, 1.0]`
-//!   unity while matching the exact `L/R` ratio of an analog `-3 dB` constant-power
-//!   console pan pot everywhere across `-1.0..=1.0`, used for stereo mixer strips
-//!   and buses.
+//! Stereo routing across Cadence follows one coherent three-tier pan contract:
+//! - **Intra-patch unison panning** ([`crate::dsp::osc::unison_offsets`]): unity-centered
+//!   equal-power (`pan_mono_equal_power_f64(p) * SQRT_2`, center `[1.0, 1.0]`,
+//!   `L² + R² == 2.0`) matching single-voice mono wires `[x, x]` with zero gain jump when
+//!   changing `unison_voices` between `1` and `2..=7`.
+//! - **Voice / zone output panning** ([`pan_mono_equal_power`]): constant-power
+//!   (`-3.01 dB` center, `L² + R² == 1.0`, peak bounded in `[0.0, 1.0]`) at `OutNode`,
+//!   preserving constant acoustic stereo power across `-1.0..=1.0` for both mono and
+//!   uncorrelated stereo voices.
+//! - **Stereo bus & console strip balance** ([`pan_stereo_balance`]): unity-normalized
+//!   equal-power stereo balance (`tan((1 ∓ p) * π/4)`) preserving centered stereo fields
+//!   at exact `[1.0, 1.0]` unity while matching the exact `L/R` ratio of an analog `-3 dB`
+//!   constant-power console pan pot everywhere across `-1.0..=1.0`, used for `Rack` bus
+//!   panning and all mixer strips so nested Audio -> Group -> Master chains never compound
+//!   `-3 dB` center attenuation.
+//!
+//! Voltage-average Mid/Side and mono downmix helpers ([`stereo_mid_f64`],
+//! [`stereo_mid_f32`], [`stereo_ms_encode_f64`], [`stereo_ms_decode_f64`]) preserve exact
+//! unity (`[x, x] -> x`) for mono CV/FM modulation, oscilloscope display, and mono DAC
+//! downmixes paired with unity-centered stereo buses.
 
 use crate::dsp::math::{
     db_to_lin, lin_to_db, sanitize_clamp_f64, sanitize_sample, sanitize_sample_f64, LIN_FLOOR_F32,
@@ -206,6 +218,44 @@ pub fn apply_strip_gain(input: [f32; 2], gain: f32, scale: f32, duck: f32, pan: 
     apply_pan_balance(apply_fader_gain(input, gain, scale, duck), pan)
 }
 
+/// Voltage-average stereo-to-mono Mid sum (`0.5 * (L + R)`) in `f64`.
+///
+/// Preserves exact unity for correlated mono/CV signals (`[v, v] -> v`) and sanitizes
+/// non-finite inputs to `0.0`. Used across modular CV/FM mono inputs and M/S encoding.
+#[inline]
+pub fn stereo_mid_f64(stereo: [f64; 2]) -> f64 {
+    0.5 * (sanitize_sample_f64(stereo[0]) + sanitize_sample_f64(stereo[1]))
+}
+
+/// Voltage-average stereo-to-mono Mid sum (`0.5 * (L + R)`) in `f32`.
+///
+/// Preserves exact unity for centered stereo buses (`[1.0, 1.0] -> 1.0`) without clipping
+/// mono DACs, oscilloscopes, or mono waveform taps.
+#[inline]
+pub fn stereo_mid_f32(stereo: [f32; 2]) -> f32 {
+    0.5 * (sanitize_sample(stereo[0]) + sanitize_sample(stereo[1]))
+}
+
+/// Encode stereo `[L, R]` into voltage-average Mid/Side `[mid, side]` (`f64`).
+///
+/// Exact inverse of [`stereo_ms_decode_f64`]: `mid = 0.5 * (L + R)`, `side = 0.5 * (L - R)`.
+#[inline]
+pub fn stereo_ms_encode_f64(stereo: [f64; 2]) -> [f64; 2] {
+    let l = sanitize_sample_f64(stereo[0]);
+    let r = sanitize_sample_f64(stereo[1]);
+    [0.5 * (l + r), 0.5 * (l - r)]
+}
+
+/// Decode Mid/Side `(mid, side)` back into stereo `[mid + side, mid - side]` (`f64`).
+///
+/// Exact inverse of [`stereo_ms_encode_f64`].
+#[inline]
+pub fn stereo_ms_decode_f64(mid: f64, side: f64) -> [f64; 2] {
+    let m = sanitize_sample_f64(mid);
+    let s = sanitize_sample_f64(side);
+    [m + s, m - s]
+}
+
 /// Equal-power Mid/Side stereo width control for uncorrelated stereo fields (`f64`).
 ///
 /// Scales the Side channel by `width ∈ [0.0, 2.0]` and applies the exact uncorrelated
@@ -222,10 +272,10 @@ pub fn stereo_ms_width_uncorrelated_f64(stereo: [f64; 2], width: f64) -> [f64; 2
     if (w - 1.0).abs() <= SMOOTH_SETTLE_EPS_F64 {
         return [l, r];
     }
-    let mid = 0.5 * (l + r);
-    let side = 0.5 * (l - r) * w;
+    let [mid, raw_side] = stereo_ms_encode_f64([l, r]);
     let norm = (2.0 / (1.0 + w * w)).sqrt();
-    [(mid + side) * norm, (mid - side) * norm]
+    let [out_l, out_r] = stereo_ms_decode_f64(mid, raw_side * w);
+    [out_l * norm, out_r * norm]
 }
 
 /// Equal-power Mid/Side stereo width control for uncorrelated stereo fields (`f32`).
@@ -438,5 +488,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn stereo_mid_and_ms_helpers_preserve_unity_roundtrip_and_sanitize() {
+        // Exact unity on mono frames (including > 1.0 headroom).
+        for &v in &[-2.5_f64, -1.0, -0.25, 0.0, 0.5, 1.0, 3.5] {
+            assert_eq!(stereo_mid_f64([v, v]), v);
+            assert_eq!(stereo_mid_f32([v as f32, v as f32]), v as f32);
+            assert_eq!(stereo_ms_encode_f64([v, v]), [v, 0.0]);
+            assert_eq!(stereo_ms_decode_f64(v, 0.0), [v, v]);
+            assert_eq!(stereo_ms_encode_f64([v, -v]), [0.0, v]);
+            assert_eq!(stereo_ms_decode_f64(0.0, v), [v, -v]);
+        }
+
+        // Asymmetric stereo voltage-average mid sum.
+        assert!((stereo_mid_f64([1.0, 0.0]) - 0.5).abs() < 1e-12);
+        assert!((stereo_mid_f64([1.2, -0.4]) - 0.4).abs() < 1e-12);
+        assert_eq!(stereo_mid_f64([-1.0, 1.0]), 0.0);
+        assert!((stereo_mid_f32([1.0, 0.0]) - 0.5).abs() < 1e-6);
+        assert!((stereo_mid_f32([1.2, -0.4]) - 0.4).abs() < 1e-6);
+        assert_eq!(stereo_mid_f32([-1.0, 1.0]), 0.0);
+
+        // Exact M/S encode <-> decode roundtrip across arbitrary stereo amplitudes.
+        let vals = [-3.25_f64, -1.0, -0.3, 0.0, 0.4, 1.0, 2.75];
+        for &l in &vals {
+            for &r in &vals {
+                let [m, s] = stereo_ms_encode_f64([l, r]);
+                assert!((m - stereo_mid_f64([l, r])).abs() < 1e-12);
+                let [rl, rr] = stereo_ms_decode_f64(m, s);
+                assert!(
+                    (rl - l).abs() < 1e-12 && (rr - r).abs() < 1e-12,
+                    "M/S roundtrip failed for [{l}, {r}] -> [{m}, {s}] -> [{rl}, {rr}]"
+                );
+            }
+        }
+
+        // Non-finite sanitization on all four helpers.
+        assert_eq!(stereo_mid_f64([f64::NAN, 0.8]), 0.4);
+        assert_eq!(stereo_mid_f64([0.8, f64::INFINITY]), 0.4);
+        assert_eq!(stereo_mid_f64([f64::NEG_INFINITY, f64::NAN]), 0.0);
+        assert!((stereo_mid_f32([f32::NAN, 0.8]) - 0.4).abs() < 1e-6);
+        assert!((stereo_mid_f32([0.8, f32::INFINITY]) - 0.4).abs() < 1e-6);
+        assert_eq!(stereo_mid_f32([f32::NEG_INFINITY, f32::NAN]), 0.0);
+        assert_eq!(stereo_ms_encode_f64([f64::NAN, 0.6]), [0.3, -0.3]);
+        assert_eq!(stereo_ms_encode_f64([0.6, f64::INFINITY]), [0.3, 0.3]);
+        assert_eq!(
+            stereo_ms_encode_f64([f64::NAN, f64::NEG_INFINITY]),
+            [0.0, 0.0]
+        );
+        assert_eq!(stereo_ms_decode_f64(f64::NAN, 0.5), [0.5, -0.5]);
+        assert_eq!(stereo_ms_decode_f64(0.5, f64::INFINITY), [0.5, 0.5]);
+        assert_eq!(
+            stereo_ms_decode_f64(f64::NEG_INFINITY, f64::NAN),
+            [0.0, 0.0]
+        );
     }
 }

@@ -16,6 +16,7 @@ use crate::dsp::math::{
     flush_denormal_f64, mix_stereo_f64, sanitize_clamp_f64, sanitize_sample_f64,
     sanitize_sample_rate, DECAY_LN_60DB, LIN_FLOOR_F64, SMOOTH_SETTLE_EPS_F64,
 };
+use crate::dsp::saturate::VOICE_GUARD_CEILING;
 use crate::rack::ResonatorMode;
 use std::f64::consts::{PI, TAU};
 
@@ -288,8 +289,8 @@ impl ModalResonator {
             return [dry_l * (1.0 - m), dry_r * (1.0 - m)];
         }
         // Guard extreme feedback excitations without altering normal dynamic range.
-        let x_l = dry_l.clamp(-8.0, 8.0);
-        let x_r = dry_r.clamp(-8.0, 8.0);
+        let x_l = dry_l.clamp(-VOICE_GUARD_CEILING, VOICE_GUARD_CEILING);
+        let x_r = dry_r.clamp(-VOICE_GUARD_CEILING, VOICE_GUARD_CEILING);
         let mono_in = (x_l - x_r).abs() < STEREO_MATCH_EPS;
         if !mono_in {
             self.stereo_diverged = true;

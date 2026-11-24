@@ -7,12 +7,11 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    mix_seed, pan_mono_equal_power_f64, phase_wrap, sanitize_clamp_f64, smooth_step_f32,
-    step_vco_bank, step_vco_bank_fm_2x, unison_gain_comp, unison_offsets, Halfband2x, LogSmoother,
-    VcoStepParams, XorShift32, MAX_UNISON, NYQUIST_SAFE_RATIO,
+    mix_seed, phase_wrap, sanitize_clamp_f64, smooth_step_f32, step_vco_bank, step_vco_bank_fm_2x,
+    unison_gain_comp, unison_offsets, Halfband2x, LogSmoother, VcoStepParams, XorShift32,
+    MAX_UNISON, NYQUIST_SAFE_RATIO,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking, VcoModule};
-use std::f64::consts::SQRT_2;
 
 const VCO_MIN_HZ: f64 = 0.01;
 const VCO_FALLBACK_HZ: f64 = 440.0;
@@ -116,10 +115,7 @@ impl VcoNode {
         );
         for (copy, off) in offsets.iter().enumerate().take(count) {
             self.unison_ratios[copy] = off.detune_ratio;
-            let [pl, pr] = pan_mono_equal_power_f64(f64::from(off.pan_pos));
-            // Scale by SQRT_2 so center pan (0.0) equals [1.0, 1.0] matching single-voice mono wires
-            // while maintaining exact constant stereo power L² + R² == 2.0 across [-1, 1].
-            self.unison_pan[copy] = [pl * SQRT_2, pr * SQRT_2];
+            self.unison_pan[copy] = off.pan;
         }
     }
 }

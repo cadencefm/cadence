@@ -108,7 +108,7 @@ fn meter(mixer: &MixerEngine, channel: ChannelRef) -> ChannelMeter {
 fn settle(mixer: &mut MixerEngine, sources: [[f32; 2]; MAX_INSTRUMENTS]) -> [f32; 2] {
     let mut out = [0.0; 2];
     for _ in 0..4000 {
-        out = mixer.process(&sources, [0.0; 2]);
+        out = mixer.process(&sources, [0.0; 2], [0.0; 2]);
     }
     out
 }
@@ -194,16 +194,16 @@ fn sidechain_ducking_attenuates_target_channel_and_recovers() {
     mix.trigger_part(7);
     let mut min_out = 1.0_f32;
     for _ in 0..400 {
-        let s = mix.process(&sources, [0.0; 2]);
+        let s = mix.process(&sources, [0.0; 2], [0.0; 2]);
         min_out = min_out.min(s[0]);
     }
     assert!(min_out < 0.35, "ducking must attenuate: min={min_out}");
 
     // Recover completely past 80ms + tail
     for _ in 0..8000 {
-        mix.process(&sources, [0.0; 2]);
+        mix.process(&sources, [0.0; 2], [0.0; 2]);
     }
-    let after = mix.process(&sources, [0.0; 2]);
+    let after = mix.process(&sources, [0.0; 2], [0.0; 2]);
     close(after[0], 1.0);
 }
 
@@ -296,7 +296,7 @@ fn reverb_delay_eq_chorus_and_drive_inserts_process_audio_cleanly() {
                 let x = (std::f64::consts::TAU * 440.0 * i as f64 / RATE as f64).sin() as f32 * 0.5;
                 sources[0] = [x, x];
             }
-            let out = mix.process(&sources, [0.0; 2]);
+            let out = mix.process(&sources, [0.0; 2], [0.0; 2]);
             assert!(out[0].is_finite() && out[1].is_finite());
             peak = peak.max(out[0].abs()).max(out[1].abs());
             if i > 1000 && i < 2400 {
@@ -310,7 +310,7 @@ fn reverb_delay_eq_chorus_and_drive_inserts_process_audio_cleanly() {
         "chorus + reverb chain creates stereo spread: diff={stereo_diff}"
     );
     // Reverb tail rings past dry stop (sample 2400)
-    let tail = mix.process(&[[0.0; 2]; MAX_INSTRUMENTS], [0.0; 2]);
+    let tail = mix.process(&[[0.0; 2]; MAX_INSTRUMENTS], [0.0; 2], [0.0; 2]);
     assert!(tail[0].abs() + tail[1].abs() > 1e-5, "reverb tail active");
 }
 
@@ -366,7 +366,7 @@ fn filter_and_compressor_inserts_process_with_zero_allocations() {
             let x = (std::f64::consts::TAU * 220.0 * i as f64 / RATE as f64).sin() as f32 * 0.8;
             let mut sources = [[0.0; 2]; MAX_INSTRUMENTS];
             sources[0] = [x, x];
-            let out = mix.process(&sources, [0.0; 2]);
+            let out = mix.process(&sources, [0.0; 2], [0.0; 2]);
             assert!(out[0].is_finite() && out[1].is_finite());
             peak = peak.max(out[0].abs());
         }
@@ -397,7 +397,7 @@ fn limiter_insert_processes_zero_alloc_enforces_ceiling_and_reports_gr_meter() {
             let x = (std::f64::consts::TAU * 330.0 * i as f64 / RATE as f64).sin() as f32 * 0.9;
             let mut sources = [[0.0; 2]; MAX_INSTRUMENTS];
             sources[0] = [x, x];
-            let out = mix.process(&sources, [0.0; 2]);
+            let out = mix.process(&sources, [0.0; 2], [0.0; 2]);
             assert!(out[0].is_finite() && out[1].is_finite());
             peak = peak.max(out[0].abs()).max(out[1].abs());
             if let Some(m) = mix.effect_meters().find(|m| m.device_id == 31) {
@@ -483,7 +483,7 @@ fn lazy_delay_allocation_topological_groups_muted_return_solo_preview_and_pdc() 
         .unwrap();
     mmix.adopt(&mscore, false);
     mmix.update_controls(&mscore, 0.0, 0.0);
-    let audition_out = mmix.process(&sources, [0.35, -0.35]);
+    let audition_out = mmix.process(&sources, [0.35, -0.35], [0.0; 2]);
     close(audition_out[0], 0.35);
     close(audition_out[1], -0.35);
 
@@ -506,7 +506,7 @@ fn lazy_delay_allocation_topological_groups_muted_return_solo_preview_and_pdc() 
             s[0] = [0.25, 0.0]; // Left = limited channel 1
             s[1] = [0.0, 0.25]; // Right = dry channel 2 (PDC compensated!)
         }
-        let y = pmix.process(&s, [0.0; 2]);
+        let y = pmix.process(&s, [0.0; 2], [0.0; 2]);
         if peak_ch1.is_none() && y[0].abs() > 0.1 {
             peak_ch1 = Some(frame);
         }
@@ -598,7 +598,7 @@ fn float_metering_distinguishes_hot_headroom_from_digital_clipping_and_holds_gr(
         let x = (std::f64::consts::TAU * 220.0 * i as f64 / RATE as f64).sin() as f32 * hot_lin;
         let mut s = [[0.0; 2]; MAX_INSTRUMENTS];
         s[0] = [x, x];
-        let y = lmix.process(&s, [0.0; 2]);
+        let y = lmix.process(&s, [0.0; 2], [0.0; 2]);
         assert!(y[0].abs() <= 1.0 && y[1].abs() <= 1.0);
     }
     let lch1 = meter(&lmix, ChannelRef::Channel(1));
@@ -629,7 +629,7 @@ fn float_metering_distinguishes_hot_headroom_from_digital_clipping_and_holds_gr(
     let silence = [[0.0; 2]; MAX_INSTRUMENTS];
     // Run 0.5 s of silence: live GR releases toward 0, but 1.5 s gr_hold_db stays pinned!
     for _ in 0..(RATE / 2) {
-        lmix.process(&silence, [0.0; 2]);
+        lmix.process(&silence, [0.0; 2], [0.0; 2]);
     }
     let lim_m_held = lmix
         .effect_meters()
@@ -645,7 +645,7 @@ fn float_metering_distinguishes_hot_headroom_from_digital_clipping_and_holds_gr(
     );
     // Run 2.5 s more silence: gr_hold_db decays cleanly below held peak, while render_effect_stats preserves session max!
     for _ in 0..(RATE * 5 / 2) {
-        lmix.process(&silence, [0.0; 2]);
+        lmix.process(&silence, [0.0; 2], [0.0; 2]);
     }
     let lim_m_decayed = lmix
         .effect_meters()
@@ -686,7 +686,7 @@ fn float_metering_distinguishes_hot_headroom_from_digital_clipping_and_holds_gr(
     nmix.update_controls(&nan_score, 0.0, 0.0);
     let mut nan_src = [[0.0; 2]; MAX_INSTRUMENTS];
     nan_src[0] = [f32::NAN, 0.25];
-    let nan_out = nmix.process(&nan_src, [0.0; 2]);
+    let nan_out = nmix.process(&nan_src, [0.0; 2], [0.0; 2]);
     assert!(nan_out[0].is_finite() && nan_out[1].is_finite());
     let n_ch1 = meter(&nmix, ChannelRef::Channel(1));
     assert!(
@@ -745,7 +745,7 @@ fn group_to_group_chained_routing_pdc_and_mute_solo_ancestry() {
     let mut out = [0.0; 2];
     assert_no_heap_operations(|| {
         for _ in 0..256 {
-            out = engine.process(&src, [0.0; 2]);
+            out = engine.process(&src, [0.0; 2], [0.0; 2]);
         }
     });
     close(out[0], 0.2);
@@ -812,7 +812,7 @@ fn group_to_group_chained_routing_pdc_and_mute_solo_ancestry() {
         if i == 0 {
             s[0] = [0.25, 0.25];
         }
-        let y = pdc_eng.process(&s, [0.0; 2]);
+        let y = pdc_eng.process(&s, [0.0; 2], [0.0; 2]);
         if ch1_peak_idx.is_none() && y[0].abs() > 0.1 {
             ch1_peak_idx = Some(i);
         }
@@ -826,7 +826,7 @@ fn group_to_group_chained_routing_pdc_and_mute_solo_ancestry() {
         if i == 0 {
             s[1] = [0.25, 0.25];
         }
-        let y = pdc_eng2.process(&s, [0.0; 2]);
+        let y = pdc_eng2.process(&s, [0.0; 2], [0.0; 2]);
         if ch2_peak_idx.is_none() && y[0].abs() > 0.1 {
             ch2_peak_idx = Some(i);
         }
@@ -907,7 +907,7 @@ fn delay_stereo_and_drive_modes_process_and_automate_with_zero_rt_allocations() 
             for i in 0..128 {
                 let x = ((block * 128 + i) as f32 * 0.04).sin() * 0.35;
                 sources[0] = [x, x * 0.5];
-                let y = mix.process(&sources, [0.0; 2]);
+                let y = mix.process(&sources, [0.0; 2], [0.0; 2]);
                 assert!(y[0].is_finite() && y[1].is_finite());
             }
         }
@@ -1059,11 +1059,11 @@ fn fader_headroom_boost_channel_gain_scale_and_automated_macro_sweep() {
     assert_no_heap_operations(|| {
         macro_mix.update_controls(&macro_score, 6.0, 6.0);
         for _ in 0..4000 {
-            out_mid = macro_mix.process(&macro_sources, [0.0; 2]);
+            out_mid = macro_mix.process(&macro_sources, [0.0; 2], [0.0; 2]);
         }
         macro_mix.update_controls(&macro_score, 8.0, 8.0);
         for _ in 0..4000 {
-            out_peak = macro_mix.process(&macro_sources, [0.0; 2]);
+            out_peak = macro_mix.process(&macro_sources, [0.0; 2], [0.0; 2]);
         }
     });
     // Account for Audio channel routing through Group (if any) in demo project: verify exact 2x ratio!
@@ -1107,7 +1107,7 @@ fn aux_sends_are_post_fader_pre_strip_pan_so_opposite_panned_returns_never_cance
     sources[0] = [0.4, 0.4];
     let mut out = [0.0; 2];
     for _ in 0..4000 {
-        out = mix.process(&sources, [0.0; 2]);
+        out = mix.process(&sources, [0.0; 2], [0.0; 2]);
     }
     assert!(
         (out[0] - 0.2).abs() < 0.01 && (out[1] - 0.2).abs() < 0.01,
@@ -1122,7 +1122,7 @@ fn aux_sends_are_post_fader_pre_strip_pan_so_opposite_panned_returns_never_cance
     sources[0] = [0.6, 0.2];
     let mut out_st = [0.0; 2];
     for _ in 0..4000 {
-        out_st = mix_st.process(&sources, [0.0; 2]);
+        out_st = mix_st.process(&sources, [0.0; 2], [0.0; 2]);
     }
     // Dry (hard right) = [0.0, 0.2]; Return (pre-pan stereo) = [0.6, 0.2] -> Master = [0.6, 0.4]!
     assert!(
@@ -1167,7 +1167,7 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
             mix.adopt(score, false);
             mix.update_controls(score, 0.0, 0.0);
             for _ in 0..128 {
-                let y = mix.process(&sources, [0.0; 2]);
+                let y = mix.process(&sources, [0.0; 2], [0.0; 2]);
                 assert!(y[0].is_finite() && y[1].is_finite());
             }
         }
@@ -1201,7 +1201,7 @@ fn mixer_smoothers_settle_exactly_without_subnormal_stalls_and_cache_pan_weights
 
         let mut sources = [[0.0_f32; 2]; MAX_INSTRUMENTS];
         sources[0] = [0.5, 0.5];
-        let y_panned = mix.process(&sources, [0.0; 2]);
+        let y_panned = mix.process(&sources, [0.0; 2], [0.0; 2]);
         let [pl, pr] = pan_stereo_balance(-0.65);
         // Channel 1 + Return 4 (amount 0.75, pre-pan) both route to Master.
         close(y_panned[0], 0.5 * pl + 0.5 * 0.75);
@@ -1215,7 +1215,7 @@ fn mixer_smoothers_settle_exactly_without_subnormal_stalls_and_cache_pan_weights
         mix.update_controls(&score, 0.0, 0.0);
         let settle_frames = (f64::from(sr) * 0.15) as usize;
         for _ in 0..settle_frames {
-            let _ = mix.process(&sources, [0.0; 2]);
+            let _ = mix.process(&sources, [0.0; 2], [0.0; 2]);
         }
         assert_eq!(
             mix.channels[slot1].pan, 0.0,
@@ -1286,7 +1286,7 @@ fn return_send_pdc_aligns_mismatched_senders_inside_return_and_at_master_across_
                     s[0] = [0.25, 0.0]; // Ch1 (limited) on Left
                     s[1] = [0.0, 0.25]; // Ch2 (dry, send-PDC aligned) on Right
                 }
-                let y = wet_mix.process(&s, [0.0; 2]);
+                let y = wet_mix.process(&s, [0.0; 2], [0.0; 2]);
                 if ret_ch1_frame.is_none() && y[0].abs() > 0.1 {
                     ret_ch1_frame = Some(frame);
                 }
@@ -1359,7 +1359,7 @@ fn return_send_pdc_aligns_mismatched_senders_inside_return_and_at_master_across_
                     s[0] = [0.2, 0.0]; // Ch1 (dry 0.2 + ret 0.1 = 0.3 on L)
                     s[1] = [0.0, 0.2]; // Ch2 (dry 0.2 via Group + ret 0.1 = 0.3 on R)
                 }
-                let y = full_mix.process(&s, [0.0; 2]);
+                let y = full_mix.process(&s, [0.0; 2], [0.0; 2]);
                 if y[0].abs() > 0.05 {
                     master_peaks_l.push((frame, y[0]));
                 }
@@ -1427,7 +1427,7 @@ fn sidechain_duck_pdc_aligns_gain_dip_with_delayed_target_across_sample_rates() 
         let mut steady = [[0.0; 2]; MAX_INSTRUMENTS];
         steady[1] = [0.0, 0.25];
         for _ in 0..(lookahead * 4) {
-            let _ = mix.process(&steady, [0.0; 2]);
+            let _ = mix.process(&steady, [0.0; 2], [0.0; 2]);
         }
 
         let mut kick_peak_frame = None;
@@ -1444,7 +1444,7 @@ fn sidechain_duck_pdc_aligns_gain_dip_with_delayed_target_across_sample_rates() 
                 if frame == lookahead / 2 {
                     mix.adopt(&score, false);
                 }
-                let y = mix.process(&s, [0.0; 2]);
+                let y = mix.process(&s, [0.0; 2], [0.0; 2]);
                 if kick_peak_frame.is_none() && y[0].abs() > 0.1 {
                     kick_peak_frame = Some(frame);
                 }
@@ -1503,7 +1503,7 @@ fn sidechain_duck_pdc_aligns_gain_dip_with_delayed_target_across_sample_rates() 
         assert_eq!(mmix.total_output_latency_frames(), lookahead * 2);
 
         for _ in 0..(lookahead * 5) {
-            let _ = mmix.process(&steady, [0.0; 2]);
+            let _ = mmix.process(&steady, [0.0; 2], [0.0; 2]);
         }
         let mut master_kick_frame = None;
         let mut master_duck_frame = None;
@@ -1513,7 +1513,7 @@ fn sidechain_duck_pdc_aligns_gain_dip_with_delayed_target_across_sample_rates() 
             if frame == 0 {
                 s[0] = [0.25, 0.0];
             }
-            let y = mmix.process(&s, [0.0; 2]);
+            let y = mmix.process(&s, [0.0; 2], [0.0; 2]);
             if master_kick_frame.is_none() && y[0].abs() > 0.1 {
                 master_kick_frame = Some(frame);
             }
@@ -1533,9 +1533,157 @@ fn sidechain_duck_pdc_aligns_gain_dip_with_delayed_target_across_sample_rates() 
         }
         mmix.reset();
         for _ in 0..(lookahead * 5) {
-            let _ = mmix.process(&steady, [0.0; 2]);
+            let _ = mmix.process(&steady, [0.0; 2], [0.0; 2]);
         }
-        let after_reset = mmix.process(&steady, [0.0; 2]);
+        let after_reset = mmix.process(&steady, [0.0; 2], [0.0; 2]);
         close(after_reset[1], 0.25);
     }
+}
+
+#[test]
+fn master_metering_observes_final_output_with_preview_monitor_and_mute() {
+    use cadence_core::mixer::LimiterPatch;
+
+    let mut score = stereo_score();
+    let mut mix = MixerEngine::new(&score, RATE);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.snap_smoothers();
+
+    let mut sources = [[0.0; 2]; MAX_INSTRUMENTS];
+    sources[0] = [0.7, 0.4];
+
+    // 1. strip_out + preview > 1.0 latches Master clipped & output peaks while input_peak stays at bus sum.
+    let mut out_preview = [0.0; 2];
+    assert_no_heap_operations(|| {
+        out_preview = mix.process(&sources, [0.5, 0.1], [0.0; 2]);
+    });
+    close(out_preview[0], 1.2);
+    close(out_preview[1], 0.5);
+    let m_prev = meter(&mix, ChannelRef::Master);
+    let r_prev = mix
+        .render_channel_meters()
+        .find(|m| m.channel == ChannelRef::Master)
+        .expect("master render meter");
+    close(m_prev.input_peak[0], 0.7);
+    close(m_prev.output_peak[0], 1.2);
+    close(m_prev.output_peak[1], 0.5);
+    close(m_prev.output_peak_hold[0], 1.2);
+    close(r_prev.output_peak_hold[0], 1.2);
+    assert!(
+        m_prev.hot && m_prev.clipped,
+        "strip_out + preview > 1.0 must latch Master hot and clipped: {m_prev:?}"
+    );
+
+    // 2. strip_out + monitor > 1.0 latches Master clipped & exact output peaks.
+    mix.clear_meters(None);
+    sources[0] = [0.65, 0.3];
+    let out_mon = mix.process(&sources, [0.0; 2], [0.6, 0.2]);
+    close(out_mon[0], 1.25);
+    close(out_mon[1], 0.5);
+    let m_mon = meter(&mix, ChannelRef::Master);
+    let r_mon = mix
+        .render_channel_meters()
+        .find(|m| m.channel == ChannelRef::Master)
+        .expect("master render meter");
+    close(m_mon.input_peak[0], 0.65);
+    close(m_mon.output_peak[0], 1.25);
+    close(m_mon.output_peak_hold[0], 1.25);
+    close(r_mon.output_peak_hold[0], 1.25);
+    assert!(
+        m_mon.hot && m_mon.clipped,
+        "strip_out + monitor > 1.0 must latch Master hot and clipped: {m_mon:?}"
+    );
+
+    // 3. Non-finite monitor (NaN / Inf) and preview latch Master clipped while keeping output finite
+    //    and preserving valid finite strip/aux audio on that channel.
+    sources[0] = [0.3, 0.2];
+    for (preview, monitor, expected) in [
+        ([0.0, 0.0], [f32::NAN, 0.1], [0.3, 0.3]),
+        ([0.0, 0.0], [0.0, f32::INFINITY], [0.3, 0.2]),
+        ([f32::NEG_INFINITY, 0.0], [0.1, 0.1], [0.4, 0.3]),
+    ] {
+        mix.clear_meters(None);
+        let y = mix.process(&sources, preview, monitor);
+        assert!(
+            y[0].is_finite() && y[1].is_finite(),
+            "non-finite output: {y:?}"
+        );
+        close(y[0], expected[0]);
+        close(y[1], expected[1]);
+        let m = meter(&mix, ChannelRef::Master);
+        assert!(
+            m.clipped,
+            "non-finite preview={preview:?} monitor={monitor:?} must latch Master clipped: {m:?}"
+        );
+    }
+
+    // 4. Muting Master silences strip_out while still passing both preview & monitor cleanly,
+    //    and latches Master clipped whenever preview + monitor > 1.0.
+    score
+        .mixer
+        .flags
+        .set_channel_muted(ChannelRef::Master, true)
+        .unwrap();
+    mix.adopt(&score, false);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.clear_meters(None);
+    sources[0] = [0.8, 0.8];
+    let muted_clean = mix.process(&sources, [0.35, -0.25], [0.25, 0.15]);
+    close(muted_clean[0], 0.6);
+    close(muted_clean[1], -0.1);
+    let m_muted_clean = meter(&mix, ChannelRef::Master);
+    close(m_muted_clean.output_peak[0], 0.6);
+    close(m_muted_clean.output_peak[1], 0.1);
+    assert!(
+        !m_muted_clean.clipped,
+        "muted Master with preview + monitor <= 1.0 must stay unclipped: {m_muted_clean:?}"
+    );
+
+    let muted_clip = mix.process(&sources, [0.7, 0.3], [0.55, 0.2]);
+    close(muted_clip[0], 1.25);
+    close(muted_clip[1], 0.5);
+    let m_muted_clip = meter(&mix, ChannelRef::Master);
+    close(m_muted_clip.output_peak[0], 1.25);
+    close(m_muted_clip.output_peak_hold[0], 1.25);
+    assert!(
+        m_muted_clip.hot && m_muted_clip.clipped,
+        "muted Master with preview + monitor > 1.0 must latch clipped: {m_muted_clip:?}"
+    );
+
+    // 5. Master inserts do not process preview or monitor, yet Master clip metering still
+    //    catches post-limiter strip_out + monitor > 1.0.
+    let mut lim_score = stereo_score();
+    lim_score.mixer.master.inserts.push(EffectDevice {
+        id: 701,
+        name: "Master Limiter".into(),
+        bypassed: false,
+        kind: EffectKind::Limiter(LimiterPatch {
+            ceiling_db: -6.0,
+            input_drive_db: 0.0,
+            release_ms: 50.0,
+            mix: 1.0,
+        }),
+    });
+    let mut lmix = MixerEngine::new(&lim_score, RATE);
+    lmix.update_controls(&lim_score, 0.0, 0.0);
+    lmix.snap_smoothers();
+    let lookahead = limiter_lookahead_frames(f64::from(RATE));
+    sources[0] = [0.9, 0.9];
+    for _ in 0..(lookahead * 3) {
+        let _ = lmix.process(&sources, [0.0; 2], [0.0; 2]);
+    }
+    assert!(
+        !meter(&lmix, ChannelRef::Master).clipped,
+        "Master Limiter at -6 dB must keep strip-only output unclipped"
+    );
+    let combined = lmix.process(&sources, [0.0; 2], [0.7, 0.0]);
+    assert!(
+        combined[0] > 1.15,
+        "monitor must sum after Master Limiter without being limited: {combined:?}"
+    );
+    let m_lim = meter(&lmix, ChannelRef::Master);
+    assert!(
+        m_lim.clipped && m_lim.output_peak[0] > 1.15,
+        "Master clip metering must catch limited strip + monitor > 1.0: {m_lim:?}"
+    );
 }

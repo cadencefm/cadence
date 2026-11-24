@@ -1,6 +1,9 @@
 use super::*;
 use crate::mix_engine::tests::assert_no_heap_operations;
-use cadence_core::dsp::acid_filter_decay_ms;
+use cadence_core::dsp::{
+    acid_filter_decay_ms, db_to_lin_f64, pan_mono_equal_power_f64, VOICE_GUARD_CEILING,
+    VOICE_GUARD_KNEE,
+};
 use cadence_core::rack::{
     compile_zone_graph, DriveMode, EnvMode, NoiseColor, PatchCable, RackModule, RackPatch,
     VoiceMode, Waveform,
@@ -264,7 +267,12 @@ fn feedback_z1_self_fm_and_resonant_drive_loop_remain_stable_and_finite() {
         let mut v = ModularVoice::new_boxed(&spec(&fb_zone, &g_fb, sr, 120.0), start(60, None));
         for _ in 0..4096 {
             let f = v.next_frame(&bank, None);
-            assert!(f[0].is_finite() && f[1].is_finite() && f[0].abs() <= 1.0);
+            assert!(
+                f[0].is_finite()
+                    && f[1].is_finite()
+                    && f[0].abs() < VOICE_GUARD_CEILING as f32
+                    && f[1].abs() < VOICE_GUARD_CEILING as f32
+            );
         }
         v.force_release();
         for _ in 0..(sr * 2.1) as usize {
@@ -2500,5 +2508,387 @@ fn post_trigger_upward_resonator_decay_modulation_preserves_tail_zero_alloc() {
     assert!(
         !v_stuck.is_active(),
         "ungated feedback resonator with continuous decay modulation must terminate by MAX_RESONATOR_TAIL_SEC"
+    );
+}
+
+#[test]
+fn out_gain_boost_passes_unclipped_headroom_into_float_bus() {
+    let sr = 48_000.0_f64;
+    let bank: SampleBank = Vec::new();
+    let make_zone = |gain_db: f32, pan: f32| {
+        build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "Sine",
+                    ModuleKind::Vco(VcoModule {
+                        waveform: Waveform::Sine,
+                        pitch_tracking: PitchTracking::Fixed,
+                        fixed_hz: 440.0,
+                        level: 1.0,
+                        ..VcoModule::default()
+                    }),
+                ),
+                RackModule::new(
+                    2,
+                    "Out",
+                    ModuleKind::Out(OutModule {
+                        gain_db,
+                        pan,
+                        spread: 0.0,
+                    }),
+                ),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+        )
+    };
+
+    let full_vel = VoiceStart {
+        velocity: 1.0,
+        ..start(69, None)
+    };
+    let warmup = 4_800usize;
+    let measure = 4_800usize;
+
+    let run_case = |gain_db: f32, pan: f32| -> (f64, f64, f64, Vec<f64>) {
+        let zone = make_zone(gain_db, pan);
+        let graph = compile_zone_graph(&zone).unwrap();
+        let mut voice = ModularVoice::new_boxed(&spec(&zone, &graph, sr, 120.0), full_vel);
+        let mut peak_l = 0.0_f64;
+        let mut peak_r = 0.0_f64;
+        let mut sq_l = 0.0_f64;
+        let mut buf_l = Vec::with_capacity(measure);
+        for i in 0..(warmup + measure) {
+            let f = voice.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+            if i >= warmup {
+                let l = f64::from(f[0]);
+                let r = f64::from(f[1]);
+                peak_l = peak_l.max(l.abs());
+                peak_r = peak_r.max(r.abs());
+                sq_l += l * l;
+                buf_l.push(l);
+            }
+        }
+        (peak_l, peak_r, (sq_l / measure as f64).sqrt(), buf_l)
+    };
+
+    let (_, _, rms_0, _) = run_case(0.0, 0.0);
+    let (peak_12_l, peak_12_r, rms_12, buf_12) = run_case(12.0, 0.0);
+    let expected_gain = db_to_lin_f64(12.0);
+    let expected_center_peak = expected_gain * pan_mono_equal_power_f64(0.0)[0];
+
+    assert!(
+        peak_12_l > 2.5 && peak_12_r > 2.5,
+        "Out.gain_db=+12 dB must flow > 2.5 linear unclipped into float bus: L={peak_12_l}, R={peak_12_r}"
+    );
+    assert!(
+        (peak_12_l - expected_center_peak).abs() < 0.02
+            && (peak_12_r - expected_center_peak).abs() < 0.02,
+        "center +12 dB peak expected ~{expected_center_peak:.4}, got L={peak_12_l:.4}, R={peak_12_r:.4}"
+    );
+    assert!(
+        (rms_12 / rms_0 - expected_gain).abs() < 0.01,
+        "RMS ratio expected db_to_lin(12.0)={expected_gain:.4}, got {:.4}",
+        rms_12 / rms_0
+    );
+    let h1 = dft_power(&buf_12, 440.0, sr);
+    let h3 = dft_power(&buf_12, 1_320.0, sr);
+    assert!(
+        h3 < h1 * 1e-6,
+        "Out.gain_db=+12 dB must stay linear with zero clipping harmonics: h1={h1}, h3={h3}"
+    );
+
+    // Hard-left pan at +12 dB peaks near 3.981 (< VOICE_GUARD_KNEE = 4.0) — still completely linear.
+    let (hard_l, hard_r, _, buf_hard) = run_case(12.0, -1.0);
+    assert!(
+        (hard_l - expected_gain).abs() < 0.02 && hard_r < 1e-6,
+        "hard-left +12 dB expected L~{expected_gain:.4} R=0, got L={hard_l:.4} R={hard_r:.4}"
+    );
+    let hard_h1 = dft_power(&buf_hard, 440.0, sr);
+    let hard_h3 = dft_power(&buf_hard, 1_320.0, sr);
+    assert!(
+        hard_h3 < hard_h1 * 1e-6,
+        "hard-left +12 dB (< 4.0 knee) must stay linear: h1={hard_h1}, h3={hard_h3}"
+    );
+}
+
+#[test]
+fn runaway_feedback_patches_stay_finite_and_bounded_by_voice_guard_ceiling() {
+    let bank: SampleBank = Vec::new();
+    let make_runaway_zone = |out_gain_db: f32, out_pan: f32| {
+        build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "Sine",
+                    ModuleKind::Vco(VcoModule {
+                        waveform: Waveform::Sine,
+                        pitch_tracking: PitchTracking::Fixed,
+                        fixed_hz: 220.0,
+                        level: 1.0,
+                        ..VcoModule::default()
+                    }),
+                ),
+                RackModule::new(
+                    2,
+                    "LoopVCA",
+                    ModuleKind::Vca(VcaModule {
+                        gain: 2.0,
+                        bias: 0.0,
+                    }),
+                ),
+                RackModule::new(
+                    3,
+                    "Out",
+                    ModuleKind::Out(OutModule {
+                        gain_db: out_gain_db,
+                        pan: out_pan,
+                        spread: 0.0,
+                    }),
+                ),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 2, 2, InPort::In, 2.0), // z-1 +200% self-feedback (4x loop gain)
+                PatchCable::new(3, 2, 3, InPort::In, 1.0),
+            ],
+        )
+    };
+
+    let full_vel = VoiceStart {
+        velocity: 1.0,
+        ..start(60, None)
+    };
+    let knee_f32 = VOICE_GUARD_KNEE as f32;
+    let ceiling_f32 = VOICE_GUARD_CEILING as f32;
+
+    // 1. Runaway 4x self-feedback into unity centered Out hits soft knee (> 4.0) and stays strictly inside (-8.0, 8.0).
+    let zone = make_runaway_zone(0.0, 0.0);
+    let graph = compile_zone_graph(&zone).unwrap();
+    assert!(graph.has_feedback());
+    for sr in [8_000.0_f64, 44_100.0, 48_000.0, 96_000.0] {
+        let mut voice = ModularVoice::new_boxed(&spec(&zone, &graph, sr, 120.0), full_vel);
+        let mut peak = 0.0_f32;
+        assert_no_heap_operations(|| {
+            for _ in 0..4_096 {
+                let f = voice.next_frame(&bank, None);
+                assert!(
+                    f[0].is_finite()
+                        && f[1].is_finite()
+                        && f[0].abs() < ceiling_f32
+                        && f[1].abs() < ceiling_f32,
+                    "sr={sr}: runaway feedback exceeded strict (-{ceiling_f32}, {ceiling_f32}) bound: {f:?}"
+                );
+                peak = peak.max(f[0].abs()).max(f[1].abs());
+            }
+        });
+        assert!(
+            peak > knee_f32,
+            "sr={sr}: expected runaway patch to engage voice_guard_f64 above knee {knee_f32}, got peak={peak}"
+        );
+        voice.force_release();
+        for _ in 0..(sr * 2.1) as usize {
+            let f = voice.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+        }
+        assert!(
+            !voice.is_active(),
+            "sr={sr}: runaway voice failed to retire"
+        );
+    }
+
+    // 2. Extreme +12 dB hard-panned runaway feedback still stays strictly finite and <= VOICE_GUARD_CEILING.
+    let extreme_zone = make_runaway_zone(12.0, -1.0);
+    let extreme_graph = compile_zone_graph(&extreme_zone).unwrap();
+    let mut extreme_voice = ModularVoice::new_boxed(
+        &spec(&extreme_zone, &extreme_graph, 48_000.0, 120.0),
+        full_vel,
+    );
+    let mut extreme_peak = 0.0_f32;
+    for _ in 0..4_096 {
+        let f = extreme_voice.next_frame(&bank, None);
+        assert!(
+            f[0].is_finite()
+                && f[1].is_finite()
+                && f[0].abs() <= ceiling_f32
+                && f[1].abs() <= ceiling_f32,
+            "extreme runaway exceeded ceiling {ceiling_f32}: {f:?}"
+        );
+        extreme_peak = extreme_peak.max(f[0].abs());
+    }
+    assert!(extreme_peak > knee_f32);
+}
+
+#[test]
+fn out_pan_preserves_constant_stereo_power_for_mono_and_stereo_sources() {
+    let sr = 48_000.0_f64;
+    let empty_bank: SampleBank = Vec::new();
+    let pans = [-1.0_f32, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0];
+    let warmup = 4_800usize;
+    let measure = 4_800usize; // exact integer cycles for 300 Hz, 440 Hz, and 500 Hz at 48 kHz
+
+    // 1. Mono VCO source panned across [-1.0, 1.0].
+    let measure_mono = |pan: f32| -> (f64, f64, f64) {
+        let zone = build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "Sine",
+                    ModuleKind::Vco(VcoModule {
+                        waveform: Waveform::Sine,
+                        pitch_tracking: PitchTracking::Fixed,
+                        fixed_hz: 440.0,
+                        level: 0.8,
+                        ..VcoModule::default()
+                    }),
+                ),
+                RackModule::new(
+                    2,
+                    "Out",
+                    ModuleKind::Out(OutModule {
+                        gain_db: 0.0,
+                        pan,
+                        spread: 0.0,
+                    }),
+                ),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+        );
+        let graph = compile_zone_graph(&zone).unwrap();
+        let mut voice = ModularVoice::new_boxed(&spec(&zone, &graph, sr, 120.0), start(69, None));
+        let (mut l_sq, mut r_sq) = (0.0_f64, 0.0_f64);
+        for i in 0..(warmup + measure) {
+            let f = voice.next_frame(&empty_bank, None);
+            if i >= warmup {
+                l_sq += f64::from(f[0]).powi(2);
+                r_sq += f64::from(f[1]).powi(2);
+            }
+        }
+        (
+            (l_sq + r_sq) / measure as f64,
+            l_sq / measure as f64,
+            r_sq / measure as f64,
+        )
+    };
+
+    let (mono_center_p, mono_center_l, mono_center_r) = measure_mono(0.0);
+    assert!((mono_center_l - mono_center_r).abs() < 1e-6);
+    for &pan in &pans {
+        let (p, pl, pr) = measure_mono(pan);
+        let diff_db = 10.0 * (p / mono_center_p).log10();
+        assert!(
+            diff_db.abs() < 0.05,
+            "mono pan={pan}: stereo power drifted {diff_db:+.4} dB from center"
+        );
+        if pan == -1.0 {
+            assert!(pr < 1e-10 && pl > 0.1);
+        } else if pan == 1.0 {
+            assert!(pl < 1e-10 && pr > 0.1);
+        }
+    }
+
+    // 2. Uncorrelated equal-RMS stereo source (L = sin 300 Hz, R = cos 500 Hz) panned across [-1.0, 1.0].
+    let frames = 14_400usize;
+    let left: Box<[f32]> = (0..frames)
+        .map(|i| (TAU * 300.0 * i as f64 / sr).sin() as f32 * 0.8)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let right: Box<[f32]> = (0..frames)
+        .map(|i| (TAU * 500.0 * i as f64 / sr).cos() as f32 * 0.8)
+        .collect::<Vec<_>>()
+        .into_boxed_slice();
+    let stereo_sample = Arc::new(SampleData {
+        path_label: "./stereo_test.wav".into(),
+        resolved_path: std::path::PathBuf::from("stereo_test.wav"),
+        name: "stereo_test".into(),
+        sample_rate: sr as u32,
+        channels: 2,
+        frames,
+        left,
+        right: Some(right),
+        peaks: vec![(-1.0, 1.0); 64].into_boxed_slice(),
+        meta: SampleMetadata::default(),
+    });
+    let stereo_bank: SampleBank = vec![(module_sample_key(1, 1, 1), stereo_sample)];
+
+    let measure_stereo = |pan: f32, spread: f32| -> (f64, f64, f64, f64, f64) {
+        let zone = build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "StereoSmp",
+                    ModuleKind::Sampler(SamplerModule {
+                        path: Some("./stereo_test.wav".into()),
+                        root_midi: 60,
+                        sample_end: frames,
+                        one_shot: false,
+                        loop_mode: SampleLoopMode::Forward,
+                        loop_start: 0,
+                        loop_end: frames,
+                        ..SamplerModule::default()
+                    }),
+                ),
+                RackModule::new(
+                    2,
+                    "Out",
+                    ModuleKind::Out(OutModule {
+                        gain_db: 0.0,
+                        pan,
+                        spread,
+                    }),
+                ),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+        );
+        let graph = compile_zone_graph(&zone).unwrap();
+        let mut voice = ModularVoice::new_boxed(&spec(&zone, &graph, sr, 120.0), start(60, None));
+        let (mut l_sq, mut r_sq, mut mid_sq, mut side_sq) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+        for i in 0..(warmup + measure) {
+            let f = voice.next_frame(&stereo_bank, None);
+            if i >= warmup {
+                let l = f64::from(f[0]);
+                let r = f64::from(f[1]);
+                l_sq += l * l;
+                r_sq += r * r;
+                let [m, s] = cadence_core::dsp::stereo_ms_encode_f64([l, r]);
+                mid_sq += m * m;
+                side_sq += s * s;
+            }
+        }
+        let n = measure as f64;
+        (
+            (l_sq + r_sq) / n,
+            l_sq / n,
+            r_sq / n,
+            (mid_sq / n).sqrt(),
+            (side_sq / n).sqrt(),
+        )
+    };
+
+    let (st_center_p, _, _, mid_0, side_0) = measure_stereo(0.0, 0.0);
+    for &pan in &pans {
+        let (p, pl, pr, _, _) = measure_stereo(pan, 0.0);
+        let diff_db = 10.0 * (p / st_center_p).log10();
+        assert!(
+            diff_db.abs() < 0.05,
+            "stereo pan={pan}: stereo power drifted {diff_db:+.4} dB from center"
+        );
+        if pan == -1.0 {
+            assert!(pr < 1e-10 && pl > 0.1);
+        } else if pan == 1.0 {
+            assert!(pl < 1e-10 && pr > 0.1);
+        }
+    }
+
+    // 3. Out.spread = 1.0 preserves Mid and doubles Side via stereo_ms_encode/decode_f64.
+    let (_, _, _, mid_1, side_1) = measure_stereo(0.0, 1.0);
+    assert!(
+        (mid_1 / mid_0 - 1.0).abs() < 1e-3,
+        "Out.spread=1.0 must preserve Mid: mid_0={mid_0}, mid_1={mid_1}"
+    );
+    assert!(
+        (side_1 / side_0 - 2.0).abs() < 1e-3,
+        "Out.spread=1.0 must double Side: side_0={side_0}, side_1={side_1}"
     );
 }

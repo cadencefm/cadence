@@ -349,19 +349,27 @@ pub fn soft_knee_guard_f64(x: f64, knee: f64, headroom: f64) -> f64 {
     x.signum() * (knee + headroom * ((a - knee) / headroom).tanh())
 }
 
-/// Transparent voice anti-blowup safety guard (`C¹` continuous at `±0.95`, strictly
-/// bounded inside `(-1.0, 1.0)`).
-///
-/// Strictly for per-voice synth anti-blowup; NEVER use behind a Master bus or Limiter!
-#[inline]
-pub fn soft_guard_f64(x: f64) -> f64 {
-    soft_knee_guard_f64(x, 0.95, 0.05)
-}
+/// Linear pass-through knee of [`voice_guard_f64`] (`4.0`, `+12.04 dBFS`), allowing
+/// voice `Out.gain_db` up to `+12 dB`, stereo spread, hard pan, resonant filter peaks,
+/// and feedback loops to flow unclipped into the 32-bit float mixer bus.
+pub const VOICE_GUARD_KNEE: f64 = 4.0;
 
-/// Transparent voice anti-blowup safety guard (`f32`).
+/// Soft-knee compression headroom above [`VOICE_GUARD_KNEE`] (`4.0`).
+pub const VOICE_GUARD_HEADROOM: f64 = 4.0;
+
+/// Strict asymptotic anti-blowup ceiling of [`voice_guard_f64`] (`8.0`).
+pub const VOICE_GUARD_CEILING: f64 = VOICE_GUARD_KNEE + VOICE_GUARD_HEADROOM;
+
+/// Transparent `C¹`-continuous per-voice and feedback-loop anti-blowup safety guard (`f64`).
+///
+/// Passes inputs inside `[-VOICE_GUARD_KNEE, VOICE_GUARD_KNEE]` (`[-4.0, 4.0]`, `+12.04 dBFS`)
+/// bit-identically untouched, then smoothly compresses extreme overshoots into
+/// `(-VOICE_GUARD_CEILING, VOICE_GUARD_CEILING)` (`(-8.0, 8.0)`). Non-finite inputs return `0.0`.
+///
+/// Strictly for per-voice / feedback-loop anti-blowup; NEVER use behind a Master bus or Limiter!
 #[inline]
-pub fn soft_guard(x: f32) -> f32 {
-    soft_guard_f64(f64::from(x)) as f32
+pub fn voice_guard_f64(x: f64) -> f64 {
+    soft_knee_guard_f64(x, VOICE_GUARD_KNEE, VOICE_GUARD_HEADROOM)
 }
 
 /// Pure transfer sample for UI visualizers matching the `Drive` insert DSP exactly
@@ -898,16 +906,63 @@ mod tests {
     }
 
     #[test]
-    fn soft_guard_is_transparent_below_095_and_bounded_below_1() {
-        for &x in &[-0.95_f32, -0.5, 0.0, 0.5, 0.95] {
-            assert_eq!(soft_guard(x), x);
+    fn voice_guard_is_transparent_to_knee_c1_continuous_and_bounded_inside_ceiling() {
+        assert_eq!(VOICE_GUARD_KNEE, 4.0);
+        assert_eq!(VOICE_GUARD_HEADROOM, 4.0);
+        assert_eq!(VOICE_GUARD_CEILING, 8.0);
+
+        // Exact bit-identical pass-through across [-4.0, 4.0].
+        for &x in &[
+            -VOICE_GUARD_KNEE,
+            -3.99,
+            -2.5,
+            -1.0,
+            -0.5,
+            0.0,
+            0.5,
+            1.0,
+            2.5,
+            3.99,
+            VOICE_GUARD_KNEE,
+        ] {
+            assert_eq!(voice_guard_f64(x), x);
         }
-        for &x in &[-10.0_f32, -2.0, -1.0, 1.0, 2.0, 10.0] {
-            let y = soft_guard(x);
-            assert!(y.is_finite() && y.abs() <= 1.0 && y.abs() > 0.95);
+
+        // C^1 unit slope across both +VOICE_GUARD_KNEE (+4.0) and -VOICE_GUARD_KNEE (-4.0).
+        let eps = 1e-6;
+        for &knee_pt in &[-VOICE_GUARD_KNEE, VOICE_GUARD_KNEE] {
+            let slope_left = (voice_guard_f64(knee_pt) - voice_guard_f64(knee_pt - eps)) / eps;
+            let slope_right = (voice_guard_f64(knee_pt + eps) - voice_guard_f64(knee_pt)) / eps;
+            assert!(
+                (slope_left - 1.0).abs() < 1e-6,
+                "knee={knee_pt}: left slope={slope_left}"
+            );
+            assert!(
+                (slope_right - 1.0).abs() < 1e-6,
+                "knee={knee_pt}: right slope={slope_right}"
+            );
+        }
+
+        // Smooth odd-symmetric compression strictly inside (-8.0, 8.0).
+        for &x in &[-50.0_f64, -16.0, -8.0, -4.5, 4.5, 8.0, 16.0, 50.0] {
+            let y = voice_guard_f64(x);
+            assert!(
+                y.is_finite() && y.abs() > VOICE_GUARD_KNEE && y.abs() < VOICE_GUARD_CEILING,
+                "x={x} -> y={y}"
+            );
             assert_eq!(y.signum(), x.signum());
+            assert_eq!(voice_guard_f64(-x), -y);
         }
-        assert_eq!(soft_guard(f32::NAN), 0.0);
+        for &extreme in &[-1e6_f64, 1e6] {
+            let y = voice_guard_f64(extreme);
+            assert!(y.is_finite() && y.abs() <= VOICE_GUARD_CEILING);
+            assert_eq!(y.signum(), extreme.signum());
+        }
+
+        // Non-finite inputs sanitize to 0.0.
+        assert_eq!(voice_guard_f64(f64::NAN), 0.0);
+        assert_eq!(voice_guard_f64(f64::INFINITY), 0.0);
+        assert_eq!(voice_guard_f64(f64::NEG_INFINITY), 0.0);
     }
 
     #[test]
@@ -1258,9 +1313,12 @@ mod tests {
         assert!((slope_left - 1.0).abs() < 1e-6);
         assert!((slope_right - 1.0).abs() < 1e-6);
 
-        // Matches soft_guard_f64 exactly at (knee=0.95, headroom=0.05).
-        for &x in &[-5.0_f64, -1.0, -0.95, 0.0, 0.95, 1.0, 5.0] {
-            assert_eq!(soft_guard_f64(x), soft_knee_guard_f64(x, 0.95, 0.05));
+        // Matches voice_guard_f64 exactly at (VOICE_GUARD_KNEE, VOICE_GUARD_HEADROOM).
+        for &x in &[-50.0_f64, -8.0, -4.0, -1.0, 0.0, 1.0, 4.0, 8.0, 50.0] {
+            assert_eq!(
+                voice_guard_f64(x),
+                soft_knee_guard_f64(x, VOICE_GUARD_KNEE, VOICE_GUARD_HEADROOM)
+            );
         }
 
         // Non-finite and zero-headroom safety.

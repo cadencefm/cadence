@@ -9,8 +9,8 @@ mod nodes;
 use cadence_core::dsp::{
     control_stride_mask, decay_coeff_60db_ms, flush_denormal_f64, fm_depth_from_amount,
     glide_coeff_ms, one_pole_coeff_ms, sanitize_sample, sanitize_sample_rate, smooth_step_f32,
-    smooth_step_f64, soft_knee_guard_f64, AdsrStage, ModalResonator, CHOKE_MS, FAST_RELEASE_MS,
-    TAIL_SILENCE_FLOOR_F64,
+    smooth_step_f64, stereo_mid_f64, voice_guard_f64, AdsrStage, ModalResonator, CHOKE_MS,
+    FAST_RELEASE_MS, TAIL_SILENCE_FLOOR_F64,
 };
 pub use cadence_core::rack::SamplerParams;
 use cadence_core::rack::{
@@ -28,7 +28,6 @@ use nodes::{ModuleNode, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceL
 use std::sync::Arc;
 
 const VOICE_CONTROL_RATE_HZ: f64 = 3_000.0;
-const FEEDBACK_SOFT_KNEE: f64 = 4.0;
 const DEFAULT_TAIL_TIMEOUT_SEC: f64 = 2.0;
 /// Upper fallback cap for stuck/self-oscillating resonator tails (`28 s` covers bright
 /// modes up to `12 s` RT60 decaying below `-120 dB` with excitation headroom; normal
@@ -1278,8 +1277,8 @@ fn gather_node_inputs(
         }
         let raw_src = if c.feedback {
             [
-                soft_knee_guard_f64(prev_slots[from][0], FEEDBACK_SOFT_KNEE, FEEDBACK_SOFT_KNEE),
-                soft_knee_guard_f64(prev_slots[from][1], FEEDBACK_SOFT_KNEE, FEEDBACK_SOFT_KNEE),
+                voice_guard_f64(prev_slots[from][0]),
+                voice_guard_f64(prev_slots[from][1]),
             ]
         } else {
             slots[from]
@@ -1294,25 +1293,25 @@ fn gather_node_inputs(
                 inputs.cv_stereo[0] += raw_src[0] * amt;
                 inputs.cv_stereo[1] += raw_src[1] * amt;
                 if op.kind == ModuleKindTag::Filter && ops[from].kind == ModuleKindTag::Env {
-                    let env_lvl = (0.5 * (raw_src[0] + raw_src[1])).clamp(0.0, 1.0);
+                    let env_lvl = stereo_mid_f64(raw_src).clamp(0.0, 1.0);
                     if env_lvl > inputs.filter_env_level {
                         inputs.filter_env_level = env_lvl;
                     }
                 }
             }
             InPort::PitchCv => {
-                inputs.pitch_cv += 0.5 * (raw_src[0] + raw_src[1]) * amt;
+                inputs.pitch_cv += stereo_mid_f64(raw_src) * amt;
             }
             InPort::FmIn => {
-                let mono = 0.5 * (raw_src[0] + raw_src[1]);
+                let mono = stereo_mid_f64(raw_src);
                 let depth = amt.signum() * fm_depth_from_amount(amt.abs() as f32);
                 inputs.fm_cycles += mono * depth;
             }
             InPort::PwCv => {
-                inputs.pw_cv += 0.5 * (raw_src[0] + raw_src[1]) * amt;
+                inputs.pw_cv += stereo_mid_f64(raw_src) * amt;
             }
             InPort::TrigIn => {
-                inputs.trig_in += 0.5 * (raw_src[0] + raw_src[1]) * amt;
+                inputs.trig_in += stereo_mid_f64(raw_src) * amt;
             }
         }
     }

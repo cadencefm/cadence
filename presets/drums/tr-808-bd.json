@@ -213,7 +213,7 @@
             "name": "Out",
             "kind": {
               "type": "out",
-              "gain_db": 4.405757,
+              "gain_db": 3.305757,
               "pan": 0.0,
               "spread": 0.0
             }

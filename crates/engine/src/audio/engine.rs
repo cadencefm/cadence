@@ -8,7 +8,7 @@ use super::voice_pool::{automation_position, LiveNote, TriggerRequest, VoicePool
 use super::voices::Voice;
 use super::*;
 use crate::mix_engine::MixerEngine;
-use cadence_core::dsp::{control_stride_mask, one_pole_decay_ms, sanitize_sample};
+use cadence_core::dsp::{control_stride_mask, one_pole_decay_ms, stereo_mid_f32};
 use cadence_core::mixer::ChannelRef;
 use cadence_core::runtime::{AudioInputStatus, CapturePhase};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
@@ -708,7 +708,13 @@ impl Engine {
                 _ => None,
             });
         let frame_out = self.voice_pool.render_frame(&self.samples, preview_ref);
-        let mixed = self.mixer.process(&frame_out.sources, frame_out.preview);
+        let mon = self
+            .monitor_drain
+            .next_frame(&self.shared, self.sample_rate);
+        // Unclipped 32-bit float Master output (clamping happens only at final DAC / WAV boundaries).
+        let out = self
+            .mixer
+            .process(&frame_out.sources, frame_out.preview, mon);
 
         let scope_index = self.scope_write_page * WAVE_SAMPLES + self.scope_offset;
         let inst_count = self.project.instruments.len().min(MAX_INSTRUMENTS);
@@ -728,14 +734,6 @@ impl Engine {
             self.scope_offset = 0;
         }
 
-        // Unclipped 32-bit float Master output (clamping happens only at final DAC / WAV boundaries).
-        let mon = self
-            .monitor_drain
-            .next_frame(&self.shared, self.sample_rate);
-        let out = [
-            sanitize_sample(mixed[0] + mon[0]),
-            sanitize_sample(mixed[1] + mon[1]),
-        ];
         // Lock-free SPSC stereo tap ring (zero overhead when disabled).
         if self.shared.tap_enabled.load(Ordering::Relaxed) {
             let write = self.shared.tap_write.load(Ordering::Relaxed);
@@ -757,7 +755,7 @@ impl Engine {
         self.level = self.level_left.max(self.level_right);
 
         // Peak-preserving signed-max waveform downsample at ~1_500 Hz across sample rates.
-        let mono_sample = (out[0] + out[1]) * 0.5;
+        let mono_sample = stereo_mid_f32(out);
         if mono_sample.abs() >= self.wave_peak.abs() {
             self.wave_peak = mono_sample;
         }

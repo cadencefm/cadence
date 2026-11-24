@@ -5,7 +5,7 @@ use super::shared::{AuditionKind, AuditionRequest, PREVIEW_TRACK, VOICES};
 use super::voices::{HeldNotes, Voice};
 use super::*;
 use crate::modular_voice::{VoiceStart, ZoneTriggerSpec};
-use cadence_core::dsp::{db_to_lin, mix_seed, sanitize_sample};
+use cadence_core::dsp::{db_to_lin, mix_seed, sanitize_sample, stereo_mid_f32};
 use cadence_core::params::{InstrumentParam, RackParam, ZoneParam};
 use cadence_core::rack::{
     module_sample_key, ModuleKind, ModuleParam, PitchTracking, RackPatch, RackZone, VoiceMode,
@@ -16,7 +16,16 @@ use std::sync::Arc;
 
 const MAX_MATCHED_ZONES: usize = 8;
 const STEAL_FADE_SLOTS: usize = 8;
+const STEAL_FADE_SEC: f64 = 0.002;
+const STEAL_FADE_MIN_FRAMES: u16 = 16;
+const STEAL_FADE_MAX_FRAMES: u16 = 2048;
 const MONO_PITCH_SLOTS: usize = MAX_INSTRUMENTS * 4;
+
+#[inline]
+pub(super) fn steal_fade_frames(sample_rate: f64) -> u16 {
+    ((STEAL_FADE_SEC * sample_rate).round() as u16)
+        .clamp(STEAL_FADE_MIN_FRAMES, STEAL_FADE_MAX_FRAMES)
+}
 
 #[derive(Clone, Copy, Default)]
 struct MonoPitchSlot {
@@ -29,6 +38,7 @@ struct MonoPitchSlot {
 #[derive(Clone, Copy, Default)]
 struct StealFade {
     track: u8,
+    track_id: u64,
     sample: [f32; 2],
     remaining: u16,
     total: u16,
@@ -230,6 +240,11 @@ impl VoicePool {
                 voice.deactivate();
             }
         }
+        for fade in &mut self.steal_fades {
+            if fade.track == PREVIEW_TRACK {
+                *fade = StealFade::default();
+            }
+        }
     }
 
     pub(super) fn release_all_live(&mut self) {
@@ -271,6 +286,20 @@ impl VoicePool {
         for slot in self.mono_last_pitch.iter_mut() {
             if slot.occupied && !project.instruments.iter().any(|t| t.id == slot.track_id) {
                 *slot = MonoPitchSlot::default();
+            }
+        }
+        for fade in &mut self.steal_fades {
+            if fade.remaining == 0 || fade.track == PREVIEW_TRACK {
+                continue;
+            }
+            if let Some(index) = project
+                .instruments
+                .iter()
+                .position(|t| t.id == fade.track_id)
+            {
+                fade.track = index as u8;
+            } else {
+                *fade = StealFade::default();
             }
         }
     }
@@ -327,9 +356,9 @@ impl VoicePool {
     }
 
     fn record_steal_fade_at(&mut self, slot: usize, sample_rate: f64) {
-        let (active, sample, track) = {
+        let (active, sample, track, track_id) = {
             let voice = &self.voices[slot];
-            (voice.active, voice.last_output, voice.track)
+            (voice.active, voice.last_output, voice.track, voice.track_id)
         };
         if !active {
             return;
@@ -337,11 +366,12 @@ impl VoicePool {
         if sample[0].abs() < 1e-6 && sample[1].abs() < 1e-6 {
             return;
         }
-        let fade_frames = ((0.002 * sample_rate).round() as u16).clamp(16, 2048);
+        let fade_frames = steal_fade_frames(sample_rate);
         let idx = self.steal_fade_cursor % STEAL_FADE_SLOTS;
         self.steal_fade_cursor = (idx + 1) % STEAL_FADE_SLOTS;
         self.steal_fades[idx] = StealFade {
             track,
+            track_id,
             sample,
             remaining: fade_frames,
             total: fade_frames,
@@ -1126,7 +1156,7 @@ impl VoicePool {
             let [left, right] = voice.next_stereo(samples, preview_ref);
             let track = voice.track as usize;
             if track < MAX_INSTRUMENTS {
-                out.track_scope[track] += (left + right) * 0.5;
+                out.track_scope[track] += stereo_mid_f32([left, right]);
                 out.sources[track][0] += left;
                 out.sources[track][1] += right;
             } else {
@@ -1165,6 +1195,7 @@ impl VoicePool {
             let r = fade.sample[1] * gain;
             let track = fade.track as usize;
             if track < MAX_INSTRUMENTS {
+                out.track_scope[track] += stereo_mid_f32([l, r]);
                 out.sources[track][0] += l;
                 out.sources[track][1] += r;
             } else {
