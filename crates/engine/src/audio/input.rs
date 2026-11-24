@@ -361,8 +361,28 @@ impl InputMonitorDrain {
         Some([l, r])
     }
 
+    #[cfg(test)]
     #[inline]
     pub(super) fn next_frame(&mut self, shared: &Shared, output_sample_rate: f64) -> [f32; 2] {
+        let mut frame = [[0.0; 2]; 1];
+        self.render_block(shared, output_sample_rate, &mut frame);
+        frame[0]
+    }
+
+    /// Render a stereo sub-block of monitored input frames into `out`, hoisting all
+    /// `Shared` atomic loads and ring cursor updates to once per sub-block.
+    ///
+    /// Returns `true` if monitoring was active or ramping during this block, or `false`
+    /// when completely idle (`out` is zero-filled).
+    pub(super) fn render_block(
+        &mut self,
+        shared: &Shared,
+        output_sample_rate: f64,
+        out: &mut [[f32; 2]],
+    ) -> bool {
+        if out.is_empty() {
+            return false;
+        }
         let want_monitor = shared.input_monitoring_active.load(Ordering::Acquire);
         if !want_monitor && self.active_gain <= 0.0 {
             let write = shared.monitor_write.load(Ordering::Acquire);
@@ -370,7 +390,8 @@ impl InputMonitorDrain {
                 shared.monitor_read.store(write, Ordering::Release);
             }
             self.primed = false;
-            return [0.0, 0.0];
+            out.fill([0.0, 0.0]);
+            return false;
         }
 
         let out_sr = sanitize_sample_rate(output_sample_rate);
@@ -393,72 +414,80 @@ impl InputMonitorDrain {
 
         let mut read = shared.monitor_read.load(Ordering::Relaxed);
         let write = shared.monitor_write.load(Ordering::Acquire);
-        let avail = write.wrapping_sub(read);
 
-        // Guard against clock drift between separate input & output audio hardware.
-        if avail > high_water {
+        // Guard against clock drift between separate input & output audio hardware once per sub-block.
+        if write.wrapping_sub(read) > high_water {
             read = write.wrapping_sub(target_depth);
             self.primed = false;
             self.frac = 0.0;
         }
 
-        if !self.primed {
-            if let (Some(a), Some(b)) = (
-                Self::pop_frame(shared, &mut read, write),
-                Self::pop_frame(shared, &mut read, write),
-            ) {
-                self.prev_frame = a;
-                self.next_frame = b;
-                self.primed = true;
-                self.frac = 0.0;
-            } else {
-                shared.monitor_read.store(read, Ordering::Release);
-                self.active_gain = (self.active_gain - ramp_step).max(0.0);
-                return [
-                    self.next_frame[0] * self.active_gain,
-                    self.next_frame[1] * self.active_gain,
-                ];
-            }
-        }
-
-        let mut starved = false;
-        while self.frac >= 1.0 {
-            if let Some(next) = Self::pop_frame(shared, &mut read, write) {
-                self.prev_frame = self.next_frame;
-                self.next_frame = next;
-                self.frac -= 1.0;
-            } else {
-                self.frac = 1.0;
-                starved = true;
-                break;
-            }
-        }
-        shared.monitor_read.store(read, Ordering::Release);
-
-        let t = self.frac.clamp(0.0, 1.0) as f32;
-        let sample = [
-            self.prev_frame[0] + (self.next_frame[0] - self.prev_frame[0]) * t,
-            self.prev_frame[1] + (self.next_frame[1] - self.prev_frame[1]) * t,
-        ];
-        if !starved {
-            self.frac += step;
-        }
-
-        if want_monitor && !starved {
-            self.active_gain = (self.active_gain + ramp_step).min(1.0);
-        } else {
-            self.active_gain = (self.active_gain - ramp_step).max(0.0);
+        for dst in out.iter_mut() {
             if !want_monitor && self.active_gain <= 0.0 {
-                let latest = shared.monitor_write.load(Ordering::Acquire);
-                shared.monitor_read.store(latest, Ordering::Release);
+                read = write;
                 self.primed = false;
+                *dst = [0.0, 0.0];
+                continue;
             }
+            if !self.primed {
+                if let (Some(a), Some(b)) = (
+                    Self::pop_frame(shared, &mut read, write),
+                    Self::pop_frame(shared, &mut read, write),
+                ) {
+                    self.prev_frame = a;
+                    self.next_frame = b;
+                    self.primed = true;
+                    self.frac = 0.0;
+                } else {
+                    self.active_gain = (self.active_gain - ramp_step).max(0.0);
+                    *dst = [
+                        self.next_frame[0] * self.active_gain,
+                        self.next_frame[1] * self.active_gain,
+                    ];
+                    continue;
+                }
+            }
+
+            let mut starved = false;
+            while self.frac >= 1.0 {
+                if let Some(next) = Self::pop_frame(shared, &mut read, write) {
+                    self.prev_frame = self.next_frame;
+                    self.next_frame = next;
+                    self.frac -= 1.0;
+                } else {
+                    self.frac = 1.0;
+                    starved = true;
+                    break;
+                }
+            }
+
+            let t = self.frac.clamp(0.0, 1.0) as f32;
+            let sample = [
+                self.prev_frame[0] + (self.next_frame[0] - self.prev_frame[0]) * t,
+                self.prev_frame[1] + (self.next_frame[1] - self.prev_frame[1]) * t,
+            ];
+            if !starved {
+                self.frac += step;
+            }
+
+            if want_monitor && !starved {
+                self.active_gain = (self.active_gain + ramp_step).min(1.0);
+            } else {
+                self.active_gain = (self.active_gain - ramp_step).max(0.0);
+                if !want_monitor && self.active_gain <= 0.0 {
+                    read = write;
+                    self.primed = false;
+                }
+            }
+
+            *dst = [
+                sanitize_sample(sample[0] * self.active_gain),
+                sanitize_sample(sample[1] * self.active_gain),
+            ];
         }
 
-        [
-            sanitize_sample(sample[0] * self.active_gain),
-            sanitize_sample(sample[1] * self.active_gain),
-        ]
+        shared.monitor_read.store(read, Ordering::Release);
+        true
     }
 }
 

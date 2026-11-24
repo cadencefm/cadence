@@ -1008,6 +1008,7 @@ impl ModularVoice {
 
     /// Execute one full stereo audio frame of the compiled Eurorack DAG (`f64` internal,
     /// `[f32; 2]` voice output). Zero allocations, zero locks, zero panics.
+    #[inline]
     pub fn next_frame(&mut self, bank: &SampleBank, preview: Option<&Arc<SampleData>>) -> [f32; 2] {
         if !self.active || self.op_count == 0 {
             return [0.0; 2];
@@ -1089,6 +1090,29 @@ impl ModularVoice {
             return [0.0; 2];
         }
         out
+    }
+
+    /// Execute up to `out.len()` consecutive frames for this voice while keeping its
+    /// entire modular state hot in L1D cache. Returns the number of active frames
+    /// written (`0..=out.len()`) before voice retirement.
+    pub fn render_block(
+        &mut self,
+        bank: &SampleBank,
+        preview: Option<&Arc<SampleData>>,
+        out: &mut [[f32; 2]],
+    ) -> usize {
+        if !self.active || self.op_count == 0 {
+            return 0;
+        }
+        let mut written = 0usize;
+        for slot in out.iter_mut() {
+            if !self.active {
+                break;
+            }
+            *slot = self.next_frame(bank, preview);
+            written += 1;
+        }
+        written
     }
 
     #[inline]

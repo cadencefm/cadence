@@ -245,6 +245,48 @@ impl crate::dsp::StereoEffect for Compressor {
     }
 
     #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        if buf.is_empty() {
+            return;
+        }
+        self.has_processed = true;
+        if self.bypass.check_idle_bypass(bypassed) {
+            self.gr_db = 0.0;
+            self.current_gr_db = 0.0;
+            for frame in buf.iter_mut() {
+                *frame = sanitize_frame(*frame);
+            }
+            return;
+        }
+        for frame in buf.iter_mut() {
+            *frame = Compressor::process(self, *frame, bypassed);
+        }
+    }
+
+    #[inline]
+    fn process_block_with_gr(
+        &mut self,
+        buf: &mut [[f32; 2]],
+        bypassed: bool,
+        gr_out: &mut [f32],
+    ) -> bool {
+        if bypassed {
+            self.process_block(buf, true);
+            for gr in gr_out.iter_mut().take(buf.len()) {
+                *gr = 0.0;
+            }
+            return true;
+        }
+        for (idx, frame) in buf.iter_mut().enumerate() {
+            *frame = Compressor::process(self, *frame, false);
+            if let Some(slot) = gr_out.get_mut(idx) {
+                *slot = self.current_gr_db;
+            }
+        }
+        true
+    }
+
+    #[inline]
     fn reset(&mut self) {
         Compressor::reset(self);
     }
@@ -528,6 +570,58 @@ impl crate::dsp::StereoEffect for Limiter {
     #[inline]
     fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         Limiter::process(self, input, bypassed)
+    }
+
+    #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        if buf.is_empty() {
+            return;
+        }
+        self.has_processed = true;
+        if self.bypass.check_idle_bypass(bypassed) {
+            self.gr_db = 0.0;
+            self.current_gr_db = 0.0;
+            let lookahead = self.lookahead;
+            let mut w = self.write_idx;
+            for frame in buf.iter_mut() {
+                let dry_in = sanitize_frame(*frame);
+                let delayed_dry = self.delay_buf[w];
+                self.delay_buf[w] = dry_in;
+                w += 1;
+                if w >= lookahead {
+                    w = 0;
+                }
+                *frame = delayed_dry;
+            }
+            self.write_idx = w;
+            return;
+        }
+        for frame in buf.iter_mut() {
+            *frame = Limiter::process(self, *frame, bypassed);
+        }
+    }
+
+    #[inline]
+    fn process_block_with_gr(
+        &mut self,
+        buf: &mut [[f32; 2]],
+        bypassed: bool,
+        gr_out: &mut [f32],
+    ) -> bool {
+        if bypassed {
+            self.process_block(buf, true);
+            for gr in gr_out.iter_mut().take(buf.len()) {
+                *gr = 0.0;
+            }
+            return true;
+        }
+        for (idx, frame) in buf.iter_mut().enumerate() {
+            *frame = Limiter::process(self, *frame, false);
+            if let Some(slot) = gr_out.get_mut(idx) {
+                *slot = self.current_gr_db;
+            }
+        }
+        true
     }
 
     #[inline]

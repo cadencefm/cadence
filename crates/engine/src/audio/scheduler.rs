@@ -124,11 +124,47 @@ impl StepScheduler {
         self.step_phase = (self.step_phase - 1.0).max(0.0);
     }
 
+    #[cfg(test)]
     #[inline]
     pub(super) fn advance_frame(&mut self, step_seconds: f64, sample_rate: f64) {
         let step_frames = (step_seconds * sample_rate).max(1.0);
         self.frame += 1;
         self.step_phase += 1.0 / step_frames;
+    }
+
+    /// Maximum event-free frames (`1..=max_frames`) before the earliest pending sub-step event.
+    #[inline]
+    pub(super) fn frames_until_sub_event(&self, max_frames: usize) -> usize {
+        if self.pending_count == 0 || self.earliest_fire_frame == u64::MAX {
+            return max_frames;
+        }
+        self.earliest_fire_frame
+            .saturating_sub(self.frame)
+            .clamp(1, max_frames as u64) as usize
+    }
+
+    /// Advance the step clock frame-by-frame up to `max_frames`, stopping immediately
+    /// on the frame that reaches `is_step_due()` so step boundaries keep exact ULP parity
+    /// with frame-by-frame stepping and zero added latency.
+    #[inline]
+    pub(super) fn advance_until_step_due(
+        &mut self,
+        max_frames: usize,
+        step_seconds: f64,
+        sample_rate: f64,
+    ) -> usize {
+        let step_frames = (step_seconds * sample_rate).max(1.0);
+        let inv = 1.0 / step_frames;
+        let mut n = 0usize;
+        while n < max_frames {
+            self.frame += 1;
+            self.step_phase += inv;
+            n += 1;
+            if self.step_phase + 1e-9 >= 1.0 {
+                break;
+            }
+        }
+        n
     }
 
     /// Determine whether `play_step` triggers normally or hits a stop boundary.

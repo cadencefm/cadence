@@ -564,6 +564,26 @@ impl crate::dsp::StereoEffect for Reverb {
     }
 
     #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        if buf.is_empty() {
+            return;
+        }
+        self.has_processed = true;
+        if self.bypass.check_idle_bypass(bypassed) {
+            self.lengths_a = self.target_lengths;
+            self.lengths_b = self.target_lengths;
+            self.size_xfade = 1.0;
+            for frame in buf.iter_mut() {
+                *frame = sanitize_frame(*frame);
+            }
+            return;
+        }
+        for frame in buf.iter_mut() {
+            *frame = Reverb::process(self, *frame, bypassed);
+        }
+    }
+
+    #[inline]
     fn reset(&mut self) {
         Reverb::reset(self);
     }

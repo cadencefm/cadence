@@ -19,6 +19,12 @@ pub const DECAY_LN_60DB: f64 = 6.907_755_278_982_137;
 /// Natural logarithm of `100` (`ln(100)`), yielding 99% (`-40 dB`) settling at stage end.
 pub const LN_100: f64 = 4.605_170_185_988_092;
 
+/// Maximum event-free audio processing sub-block length in sample frames.
+///
+/// Matches Apple Silicon L1D cache locality (~128 KiB) and control-rate granularity
+/// (`~1.33 ms` at `48 kHz`) with zero added latency.
+pub const AUDIO_SUB_BLOCK_FRAMES: usize = 64;
+
 /// Maximum safe discrete-time filter/oscillator frequency ratio relative to sample rate (`0.45 * sr`).
 pub const NYQUIST_SAFE_RATIO: f64 = 0.45;
 /// Drum-kit choke exponential fade-out duration (`3.5 ms` to `-60 dB`).
@@ -577,6 +583,19 @@ impl BypassFader {
     pub fn mark_idle(&mut self) {
         self.wet.snap(0.0);
         self.was_active = false;
+    }
+
+    /// Fast block-level check for idle-bypassed state: snaps wet gain to `0.0` and
+    /// returns `true` when `bypassed && !was_active` so callers can skip an entire block
+    /// while preserving smooth `0.0 -> 1.0` un-bypass fade-in.
+    #[inline]
+    pub fn check_idle_bypass(&mut self, bypassed: bool) -> bool {
+        if bypassed && !self.was_active {
+            self.wet.snap(0.0);
+            true
+        } else {
+            false
+        }
     }
 
     /// Advance bypass state by one audio sample.

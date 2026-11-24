@@ -4136,3 +4136,61 @@ fn voice_steal_micro_fade_contributes_to_track_scope() {
     assert_eq!(after_remove.sources[1], [0.0, 0.0]);
     assert_eq!(after_remove.track_scope[1], 0.0);
 }
+
+#[test]
+fn engine_render_block_matches_frame_by_frame_across_arbitrary_block_sizes_and_is_zero_alloc() {
+    use cadence_core::mixer::{EffectDevice, EffectKind, LimiterPatch};
+
+    let mut project = Project::demo();
+    // Exercise Limiter PDC on Master alongside demo sends, inserts, ducking, and automation.
+    project.mixer.master.inserts.push(EffectDevice {
+        id: 901,
+        name: "Limiter".into(),
+        bypassed: false,
+        kind: EffectKind::Limiter(LimiterPatch::default()),
+    });
+    let mut score = project.compile().unwrap();
+    // Inject sub-step offset events on the first two steps to test sub-block event splitting.
+    if let Some(ev) = score.events.first_mut() {
+        ev.offset = 0.37;
+    }
+
+    let sr = 24_000u32;
+    let total_frames = 4_096usize;
+
+    let mut reference = vec![[0.0_f32; 2]; total_frames];
+    {
+        let shared = Shared::new_arc();
+        shared.playing.store(true, Ordering::Release);
+        let mut engine = Engine::new(score.clone(), Vec::new(), sr, shared);
+        for dst in &mut reference {
+            *dst = engine.next_frame();
+        }
+    }
+
+    assert!(
+        reference
+            .iter()
+            .any(|&[l, r]| l.abs() > 1e-4 || r.abs() > 1e-4),
+        "reference render must be non-silent"
+    );
+
+    for &block_size in &[1usize, 7, 31, 64, 128, 256, 512] {
+        let shared = Shared::new_arc();
+        shared.playing.store(true, Ordering::Release);
+        let mut engine = Engine::new(score.clone(), Vec::new(), sr, shared);
+        let mut rendered = vec![[0.0_f32; 2]; total_frames];
+        crate::mix_engine::tests::assert_no_heap_operations(|| {
+            for chunk in rendered.chunks_mut(block_size) {
+                engine.render_block(chunk);
+            }
+        });
+        for (i, (&got, &want)) in rendered.iter().zip(reference.iter()).enumerate() {
+            assert_eq!(
+                [got[0].to_bits(), got[1].to_bits()],
+                [want[0].to_bits(), want[1].to_bits()],
+                "block_size={block_size} diverged at frame {i}: got={got:?}, want={want:?}"
+            );
+        }
+    }
+}

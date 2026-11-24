@@ -5,6 +5,7 @@ use cadence_core::dsp::{
     apply_fader_gain, limiter_lookahead_frames, one_pole_coeff_ms, one_pole_decay_ms,
     pan_stereo_balance, sanitize_frame, sanitize_sample, smooth_step_f32, Chorus, Compressor,
     Delay, DelayLine, Drive, Eq, Limiter, PeakHold, Reverb, RhythmicFilter, StereoEffect,
+    AUDIO_SUB_BLOCK_FRAMES,
 };
 use cadence_core::mixer::{
     ChannelKind, ChannelParam, ChannelRef, EffectKind, EffectKindTag, MixerParamTarget,
@@ -15,6 +16,8 @@ use cadence_core::runtime::{ChannelMeter, EffectMeter};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
 
 const MASTER: usize = MAX_CHANNELS - 1;
+/// Gain-reduction meter hold snap floor in dB (`0.0001 dB`).
+const GR_HOLD_ZERO_FLOOR_DB: f32 = 1e-4;
 
 const _: () = {
     assert!(MAX_CHANNELS <= u8::MAX as usize);
@@ -189,13 +192,6 @@ impl ChannelPlan {
     }
 
     #[inline]
-    fn apply_cached_pan(self, input: [f32; 2]) -> [f32; 2] {
-        [
-            sanitize_sample(input[0]) * self.cached_pan_lr[0],
-            sanitize_sample(input[1]) * self.cached_pan_lr[1],
-        ]
-    }
-    #[inline]
     fn output_slot(self) -> Option<usize> {
         self.output.map(usize::from)
     }
@@ -276,8 +272,18 @@ impl EffectBank {
     }
 
     #[inline]
-    fn process(&mut self, active: EffectKindTag, input: [f32; 2], bypassed: bool) -> [f32; 2] {
-        dispatch_effect_bank!(&mut self, active, process(input, bypassed))
+    fn process_block_with_gr(
+        &mut self,
+        active: EffectKindTag,
+        buf: &mut [[f32; 2]],
+        bypassed: bool,
+        gr_out: &mut [f32],
+    ) -> bool {
+        dispatch_effect_bank!(
+            &mut self,
+            active,
+            process_block_with_gr(buf, bypassed, gr_out)
+        )
     }
 
     #[inline]
@@ -357,24 +363,35 @@ impl EffectSlot {
         }
     }
 
-    fn process(&mut self, input: [f32; 2], hold_frames: u32, hold_decay: f32) -> [f32; 2] {
-        let out = self.bank.process(self.active, input, self.bypassed);
-        if let Some(raw_gr) = self.bank.gain_reduction_db(self.active) {
+    fn process_block(
+        &mut self,
+        buf: &mut [[f32; 2]],
+        hold_frames: u32,
+        hold_decay: f32,
+        gr_scratch: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+    ) {
+        let n = buf.len();
+        let has_gr =
+            self.bank
+                .process_block_with_gr(self.active, buf, self.bypassed, &mut gr_scratch[..n]);
+        if has_gr {
             if self.bypassed {
                 self.gr_hold.reset();
             } else {
-                let gr = if raw_gr.is_finite() {
-                    raw_gr.max(0.0)
-                } else {
-                    0.0
-                };
-                self.gr_hold.observe(gr, gr, hold_frames, hold_decay, 1e-4);
-                self.render_gr_max_db = self.render_gr_max_db.max(gr);
-                self.render_gr_sum_db += f64::from(gr);
-                self.render_gr_frames += 1;
+                for &raw_gr in &gr_scratch[..n] {
+                    let gr = if raw_gr.is_finite() {
+                        raw_gr.max(0.0)
+                    } else {
+                        0.0
+                    };
+                    self.gr_hold
+                        .observe(gr, gr, hold_frames, hold_decay, GR_HOLD_ZERO_FLOOR_DB);
+                    self.render_gr_max_db = self.render_gr_max_db.max(gr);
+                    self.render_gr_sum_db += f64::from(gr);
+                    self.render_gr_frames += 1;
+                }
             }
         }
-        out
     }
 
     #[inline]
@@ -430,17 +447,51 @@ impl Default for DuckState {
     }
 }
 
+/// Heap-boxed sub-block scratch buffers owned by [`MixerEngine`] so debug stacks
+/// stay compact and block mixing performs strictly zero heap allocations.
+struct MixerBlockScratch {
+    buses: [[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+    returns: [[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+    master: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    work: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    post_fader: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    factors: [[f32; AUDIO_SUB_BLOCK_FRAMES]; MAX_CHANNELS],
+    gr_scratch: [f32; AUDIO_SUB_BLOCK_FRAMES],
+    gain_buf: [f32; AUDIO_SUB_BLOCK_FRAMES],
+    scale_buf: [f32; AUDIO_SUB_BLOCK_FRAMES],
+    pan_lr_buf: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    send_amt_buf: [[f32; AUDIO_SUB_BLOCK_FRAMES]; MAX_SENDS],
+}
+
+impl MixerBlockScratch {
+    fn new_boxed() -> Box<Self> {
+        Box::new(Self {
+            buses: [[[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+            returns: [[[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+            master: [[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            work: [[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            post_fader: [[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            factors: [[1.0; AUDIO_SUB_BLOCK_FRAMES]; MAX_CHANNELS],
+            gr_scratch: [0.0; AUDIO_SUB_BLOCK_FRAMES],
+            gain_buf: [0.0; AUDIO_SUB_BLOCK_FRAMES],
+            scale_buf: [0.0; AUDIO_SUB_BLOCK_FRAMES],
+            pan_lr_buf: [[1.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            send_amt_buf: [[0.0; AUDIO_SUB_BLOCK_FRAMES]; MAX_SENDS],
+        })
+    }
+}
+
 pub(crate) struct MixerEngine {
     channels: [ChannelPlan; MAX_CHANNELS],
     effects: Box<[EffectSlot]>,
     pdc_lines: Box<[DelayLine]>,
+    scratch: Box<MixerBlockScratch>,
     group_order: [usize; MAX_MIXER_CHANNELS],
     group_count: usize,
     ducks: [DuckState; MAX_DUCKS],
     total_output_latency: usize,
     sample_rate: f64,
     envelope_smoothing: f32,
-    factors: [f32; MAX_CHANNELS],
     wet_only: bool,
     smoothing: f32,
     meter_decay: f32,
@@ -465,13 +516,13 @@ impl MixerEngine {
             channels: [ChannelPlan::default(); MAX_CHANNELS],
             effects,
             pdc_lines,
+            scratch: MixerBlockScratch::new_boxed(),
             group_order: [0; MAX_MIXER_CHANNELS],
             group_count: 0,
             ducks: [DuckState::default(); MAX_DUCKS],
             total_output_latency: 0,
             sample_rate: sr,
             envelope_smoothing: one_pole_coeff_ms(1.0, sr) as f32,
-            factors: [1.0; MAX_CHANNELS],
             wet_only: false,
             smoothing: one_pole_coeff_ms(10.0, sr) as f32,
             meter_decay: one_pole_decay_ms(300.0, sr) as f32,
@@ -1156,7 +1207,6 @@ impl MixerEngine {
             duck.pending_delays = [0; DUCK_PENDING_CAPACITY];
             duck.pending_len = 0;
         }
-        self.factors.fill(1.0);
         self.clear_meters(None);
     }
 
@@ -1242,51 +1292,109 @@ impl MixerEngine {
             Some((id, slot.render_gr_max_db, avg_gr_db))
         })
     }
+}
 
-    fn inserts(&mut self, channel: usize, mut input: [f32; 2]) -> [f32; 2] {
-        let plan = self.channels[channel];
-        let hold_frames = self.hold_frames;
-        let hold_decay = self.hold_decay;
-        for &slot in plan.inserts.iter().flatten() {
-            if let Some(effect) = self.effects.get_mut(usize::from(slot)) {
-                input = effect.process(input, hold_frames, hold_decay);
+/// Post-recovery grace window (`10 ms`) after which an idle duck envelope snaps to `1.0`.
+const DUCK_TAIL_SETTLE_SEC: f64 = 0.01;
+
+/// Step one channel's strip (`gain`, `pan`, `scale`) and active aux-send smoothers
+/// across `frames` frames, returning `true` when strip smoothers were already settled.
+#[inline]
+fn step_channel_smoothers(
+    channel: &mut ChannelPlan,
+    sm: f32,
+    frames: usize,
+    gain_buf: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+    scale_buf: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+    pan_lr_buf: &mut [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    send_amt_buf: &mut [[f32; AUDIO_SUB_BLOCK_FRAMES]; MAX_SENDS],
+) -> bool {
+    let strip_settled = channel.gain == channel.target_gain
+        && channel.pan == channel.target_pan
+        && channel.scale == channel.target_scale;
+    if strip_settled {
+        channel.refresh_pan_cache();
+    } else {
+        for i in 0..frames {
+            smooth_step_f32(&mut channel.gain, channel.target_gain, sm);
+            smooth_step_f32(&mut channel.pan, channel.target_pan, sm);
+            channel.refresh_pan_cache();
+            smooth_step_f32(&mut channel.scale, channel.target_scale, sm);
+            gain_buf[i] = channel.gain;
+            scale_buf[i] = channel.scale;
+            pan_lr_buf[i] = channel.cached_pan_lr;
+        }
+    }
+    for (s_idx, send) in channel.sends.iter_mut().enumerate() {
+        if send.target.is_none() {
+            break;
+        }
+        if send.amount == send.target_amount {
+            send_amt_buf[s_idx][..frames].fill(send.amount);
+        } else {
+            for amt in &mut send_amt_buf[s_idx][..frames] {
+                smooth_step_f32(&mut send.amount, send.target_amount, sm);
+                *amt = send.amount;
             }
         }
-        input
     }
+    strip_settled
+}
 
-    #[inline]
-    fn strip_fader(&self, channel: usize, input: [f32; 2]) -> [f32; 2] {
-        let plan = self.channels[channel];
-        apply_fader_gain(input, plan.gain, plan.scale, self.factors[channel])
-    }
-
-    #[inline]
-    fn strip(&self, channel: usize, input: [f32; 2]) -> [f32; 2] {
-        let plan = self.channels[channel];
-        plan.apply_cached_pan(apply_fader_gain(
-            input,
-            plan.gain,
-            plan.scale,
-            self.factors[channel],
-        ))
-    }
-
-    #[inline]
-    fn apply_pdc(&mut self, channel_idx: usize, delay_frames: usize, output: [f32; 2]) -> [f32; 2] {
-        if delay_frames == 0 {
-            return output;
+#[inline]
+fn route_output_block(
+    wet_only: bool,
+    plan: ChannelPlan,
+    output: &[[f32; 2]],
+    buses: &mut [[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+    master: &mut [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+) {
+    match plan.output_slot() {
+        Some(MASTER) => {
+            if !wet_only {
+                for (dst, &src) in master[..output.len()].iter_mut().zip(output) {
+                    dst[0] += src[0];
+                    dst[1] += src[1];
+                }
+            }
         }
-        if let Some(line) = self.pdc_lines.get_mut(channel_idx) {
-            // Read before writing for exact `z^{-delay_frames}` sample alignment with Limiter lookahead.
-            let delayed = line.read_integer(delay_frames);
-            line.write(output);
-            delayed
-        } else {
-            output
+        Some(slot) if (MAX_INSTRUMENTS..MASTER).contains(&slot) => {
+            let idx = slot - MAX_INSTRUMENTS;
+            if idx < MAX_MIXER_CHANNELS {
+                for (dst, &src) in buses[idx][..output.len()].iter_mut().zip(output) {
+                    dst[0] += src[0];
+                    dst[1] += src[1];
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn run_inserts_block(
+    inserts: [Option<u8>; MAX_INSERTS],
+    effects: &mut [EffectSlot],
+    buf: &mut [[f32; 2]],
+    hold_frames: u32,
+    hold_decay: f32,
+    gr_scratch: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+) {
+    for &slot in inserts.iter().flatten() {
+        if let Some(effect) = effects.get_mut(usize::from(slot)) {
+            effect.process_block(buf, hold_frames, hold_decay, gr_scratch);
         }
     }
+}
 
+#[inline]
+fn apply_pan_lr(input: [f32; 2], pan_lr: [f32; 2]) -> [f32; 2] {
+    [
+        sanitize_sample(input[0]) * pan_lr[0],
+        sanitize_sample(input[1]) * pan_lr[1],
+    ]
+}
+
+impl MixerEngine {
     pub(crate) fn trigger_part(&mut self, part: u64) {
         for duck in &mut self.ducks {
             if duck.id.is_some() && duck.source_part == part {
@@ -1306,270 +1414,513 @@ impl MixerEngine {
         }
     }
 
-    #[inline]
-    fn route_output(
-        &self,
-        plan: ChannelPlan,
-        output: [f32; 2],
-        channels: &mut [[f32; 2]; MAX_MIXER_CHANNELS],
-        master: &mut [f32; 2],
-    ) {
-        match plan.output_slot() {
-            Some(MASTER) => {
-                if !self.wet_only {
-                    master[0] += output[0];
-                    master[1] += output[1];
-                }
-            }
-            Some(slot) if (MAX_INSTRUMENTS..MASTER).contains(&slot) => {
-                let idx = slot - MAX_INSTRUMENTS;
-                if idx < MAX_MIXER_CHANNELS {
-                    channels[idx][0] += output[0];
-                    channels[idx][1] += output[1];
-                }
-            }
-            _ => {}
-        }
-    }
-
-    #[inline]
-    fn process_bus_channel(
+    fn process_bus_channel_block(
         &mut self,
         index: usize,
-        buses: &mut [[f32; 2]; MAX_MIXER_CHANNELS],
-        returns: &mut [[f32; 2]; MAX_MIXER_CHANNELS],
-        master: &mut [f32; 2],
+        frames: usize,
+        duck_dirty: &[bool; MAX_CHANNELS],
     ) {
         let slot = MAX_INSTRUMENTS + index;
-        let plan = self.channels[slot];
-        let input = buses[index];
-        let processed = self.inserts(slot, input);
-        let inserts_non_finite = !processed[0].is_finite() || !processed[1].is_finite();
-        // Aux sends tap post-fader, pre-strip-pan so stereo sources stay stereo
-        // and channel strip panning never starves opposite-panned Returns.
-        let (post_fader, output) = if plan.source_enabled {
-            let pf = self.strip_fader(slot, processed);
-            (pf, plan.apply_cached_pan(pf))
-        } else {
-            ([0.0; 2], [0.0; 2])
-        };
-        self.channels[slot].meter.observe(
-            input,
-            output,
-            false,
-            self.meter_decay,
-            self.hold_frames,
-            self.hold_decay,
+        let sm = self.smoothing;
+        let decay = self.meter_decay;
+        let hold_frames = self.hold_frames;
+        let hold_decay = self.hold_decay;
+        let wet_only = self.wet_only;
+
+        let scratch = &mut *self.scratch;
+        let strip_settled = step_channel_smoothers(
+            &mut self.channels[slot],
+            sm,
+            frames,
+            &mut scratch.gain_buf,
+            &mut scratch.scale_buf,
+            &mut scratch.pan_lr_buf,
+            &mut scratch.send_amt_buf,
         );
-        if inserts_non_finite {
-            self.channels[slot].meter.clipped = true;
+        let plan = self.channels[slot];
+        let input_slice = &scratch.buses[index][..frames];
+        scratch.work[..frames].copy_from_slice(input_slice);
+        run_inserts_block(
+            plan.inserts,
+            &mut self.effects,
+            &mut scratch.work[..frames],
+            hold_frames,
+            hold_decay,
+            &mut scratch.gr_scratch,
+        );
+
+        let has_duck = duck_dirty[slot];
+        let mut inserts_non_finite = false;
+        let meter = &mut self.channels[slot].meter;
+        if plan.source_enabled {
+            let const_gain = plan.gain;
+            let const_scale = plan.scale;
+            let const_pan = plan.cached_pan_lr;
+            for (i, &inp) in input_slice.iter().enumerate() {
+                let processed = scratch.work[i];
+                if !processed[0].is_finite() || !processed[1].is_finite() {
+                    inserts_non_finite = true;
+                }
+                let duck = if has_duck {
+                    scratch.factors[slot][i]
+                } else {
+                    1.0
+                };
+                let (g, sc, pan_lr) = if strip_settled {
+                    (const_gain, const_scale, const_pan)
+                } else {
+                    (
+                        scratch.gain_buf[i],
+                        scratch.scale_buf[i],
+                        scratch.pan_lr_buf[i],
+                    )
+                };
+                let pf = apply_fader_gain(processed, g, sc, duck);
+                let out = apply_pan_lr(pf, pan_lr);
+                scratch.post_fader[i] = sanitize_frame(pf);
+                meter.observe(inp, out, false, decay, hold_frames, hold_decay);
+            }
+        } else {
+            for (i, &inp) in input_slice.iter().enumerate() {
+                let processed = scratch.work[i];
+                if !processed[0].is_finite() || !processed[1].is_finite() {
+                    inserts_non_finite = true;
+                }
+                scratch.post_fader[i] = [0.0; 2];
+                meter.observe(inp, [0.0; 2], false, decay, hold_frames, hold_decay);
+            }
         }
+        if inserts_non_finite {
+            meter.clipped = true;
+        }
+
         // Reuse the channel's single PDC delay line (holding sanitized post-fader, pre-pan audio)
-        // to tap both Return-aligned sends and main output before writing once.
-        let safe_pf = sanitize_frame(post_fader);
+        // to tap both Return-aligned sends and main output before writing once per frame.
         let any_send_pdc = plan
             .sends
             .iter()
             .any(|s| s.target.is_some() && s.pdc_delay > 0);
         let needs_pdc_write = plan.pdc_delay > 0 || any_send_pdc;
-        let delayed_pf = if let Some(line) = self.pdc_lines.get_mut(index) {
-            for send in &plan.sends {
-                let Some(target) = send.target.map(usize::from) else {
-                    break;
-                };
-                if target < MAX_MIXER_CHANNELS && send.amount > 0.0 {
-                    let tapped = if send.pdc_delay == 0 {
+        let const_pan = plan.cached_pan_lr;
+
+        if needs_pdc_write {
+            if let Some(line) = self.pdc_lines.get_mut(index) {
+                for i in 0..frames {
+                    let safe_pf = scratch.post_fader[i];
+                    for (s_idx, send) in plan.sends.iter().enumerate() {
+                        let Some(target) = send.target.map(usize::from) else {
+                            break;
+                        };
+                        let amt = scratch.send_amt_buf[s_idx][i];
+                        if target < MAX_MIXER_CHANNELS && amt > 0.0 {
+                            let tapped = if send.pdc_delay == 0 {
+                                safe_pf
+                            } else {
+                                line.read_integer(send.pdc_delay)
+                            };
+                            scratch.returns[target][i][0] += tapped[0] * amt;
+                            scratch.returns[target][i][1] += tapped[1] * amt;
+                        }
+                    }
+                    let main_pf = if plan.pdc_delay == 0 {
                         safe_pf
                     } else {
-                        line.read_integer(send.pdc_delay)
+                        line.read_integer(plan.pdc_delay)
                     };
-                    returns[target][0] += tapped[0] * send.amount;
-                    returns[target][1] += tapped[1] * send.amount;
+                    line.write(safe_pf);
+                    let pan_lr = if strip_settled {
+                        const_pan
+                    } else {
+                        scratch.pan_lr_buf[i]
+                    };
+                    scratch.work[i] = apply_pan_lr(main_pf, pan_lr);
+                }
+            } else {
+                for (s_idx, send) in plan.sends.iter().enumerate() {
+                    let Some(target) = send.target.map(usize::from) else {
+                        break;
+                    };
+                    if target < MAX_MIXER_CHANNELS {
+                        for i in 0..frames {
+                            let amt = scratch.send_amt_buf[s_idx][i];
+                            if amt > 0.0 {
+                                scratch.returns[target][i][0] += scratch.post_fader[i][0] * amt;
+                                scratch.returns[target][i][1] += scratch.post_fader[i][1] * amt;
+                            }
+                        }
+                    }
+                }
+                for i in 0..frames {
+                    let pan_lr = if strip_settled {
+                        const_pan
+                    } else {
+                        scratch.pan_lr_buf[i]
+                    };
+                    scratch.work[i] = apply_pan_lr(scratch.post_fader[i], pan_lr);
                 }
             }
-            let main_pf = if plan.pdc_delay == 0 {
-                safe_pf
-            } else {
-                line.read_integer(plan.pdc_delay)
-            };
-            if needs_pdc_write {
-                line.write(safe_pf);
-            }
-            main_pf
         } else {
-            for send in &plan.sends {
+            for (s_idx, send) in plan.sends.iter().enumerate() {
                 let Some(target) = send.target.map(usize::from) else {
                     break;
                 };
-                if target < MAX_MIXER_CHANNELS && send.amount > 0.0 {
-                    returns[target][0] += safe_pf[0] * send.amount;
-                    returns[target][1] += safe_pf[1] * send.amount;
+                if target < MAX_MIXER_CHANNELS {
+                    for i in 0..frames {
+                        let amt = scratch.send_amt_buf[s_idx][i];
+                        if amt > 0.0 {
+                            scratch.returns[target][i][0] += scratch.post_fader[i][0] * amt;
+                            scratch.returns[target][i][1] += scratch.post_fader[i][1] * amt;
+                        }
+                    }
                 }
             }
-            safe_pf
-        };
-        let aligned = plan.apply_cached_pan(delayed_pf);
-        self.route_output(plan, aligned, buses, master);
+            if strip_settled {
+                for i in 0..frames {
+                    scratch.work[i] = apply_pan_lr(scratch.post_fader[i], const_pan);
+                }
+            } else {
+                for i in 0..frames {
+                    scratch.work[i] = apply_pan_lr(scratch.post_fader[i], scratch.pan_lr_buf[i]);
+                }
+            }
+        }
+
+        route_output_block(
+            wet_only,
+            plan,
+            &scratch.work[..frames],
+            &mut scratch.buses,
+            &mut scratch.master,
+        );
     }
 
+    /// Process a contiguous sub-block (`1..=AUDIO_SUB_BLOCK_FRAMES`) through the full
+    /// mixer routing DAG, inserts, PDC lines, sends, ducking, and metering.
+    pub(crate) fn process_block(
+        &mut self,
+        sources: &[[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+        source_active_mask: u32,
+        preview: &[[f32; 2]],
+        monitor: &[[f32; 2]],
+        out: &mut [[f32; 2]],
+    ) {
+        let frames = out.len().min(AUDIO_SUB_BLOCK_FRAMES);
+        if frames == 0 {
+            return;
+        }
+
+        let mut duck_dirty = [false; MAX_CHANNELS];
+        let env_sm = self.envelope_smoothing;
+        let settle_margin = self.sample_rate * DUCK_TAIL_SETTLE_SEC;
+        for duck in &mut self.ducks {
+            if duck.id.is_none() {
+                continue;
+            }
+            if duck.pending_len == 0
+                && duck.gain == 1.0
+                && duck.elapsed > duck.recovery_frames + settle_margin
+            {
+                duck.elapsed += frames as f64;
+                continue;
+            }
+            let target_slot = duck.target.map(usize::from).filter(|&s| s < MAX_CHANNELS);
+            if let Some(ts) = target_slot {
+                if !duck_dirty[ts] {
+                    self.scratch.factors[ts][..frames].fill(1.0);
+                    duck_dirty[ts] = true;
+                }
+            }
+            for i in 0..frames {
+                let x = (duck.elapsed / duck.recovery_frames).clamp(0.0, 1.0) as f32;
+                let target = 1.0 - duck.depth * (1.0 - x).powi(2);
+                smooth_step_f32(&mut duck.gain, target, env_sm);
+                if duck.elapsed > duck.recovery_frames + settle_margin {
+                    duck.gain = 1.0;
+                }
+                duck.elapsed += 1.0;
+                if let Some(ts) = target_slot {
+                    self.scratch.factors[ts][i] *= duck.gain;
+                }
+                // Advance pending PDC-aligned duck countdowns after evaluating this frame so
+                // a delay of `N` frames arms `elapsed = 0.0` on exact frame `N`.
+                let mut triggered = false;
+                let mut j = 0usize;
+                let mut len = usize::from(duck.pending_len).min(DUCK_PENDING_CAPACITY);
+                while j < len {
+                    if duck.pending_delays[j] <= 1 {
+                        triggered = true;
+                        len -= 1;
+                        duck.pending_delays.copy_within(j + 1..len + 1, j);
+                        duck.pending_delays[len] = 0;
+                    } else {
+                        duck.pending_delays[j] -= 1;
+                        j += 1;
+                    }
+                }
+                duck.pending_len = len as u8;
+                if triggered {
+                    duck.elapsed = 0.0;
+                }
+            }
+        }
+
+        // Clear bus, return, and master accumulators for active channels in this sub-block.
+        for index in 0..MAX_MIXER_CHANNELS {
+            let role = self.channels[MAX_INSTRUMENTS + index].role;
+            match role {
+                ChannelRole::Audio | ChannelRole::Group => {
+                    self.scratch.buses[index][..frames].fill([0.0; 2]);
+                }
+                ChannelRole::Return => {
+                    self.scratch.returns[index][..frames].fill([0.0; 2]);
+                }
+                _ => {}
+            }
+        }
+        self.scratch.master[..frames].fill([0.0; 2]);
+
+        // Route active HiddenSource instrument stems into target Audio/Group/Master buses.
+        let mut mask = source_active_mask;
+        while mask != 0 {
+            let index = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            if index >= MAX_INSTRUMENTS {
+                break;
+            }
+            let plan = self.channels[index];
+            if plan.role != ChannelRole::HiddenSource {
+                continue;
+            }
+            let mut source_non_finite = false;
+            let src = &sources[index][..frames];
+            for (dst, &raw) in self.scratch.work[..frames].iter_mut().zip(src) {
+                if !raw[0].is_finite() || !raw[1].is_finite() {
+                    source_non_finite = true;
+                }
+                *dst = sanitize_frame(raw);
+            }
+            if source_non_finite {
+                if let Some(out_slot) = plan.output_slot().filter(|&s| s < MAX_CHANNELS) {
+                    self.channels[out_slot].meter.clipped = true;
+                }
+            }
+            route_output_block(
+                self.wet_only,
+                plan,
+                &self.scratch.work[..frames],
+                &mut self.scratch.buses,
+                &mut self.scratch.master,
+            );
+        }
+
+        // Process Audio channels.
+        for index in 0..MAX_MIXER_CHANNELS {
+            if self.channels[MAX_INSTRUMENTS + index].role != ChannelRole::Audio {
+                continue;
+            }
+            self.process_bus_channel_block(index, frames, &duck_dirty);
+        }
+
+        // Process Group channels in causal topological order (supports chained groups).
+        let group_order = self.group_order;
+        for &index in group_order.iter().take(self.group_count) {
+            self.process_bus_channel_block(index, frames, &duck_dirty);
+        }
+
+        // Process Return buses.
+        let sm = self.smoothing;
+        let decay = self.meter_decay;
+        let hold_frames = self.hold_frames;
+        let hold_decay = self.hold_decay;
+        for index in 0..MAX_MIXER_CHANNELS {
+            let slot = MAX_INSTRUMENTS + index;
+            if self.channels[slot].role != ChannelRole::Return {
+                continue;
+            }
+            let scratch = &mut *self.scratch;
+            let strip_settled = step_channel_smoothers(
+                &mut self.channels[slot],
+                sm,
+                frames,
+                &mut scratch.gain_buf,
+                &mut scratch.scale_buf,
+                &mut scratch.pan_lr_buf,
+                &mut scratch.send_amt_buf,
+            );
+            let plan = self.channels[slot];
+            let input_slice = &scratch.returns[index][..frames];
+            scratch.work[..frames].copy_from_slice(input_slice);
+            run_inserts_block(
+                plan.inserts,
+                &mut self.effects,
+                &mut scratch.work[..frames],
+                hold_frames,
+                hold_decay,
+                &mut scratch.gr_scratch,
+            );
+
+            let enabled = !plan.muted && (!self.wet_only || plan.solo);
+            let has_duck = duck_dirty[slot];
+            let mut inserts_non_finite = false;
+            let meter = &mut self.channels[slot].meter;
+            let const_gain = plan.gain;
+            let const_scale = plan.scale;
+            let const_pan = plan.cached_pan_lr;
+            for (i, &inp) in input_slice.iter().enumerate() {
+                let processed = scratch.work[i];
+                if !processed[0].is_finite() || !processed[1].is_finite() {
+                    inserts_non_finite = true;
+                }
+                let output = if enabled {
+                    let duck = if has_duck {
+                        scratch.factors[slot][i]
+                    } else {
+                        1.0
+                    };
+                    let (g, sc, pan_lr) = if strip_settled {
+                        (const_gain, const_scale, const_pan)
+                    } else {
+                        (
+                            scratch.gain_buf[i],
+                            scratch.scale_buf[i],
+                            scratch.pan_lr_buf[i],
+                        )
+                    };
+                    apply_pan_lr(apply_fader_gain(processed, g, sc, duck), pan_lr)
+                } else {
+                    [0.0; 2]
+                };
+                meter.observe(inp, output, false, decay, hold_frames, hold_decay);
+                scratch.post_fader[i] = sanitize_frame(output);
+            }
+            if inserts_non_finite {
+                meter.clipped = true;
+            }
+            if plan.pdc_delay > 0 {
+                if let Some(line) = self.pdc_lines.get_mut(index) {
+                    for i in 0..frames {
+                        let aligned = line.read_integer(plan.pdc_delay);
+                        line.write(scratch.post_fader[i]);
+                        scratch.master[i][0] += aligned[0];
+                        scratch.master[i][1] += aligned[1];
+                    }
+                } else {
+                    for i in 0..frames {
+                        scratch.master[i][0] += scratch.post_fader[i][0];
+                        scratch.master[i][1] += scratch.post_fader[i][1];
+                    }
+                }
+            } else {
+                for i in 0..frames {
+                    scratch.master[i][0] += scratch.post_fader[i][0];
+                    scratch.master[i][1] += scratch.post_fader[i][1];
+                }
+            }
+        }
+
+        // Process Master bus.
+        let scratch = &mut *self.scratch;
+        let strip_settled = step_channel_smoothers(
+            &mut self.channels[MASTER],
+            sm,
+            frames,
+            &mut scratch.gain_buf,
+            &mut scratch.scale_buf,
+            &mut scratch.pan_lr_buf,
+            &mut scratch.send_amt_buf,
+        );
+        let master_plan = self.channels[MASTER];
+        scratch.work[..frames].copy_from_slice(&scratch.master[..frames]);
+        run_inserts_block(
+            master_plan.inserts,
+            &mut self.effects,
+            &mut scratch.work[..frames],
+            hold_frames,
+            hold_decay,
+            &mut scratch.gr_scratch,
+        );
+
+        let has_duck = duck_dirty[MASTER];
+        let mut master_non_finite = false;
+        let meter = &mut self.channels[MASTER].meter;
+        let const_gain = master_plan.gain;
+        let const_scale = master_plan.scale;
+        let const_pan = master_plan.cached_pan_lr;
+        let master_muted = master_plan.muted;
+        for (i, dst) in out[..frames].iter_mut().enumerate() {
+            let processed = scratch.work[i];
+            if !processed[0].is_finite() || !processed[1].is_finite() {
+                master_non_finite = true;
+            }
+            let strip_out = if master_muted {
+                [0.0; 2]
+            } else {
+                let duck = if has_duck {
+                    scratch.factors[MASTER][i]
+                } else {
+                    1.0
+                };
+                let (g, sc, pan_lr) = if strip_settled {
+                    (const_gain, const_scale, const_pan)
+                } else {
+                    (
+                        scratch.gain_buf[i],
+                        scratch.scale_buf[i],
+                        scratch.pan_lr_buf[i],
+                    )
+                };
+                apply_pan_lr(apply_fader_gain(processed, g, sc, duck), pan_lr)
+            };
+            let prev = preview.get(i).copied().unwrap_or([0.0; 2]);
+            let mon = monitor.get(i).copied().unwrap_or([0.0; 2]);
+            if !prev[0].is_finite()
+                || !prev[1].is_finite()
+                || !mon[0].is_finite()
+                || !mon[1].is_finite()
+            {
+                master_non_finite = true;
+            }
+            // Preview audition and live software input monitoring sum after Master inserts/mute
+            // so muting Master never silences them, while Master meters observe the exact final
+            // stereo frame sent to DAC/WAV.
+            let final_raw = [
+                strip_out[0] + sanitize_sample(prev[0]) + sanitize_sample(mon[0]),
+                strip_out[1] + sanitize_sample(prev[1]) + sanitize_sample(mon[1]),
+            ];
+            meter.observe(
+                scratch.master[i],
+                final_raw,
+                true,
+                decay,
+                hold_frames,
+                hold_decay,
+            );
+            *dst = sanitize_frame(final_raw);
+        }
+        if master_non_finite {
+            meter.clipped = true;
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn process(
         &mut self,
         sources: &[[f32; 2]; MAX_INSTRUMENTS],
         preview: [f32; 2],
         monitor: [f32; 2],
     ) -> [f32; 2] {
-        self.factors.fill(1.0);
-        for duck in &mut self.ducks {
-            if duck.id.is_none() {
-                continue;
-            }
-            let x = (duck.elapsed / duck.recovery_frames).clamp(0.0, 1.0) as f32;
-            let target = 1.0 - duck.depth * (1.0 - x).powi(2);
-            smooth_step_f32(&mut duck.gain, target, self.envelope_smoothing);
-            if duck.elapsed > duck.recovery_frames + self.sample_rate * 0.01 {
-                duck.gain = 1.0;
-            }
-            duck.elapsed += 1.0;
-            if let Some(target_slot) = duck.target.map(usize::from) {
-                if target_slot < MAX_CHANNELS {
-                    self.factors[target_slot] *= duck.gain;
-                }
-            }
-            // Advance pending PDC-aligned duck countdowns after evaluating this frame so
-            // a delay of `N` frames arms `elapsed = 0.0` on exact frame `N`.
-            let mut triggered = false;
-            let mut i = 0usize;
-            let mut len = usize::from(duck.pending_len).min(DUCK_PENDING_CAPACITY);
-            while i < len {
-                if duck.pending_delays[i] <= 1 {
-                    triggered = true;
-                    len -= 1;
-                    duck.pending_delays.copy_within(i + 1..len + 1, i);
-                    duck.pending_delays[len] = 0;
-                } else {
-                    duck.pending_delays[i] -= 1;
-                    i += 1;
-                }
-            }
-            duck.pending_len = len as u8;
-            if triggered {
-                duck.elapsed = 0.0;
+        let mut src_block = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+        let mut active_mask = 0u32;
+        for (i, &frame) in sources.iter().enumerate() {
+            if frame[0] != 0.0 || frame[1] != 0.0 || !frame[0].is_finite() || !frame[1].is_finite()
+            {
+                src_block[i][0] = frame;
+                active_mask |= 1u32 << i;
             }
         }
-        let sm = self.smoothing;
-        for channel in &mut self.channels {
-            if matches!(
-                channel.role,
-                ChannelRole::Inactive | ChannelRole::HiddenSource
-            ) {
-                continue;
-            }
-            smooth_step_f32(&mut channel.gain, channel.target_gain, sm);
-            smooth_step_f32(&mut channel.pan, channel.target_pan, sm);
-            channel.refresh_pan_cache();
-            smooth_step_f32(&mut channel.scale, channel.target_scale, sm);
-            for send in &mut channel.sends {
-                if send.target.is_none() {
-                    break;
-                }
-                smooth_step_f32(&mut send.amount, send.target_amount, sm);
-            }
-        }
-        let mut buses = [[0.0; 2]; MAX_MIXER_CHANNELS];
-        let mut returns = [[0.0; 2]; MAX_MIXER_CHANNELS];
-        let mut master = [0.0; 2];
-
-        let decay = self.meter_decay;
-        let hold_frames = self.hold_frames;
-        let hold_decay = self.hold_decay;
-
-        for (index, &raw_source) in sources.iter().enumerate() {
-            let plan = self.channels[index];
-            if plan.role != ChannelRole::HiddenSource {
-                continue;
-            }
-            let source_non_finite = !raw_source[0].is_finite() || !raw_source[1].is_finite();
-            let output = sanitize_frame(raw_source);
-            if source_non_finite {
-                if let Some(out_slot) = plan.output_slot().filter(|&s| s < MAX_CHANNELS) {
-                    self.channels[out_slot].meter.clipped = true;
-                }
-            }
-            self.route_output(plan, output, &mut buses, &mut master);
-        }
-
-        // Process Audio channels.
-        for index in 0..MAX_MIXER_CHANNELS {
-            let slot = MAX_INSTRUMENTS + index;
-            if self.channels[slot].role != ChannelRole::Audio {
-                continue;
-            }
-            self.process_bus_channel(index, &mut buses, &mut returns, &mut master);
-        }
-
-        // Process Group channels in causal topological order (supports chained groups).
-        let group_order = self.group_order;
-        for &index in group_order.iter().take(self.group_count) {
-            self.process_bus_channel(index, &mut buses, &mut returns, &mut master);
-        }
-
-        // Process Return buses.
-        for (index, &input) in returns.iter().enumerate() {
-            let slot = MAX_INSTRUMENTS + index;
-            let plan = self.channels[slot];
-            if plan.role != ChannelRole::Return {
-                continue;
-            }
-            let processed = self.inserts(slot, input);
-            let inserts_non_finite = !processed[0].is_finite() || !processed[1].is_finite();
-            let output = if !plan.muted && (!self.wet_only || plan.solo) {
-                self.strip(slot, processed)
-            } else {
-                [0.0; 2]
-            };
-            self.channels[slot]
-                .meter
-                .observe(input, output, false, decay, hold_frames, hold_decay);
-            if inserts_non_finite {
-                self.channels[slot].meter.clipped = true;
-            }
-            let safe_out = sanitize_frame(output);
-            let aligned = self.apply_pdc(index, plan.pdc_delay, safe_out);
-            master[0] += aligned[0];
-            master[1] += aligned[1];
-        }
-
-        let processed = self.inserts(MASTER, master);
-        let inserts_non_finite = !processed[0].is_finite() || !processed[1].is_finite();
-        let strip_out = if self.channels[MASTER].muted {
-            [0.0; 2]
-        } else {
-            self.strip(MASTER, processed)
-        };
-        let aux_non_finite = !preview[0].is_finite()
-            || !preview[1].is_finite()
-            || !monitor[0].is_finite()
-            || !monitor[1].is_finite();
-        // Preview audition and live software input monitoring sum after Master inserts/mute
-        // so muting Master never silences them, while Master meters observe the exact final
-        // stereo frame sent to DAC/WAV.
-        let final_raw = [
-            strip_out[0] + sanitize_sample(preview[0]) + sanitize_sample(monitor[0]),
-            strip_out[1] + sanitize_sample(preview[1]) + sanitize_sample(monitor[1]),
-        ];
-        self.channels[MASTER].meter.observe(
-            master,
-            final_raw,
-            true,
-            decay,
-            hold_frames,
-            hold_decay,
-        );
-        if inserts_non_finite || aux_non_finite {
-            self.channels[MASTER].meter.clipped = true;
-        }
-
-        sanitize_frame(final_raw)
+        let mut out = [[0.0_f32; 2]; 1];
+        self.process_block(&src_block, active_mask, &[preview], &[monitor], &mut out);
+        out[0]
     }
 }
 

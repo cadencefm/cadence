@@ -61,9 +61,9 @@ pub use math::{
     one_pole_decay_ms, sanitize_clamp_f32, sanitize_clamp_f64, sanitize_frame, sanitize_sample,
     sanitize_sample_f64, sanitize_sample_rate, semitones_to_ratio_f32, semitones_to_ratio_f64,
     smooth_step_f32, smooth_step_f64, BypassFader, BypassStep, LogSmoother, PeakHold, Smoother,
-    BYPASS_FADE_MS, BYPASS_SETTLE_EPS, CHOKE_MS, DECAY_LN_60DB, FAST_RELEASE_MS, LN_100,
-    NYQUIST_SAFE_RATIO, SMOOTH_SETTLE_EPS_F32, SMOOTH_SETTLE_EPS_F64, TAIL_SILENCE_FLOOR_F32,
-    TAIL_SILENCE_FLOOR_F64,
+    AUDIO_SUB_BLOCK_FRAMES, BYPASS_FADE_MS, BYPASS_SETTLE_EPS, CHOKE_MS, DECAY_LN_60DB,
+    FAST_RELEASE_MS, LN_100, NYQUIST_SAFE_RATIO, SMOOTH_SETTLE_EPS_F32, SMOOTH_SETTLE_EPS_F64,
+    TAIL_SILENCE_FLOOR_F32, TAIL_SILENCE_FLOOR_F64,
 };
 pub use noise::{
     mix_seed, NoiseGen, PinkFilter, XorShift32, GOLDEN_RATIO_32, NOISE_REF_SAMPLE_RATE,
@@ -99,6 +99,31 @@ pub trait StereoEffect {
     /// Process one stereo sample frame; when `bypassed` is true, pass dry audio
     /// with click-free crossfade and consistent delay/tail handling.
     fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2];
+
+    /// Process a contiguous stereo sub-block in place with bit-exact parity to
+    /// frame-by-frame [`StereoEffect::process`].
+    #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        for frame in buf.iter_mut() {
+            *frame = self.process(*frame, bypassed);
+        }
+    }
+
+    /// Process a contiguous stereo sub-block in place, additionally writing per-frame
+    /// instantaneous gain reduction in dB into `gr_out` for dynamics processors.
+    ///
+    /// Returns `true` if this effect produces dynamics gain-reduction telemetry
+    /// (`Compressor`, `Limiter`), or `false` otherwise.
+    #[inline]
+    fn process_block_with_gr(
+        &mut self,
+        buf: &mut [[f32; 2]],
+        bypassed: bool,
+        _gr_out: &mut [f32],
+    ) -> bool {
+        self.process_block(buf, bypassed);
+        false
+    }
 
     /// Clear internal filter/delay/envelope state without heap allocation.
     fn reset(&mut self);
@@ -177,5 +202,83 @@ mod tests {
         assert_eq!(StereoEffect::gain_reduction_db(&compressor), Some(0.0));
         assert_eq!(StereoEffect::gain_reduction_db(&limiter), Some(0.0));
         assert_eq!(StereoEffect::gain_reduction_db(&eq), None);
+    }
+
+    #[test]
+    fn stereo_effect_process_block_matches_frame_by_frame_bit_exact() {
+        let sr = 48_000.0;
+        let sr_u32 = 48_000_u32;
+        let total = AUDIO_SUB_BLOCK_FRAMES * 6;
+        let input: Vec<[f32; 2]> = (0..total)
+            .map(|i| {
+                let t = i as f64 / sr;
+                let l = (std::f64::consts::TAU * 220.0 * t).sin() as f32 * 0.85;
+                let r = (std::f64::consts::TAU * 330.0 * t).cos() as f32 * 0.75;
+                [l, r]
+            })
+            .collect();
+
+        fn verify_pair<E: StereoEffect>(mut a: E, mut b: E, input: &[[f32; 2]], name: &str) {
+            let chunk = AUDIO_SUB_BLOCK_FRAMES;
+            let mut gr_block = [0.0_f32; AUDIO_SUB_BLOCK_FRAMES];
+            // Exercise initial bypassed idle -> active -> mid-fade -> bypassed -> active transitions.
+            let schedule = [true, false, false, true, true, false];
+            for (blk_idx, &bypassed) in schedule.iter().enumerate() {
+                let start = blk_idx * chunk;
+                let slice = &input[start..start + chunk];
+                let mut ref_out = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+                let mut ref_gr = [0.0_f32; AUDIO_SUB_BLOCK_FRAMES];
+                for i in 0..chunk {
+                    ref_out[i] = a.process(slice[i], bypassed);
+                    ref_gr[i] = a.gain_reduction_db().unwrap_or(0.0);
+                }
+                let mut blk_out = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+                blk_out.copy_from_slice(slice);
+                let has_gr = b.process_block_with_gr(&mut blk_out, bypassed, &mut gr_block);
+                for i in 0..chunk {
+                    assert_eq!(
+                        blk_out[i][0].to_bits(),
+                        ref_out[i][0].to_bits(),
+                        "{name} block {blk_idx} frame {i} L mismatch"
+                    );
+                    assert_eq!(
+                        blk_out[i][1].to_bits(),
+                        ref_out[i][1].to_bits(),
+                        "{name} block {blk_idx} frame {i} R mismatch"
+                    );
+                    if has_gr {
+                        assert_eq!(
+                            gr_block[i].to_bits(),
+                            ref_gr[i].to_bits(),
+                            "{name} block {blk_idx} frame {i} GR mismatch"
+                        );
+                    }
+                }
+            }
+        }
+
+        verify_pair(Eq::new(sr), Eq::new(sr), &input, "Eq");
+        verify_pair(
+            RhythmicFilter::new(sr),
+            RhythmicFilter::new(sr),
+            &input,
+            "RhythmicFilter",
+        );
+        verify_pair(
+            Compressor::new(sr),
+            Compressor::new(sr),
+            &input,
+            "Compressor",
+        );
+        verify_pair(Limiter::new(sr), Limiter::new(sr), &input, "Limiter");
+        verify_pair(Drive::new(sr), Drive::new(sr), &input, "Drive");
+        verify_pair(Chorus::new(sr), Chorus::new(sr), &input, "Chorus");
+        verify_pair(
+            Delay::with_max_seconds(sr_u32, 1.0),
+            Delay::with_max_seconds(sr_u32, 1.0),
+            &input,
+            "Delay",
+        );
+        verify_pair(Reverb::new(sr_u32), Reverb::new(sr_u32), &input, "Reverb");
     }
 }

@@ -3,7 +3,7 @@ use super::engine::Engine;
 use super::shared::*;
 use super::*;
 use cadence_core::assets::ensure_sample_bank_ready;
-use cadence_core::dsp::sanitize_sample;
+use cadence_core::dsp::{sanitize_sample, AUDIO_SUB_BLOCK_FRAMES};
 use cadence_core::mixer::{ChannelRef, EffectKind, MAX_MIXER_CHANNELS};
 use cadence_core::music::STEPS_PER_BAR;
 use cadence_core::runtime::SampleBank;
@@ -442,26 +442,38 @@ fn render_schedule_validated(
     let tail_end_frame = frames.saturating_sub(u64::from(sample_rate) / 100);
     let mut output = RenderSignalAccumulator::default();
     let mut tail = RenderSignalAccumulator::default();
-    for index in 0..frames {
+    let mut block = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+    let mut index = 0u64;
+    while index < frames {
         // Publish after the previous step played and before this one does;
         // the engine adopts pending scores at the start of each step.
         while let Some((at, score)) = upcoming.next_if(|(at, _)| engine.play_step() >= *at) {
             let _ = at;
             engine.publish_score_update((*score).clone());
         }
-        let stereo = engine.next_frame().map(sanitize_sample);
-        let fade = if frames - index <= fade_frames {
-            (frames - index - 1) as f32 / fade_frames as f32
+        let chunk = (frames - index).min(AUDIO_SUB_BLOCK_FRAMES as u64) as usize;
+        let rendered = if upcoming.peek().is_some() {
+            engine.render_sub_block(&mut block[..chunk])
         } else {
-            1.0
+            engine.render_block(&mut block[..chunk]);
+            chunk
         };
-        // NaN-safe clamp strictly at the final i16 WAV conversion boundary.
-        let pcm =
-            stereo.map(|sample| (sample.clamp(-1.0, 1.0) * fade * i16::MAX as f32).round() as i16);
-        sink(stereo, pcm)?;
-        output.observe(pcm);
-        if (tail_start_frame..tail_end_frame).contains(&index) {
-            tail.observe(pcm);
+        for &raw in &block[..rendered] {
+            let stereo = raw.map(sanitize_sample);
+            let fade = if frames - index <= fade_frames {
+                (frames - index - 1) as f32 / fade_frames as f32
+            } else {
+                1.0
+            };
+            // NaN-safe clamp strictly at the final i16 WAV conversion boundary.
+            let pcm = stereo
+                .map(|sample| (sample.clamp(-1.0, 1.0) * fade * i16::MAX as f32).round() as i16);
+            sink(stereo, pcm)?;
+            output.observe(pcm);
+            if (tail_start_frame..tail_end_frame).contains(&index) {
+                tail.observe(pcm);
+            }
+            index += 1;
         }
     }
     let (channels, effects) = engine.collect_render_telemetry();

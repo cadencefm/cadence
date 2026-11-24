@@ -4,7 +4,8 @@ use super::*;
 use crate::modular_voice::ModularVoice;
 use cadence_core::dsp::{
     control_stride_mask, flush_denormal_f32, one_pole_coeff_ms, pan_stereo_balance_f64,
-    sanitize_sample, sanitize_sample_rate, LogSmoother, Smoother, Svf, SvfCoeffs,
+    sanitize_sample, sanitize_sample_rate, stereo_mid_f32, LogSmoother, Smoother, Svf, SvfCoeffs,
+    AUDIO_SUB_BLOCK_FRAMES,
 };
 use cadence_core::rack::FilterMode;
 use cadence_core::sampler::SampleData;
@@ -218,63 +219,170 @@ impl Voice {
         self.live_key = None;
     }
 
-    pub(super) fn next_stereo(
+    /// Render up to `out_src.len()` (`<= AUDIO_SUB_BLOCK_FRAMES`) consecutive stereo frames
+    /// for this voice while keeping its `Box<ModularVoice>` hot in L1D cache, accumulating
+    /// into `out_src` and optional mono `out_scope`.
+    pub(super) fn render_block(
         &mut self,
         bank: &SampleBank,
         preview: Option<&Arc<SampleData>>,
-    ) -> [f32; 2] {
-        if !self.active {
-            self.last_output = [0.0, 0.0];
-            return [0.0, 0.0];
+        out_src: &mut [[f32; 2]],
+        mut out_scope: Option<&mut [f32]>,
+    ) {
+        let frames = out_src.len().min(AUDIO_SUB_BLOCK_FRAMES);
+        if !self.active || frames == 0 {
+            return;
         }
 
-        let raw = self.modular.next_frame(bank, preview);
-        let gain_scale = self.gain_scale.next();
-        let rack_pan = self.rack_pan_sm.next();
-        let fc = self.rack_cutoff.step(self.rack_cutoff_coeff);
-        let res = self.rack_res_sm.next() as f32;
-        let filter_active = fc < 19_900.0 || res > 0.001;
+        let mut raw_buf = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+        let mod_frames = self
+            .modular
+            .render_block(bank, preview, &mut raw_buf[..frames]);
 
-        let mut stereo = [f64::from(raw[0]), f64::from(raw[1])];
-        if filter_active {
-            let svf_key = (fc.to_bits(), res.to_bits());
-            let need_coeff = !self.rack_svf_was_active
-                || (self.rack_svf_ctrl == 0 && svf_key != self.cached_rack_svf_key);
-            if need_coeff {
-                self.cached_rack_svf_key = svf_key;
-                self.rack_svf_coeffs = SvfCoeffs::new(self.sample_rate, fc, res);
+        let settled = self.gain_scale.is_settled()
+            && self.rack_pan_sm.is_settled()
+            && self.rack_cutoff.is_settled()
+            && self.rack_res_sm.is_settled();
+
+        if settled {
+            let gain_scale = self.gain_scale.next();
+            let rack_pan = self.rack_pan_sm.next();
+            let fc = self.rack_cutoff.step(self.rack_cutoff_coeff);
+            let res = self.rack_res_sm.next() as f32;
+            let rack_pan_bits = rack_pan.to_bits();
+            if rack_pan_bits != self.cached_rack_pan_bits {
+                self.cached_rack_pan_bits = rack_pan_bits;
+                self.cached_rack_pan_lr = if rack_pan == 0.0 {
+                    [1.0, 1.0]
+                } else {
+                    pan_stereo_balance_f64(rack_pan)
+                };
             }
-            self.rack_svf_ctrl = self.rack_svf_ctrl.wrapping_add(1) & self.rack_svf_mask;
-            self.rack_svf_was_active = true;
-            stereo =
-                self.rack_svf
-                    .process_stereo(stereo, self.rack_svf_coeffs, FilterMode::LowPass);
-        } else if self.rack_svf_was_active {
-            self.rack_svf.reset();
-            self.rack_svf_was_active = false;
+            let [rpl, rpr] = self.cached_rack_pan_lr;
+            let scale_l = rpl * gain_scale;
+            let scale_r = rpr * gain_scale;
+            let filter_active = fc < 19_900.0 || res > 0.001;
+
+            if !filter_active {
+                if self.rack_svf_was_active {
+                    self.rack_svf.reset();
+                    self.rack_svf_was_active = false;
+                }
+                let run_frames = if mod_frames == 0 { 1 } else { mod_frames };
+                let mut last = self.last_output;
+                for i in 0..run_frames {
+                    let raw = raw_buf[i];
+                    let output = [
+                        flush_denormal_f32(sanitize_sample((f64::from(raw[0]) * scale_l) as f32)),
+                        flush_denormal_f32(sanitize_sample((f64::from(raw[1]) * scale_r) as f32)),
+                    ];
+                    out_src[i][0] += output[0];
+                    out_src[i][1] += output[1];
+                    if let Some(scope) = out_scope.as_deref_mut() {
+                        scope[i] += stereo_mid_f32(output);
+                    }
+                    last = output;
+                }
+                self.age = self.age.saturating_add(run_frames as u32);
+                self.last_output = last;
+                if !self.modular.is_active() {
+                    self.active = false;
+                }
+                return;
+            }
+
+            let svf_key = (fc.to_bits(), res.to_bits());
+            if self.rack_svf_was_active && svf_key == self.cached_rack_svf_key {
+                let coeffs = self.rack_svf_coeffs;
+                let mut processed = 0usize;
+                let mut last = self.last_output;
+                for i in 0..frames {
+                    let raw = raw_buf[i];
+                    let stereo = self.rack_svf.process_stereo(
+                        [f64::from(raw[0]), f64::from(raw[1])],
+                        coeffs,
+                        FilterMode::LowPass,
+                    );
+                    let output = [
+                        flush_denormal_f32(sanitize_sample((stereo[0] * scale_l) as f32)),
+                        flush_denormal_f32(sanitize_sample((stereo[1] * scale_r) as f32)),
+                    ];
+                    out_src[i][0] += output[0];
+                    out_src[i][1] += output[1];
+                    if let Some(scope) = out_scope.as_deref_mut() {
+                        scope[i] += stereo_mid_f32(output);
+                    }
+                    last = output;
+                    processed += 1;
+                    let mod_inactive = (i + 1 >= mod_frames) && !self.modular.is_active();
+                    if mod_inactive && self.rack_svf.quiet() {
+                        self.active = false;
+                        break;
+                    }
+                }
+                self.rack_svf_ctrl =
+                    self.rack_svf_ctrl.wrapping_add(processed as u32) & self.rack_svf_mask;
+                self.age = self.age.saturating_add(processed as u32);
+                self.last_output = last;
+                return;
+            }
         }
 
-        let rack_pan_bits = rack_pan.to_bits();
-        if rack_pan_bits != self.cached_rack_pan_bits {
-            self.cached_rack_pan_bits = rack_pan_bits;
-            self.cached_rack_pan_lr = if rack_pan == 0.0 {
-                [1.0, 1.0]
-            } else {
-                pan_stereo_balance_f64(rack_pan)
-            };
-        }
-        let [rpl, rpr] = self.cached_rack_pan_lr;
-        let output = [
-            flush_denormal_f32(sanitize_sample((stereo[0] * rpl * gain_scale) as f32)),
-            flush_denormal_f32(sanitize_sample((stereo[1] * rpr * gain_scale) as f32)),
-        ];
+        // General per-frame Rack-bus smoothing / SVF update path (bit-exact with `next_stereo`).
+        for i in 0..frames {
+            let raw = raw_buf[i];
+            let gain_scale = self.gain_scale.next();
+            let rack_pan = self.rack_pan_sm.next();
+            let fc = self.rack_cutoff.step(self.rack_cutoff_coeff);
+            let res = self.rack_res_sm.next() as f32;
+            let filter_active = fc < 19_900.0 || res > 0.001;
 
-        self.age = self.age.saturating_add(1);
-        if !self.modular.is_active() && self.rack_svf.quiet() {
-            self.active = false;
+            let mut stereo = [f64::from(raw[0]), f64::from(raw[1])];
+            if filter_active {
+                let svf_key = (fc.to_bits(), res.to_bits());
+                let need_coeff = !self.rack_svf_was_active
+                    || (self.rack_svf_ctrl == 0 && svf_key != self.cached_rack_svf_key);
+                if need_coeff {
+                    self.cached_rack_svf_key = svf_key;
+                    self.rack_svf_coeffs = SvfCoeffs::new(self.sample_rate, fc, res);
+                }
+                self.rack_svf_ctrl = self.rack_svf_ctrl.wrapping_add(1) & self.rack_svf_mask;
+                self.rack_svf_was_active = true;
+                stereo =
+                    self.rack_svf
+                        .process_stereo(stereo, self.rack_svf_coeffs, FilterMode::LowPass);
+            } else if self.rack_svf_was_active {
+                self.rack_svf.reset();
+                self.rack_svf_was_active = false;
+            }
+
+            let rack_pan_bits = rack_pan.to_bits();
+            if rack_pan_bits != self.cached_rack_pan_bits {
+                self.cached_rack_pan_bits = rack_pan_bits;
+                self.cached_rack_pan_lr = if rack_pan == 0.0 {
+                    [1.0, 1.0]
+                } else {
+                    pan_stereo_balance_f64(rack_pan)
+                };
+            }
+            let [rpl, rpr] = self.cached_rack_pan_lr;
+            let output = [
+                flush_denormal_f32(sanitize_sample((stereo[0] * rpl * gain_scale) as f32)),
+                flush_denormal_f32(sanitize_sample((stereo[1] * rpr * gain_scale) as f32)),
+            ];
+            out_src[i][0] += output[0];
+            out_src[i][1] += output[1];
+            if let Some(scope) = out_scope.as_deref_mut() {
+                scope[i] += stereo_mid_f32(output);
+            }
+            self.age = self.age.saturating_add(1);
+            self.last_output = output;
+            let mod_inactive = (i + 1 >= mod_frames) && !self.modular.is_active();
+            if mod_inactive && self.rack_svf.quiet() {
+                self.active = false;
+                break;
+            }
         }
-        self.last_output = output;
-        output
     }
 }
 

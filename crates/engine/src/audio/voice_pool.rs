@@ -5,7 +5,9 @@ use super::shared::{AuditionKind, AuditionRequest, PREVIEW_TRACK, VOICES};
 use super::voices::{HeldNotes, Voice};
 use super::*;
 use crate::modular_voice::{VoiceStart, ZoneTriggerSpec};
-use cadence_core::dsp::{db_to_lin, mix_seed, sanitize_sample, stereo_mid_f32};
+use cadence_core::dsp::{
+    db_to_lin, mix_seed, sanitize_sample, stereo_mid_f32, AUDIO_SUB_BLOCK_FRAMES,
+};
 use cadence_core::params::{InstrumentParam, RackParam, ZoneParam};
 use cadence_core::rack::{
     module_sample_key, ModuleKind, ModuleParam, PitchTracking, RackPatch, RackZone, VoiceMode,
@@ -86,10 +88,38 @@ pub(super) struct LiveNote {
 }
 
 /// Stereo voice outputs accumulated across one audio frame.
+#[cfg(test)]
 pub(super) struct VoiceFrameOut {
     pub(super) sources: [[f32; 2]; MAX_INSTRUMENTS],
-    pub(super) preview: [f32; 2],
     pub(super) track_scope: [f32; MAX_INSTRUMENTS],
+}
+
+/// Heap-boxed scratch buffers accumulating up to [`AUDIO_SUB_BLOCK_FRAMES`] stereo frames
+/// per instrument, preview bus, and track oscilloscope with zero RT stack bloat.
+pub(super) struct VoiceBlockOut {
+    pub(super) sources: [[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+    pub(super) preview: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    pub(super) track_scope: [[f32; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+    pub(super) source_active_mask: u32,
+    pub(super) preview_active: bool,
+}
+
+impl VoiceBlockOut {
+    pub(super) fn new_boxed() -> Box<Self> {
+        Box::new(Self {
+            sources: [[[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+            preview: [[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            track_scope: [[0.0; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+            source_active_mask: 0,
+            preview_active: false,
+        })
+    }
+
+    #[inline]
+    fn clear_frames(&mut self) {
+        self.source_active_mask = 0;
+        self.preview_active = false;
+    }
 }
 
 /// Clamp automation lookup position to the final arrangement step when
@@ -1133,16 +1163,41 @@ impl VoicePool {
 
     /// Render one stereo frame across all active voices (compacting finished
     /// slots in O(1)) and sum any active voice-steal micro-fade tails.
+    #[cfg(test)]
     pub(super) fn render_frame(
         &mut self,
         samples: &SampleBank,
         preview_ref: Option<&Arc<SampleData>>,
     ) -> VoiceFrameOut {
-        let mut out = VoiceFrameOut {
-            sources: [[0.0_f32; 2]; MAX_INSTRUMENTS],
-            preview: [0.0_f32; 2],
-            track_scope: [0.0_f32; MAX_INSTRUMENTS],
-        };
+        let mut block = VoiceBlockOut::new_boxed();
+        self.render_block(samples, preview_ref, 1, &mut block);
+        let mut sources = [[0.0_f32; 2]; MAX_INSTRUMENTS];
+        let mut track_scope = [0.0_f32; MAX_INSTRUMENTS];
+        for track in 0..MAX_INSTRUMENTS {
+            sources[track] = block.sources[track][0];
+            track_scope[track] = block.track_scope[track][0];
+        }
+        VoiceFrameOut {
+            sources,
+            track_scope,
+        }
+    }
+
+    /// Render an event-free sub-block (`1..=AUDIO_SUB_BLOCK_FRAMES`) across all active
+    /// voices (one full sub-block per voice for L1D cache locality) and sum any active
+    /// voice-steal micro-fade tails into `out`.
+    pub(super) fn render_block(
+        &mut self,
+        samples: &SampleBank,
+        preview_ref: Option<&Arc<SampleData>>,
+        frames: usize,
+        out: &mut VoiceBlockOut,
+    ) {
+        let n = frames.min(AUDIO_SUB_BLOCK_FRAMES);
+        out.clear_frames();
+        if n == 0 {
+            return;
+        }
 
         let mut active_idx = 0usize;
         while active_idx < self.active_voice_count {
@@ -1153,15 +1208,26 @@ impl VoicePool {
                 self.active_voices[active_idx] = self.active_voices[self.active_voice_count];
                 continue;
             }
-            let [left, right] = voice.next_stereo(samples, preview_ref);
             let track = voice.track as usize;
             if track < MAX_INSTRUMENTS {
-                out.track_scope[track] += stereo_mid_f32([left, right]);
-                out.sources[track][0] += left;
-                out.sources[track][1] += right;
+                let bit = 1u32 << track;
+                if out.source_active_mask & bit == 0 {
+                    out.sources[track][..n].fill([0.0; 2]);
+                    out.track_scope[track][..n].fill(0.0);
+                    out.source_active_mask |= bit;
+                }
+                voice.render_block(
+                    samples,
+                    preview_ref,
+                    &mut out.sources[track][..n],
+                    Some(&mut out.track_scope[track][..n]),
+                );
             } else {
-                out.preview[0] += left;
-                out.preview[1] += right;
+                if !out.preview_active {
+                    out.preview[..n].fill([0.0; 2]);
+                    out.preview_active = true;
+                }
+                voice.render_block(samples, preview_ref, &mut out.preview[..n], None);
             }
             let retired_mono = if !voice.active {
                 (voice.track != PREVIEW_TRACK && voice.modular.is_mono()).then(|| {
@@ -1190,22 +1256,38 @@ impl VoicePool {
             if fade.remaining == 0 {
                 continue;
             }
-            let gain = f32::from(fade.remaining) / f32::from(fade.total.max(1));
-            let l = fade.sample[0] * gain;
-            let r = fade.sample[1] * gain;
+            let inv_total = 1.0 / f32::from(fade.total.max(1));
+            let steps = n.min(usize::from(fade.remaining));
             let track = fade.track as usize;
             if track < MAX_INSTRUMENTS {
-                out.track_scope[track] += stereo_mid_f32([l, r]);
-                out.sources[track][0] += l;
-                out.sources[track][1] += r;
+                let bit = 1u32 << track;
+                if out.source_active_mask & bit == 0 {
+                    out.sources[track][..n].fill([0.0; 2]);
+                    out.track_scope[track][..n].fill(0.0);
+                    out.source_active_mask |= bit;
+                }
+                for i in 0..steps {
+                    let gain = f32::from(fade.remaining) * inv_total;
+                    let l = fade.sample[0] * gain;
+                    let r = fade.sample[1] * gain;
+                    out.track_scope[track][i] += stereo_mid_f32([l, r]);
+                    out.sources[track][i][0] += l;
+                    out.sources[track][i][1] += r;
+                    fade.remaining -= 1;
+                }
             } else {
-                out.preview[0] += l;
-                out.preview[1] += r;
+                if !out.preview_active {
+                    out.preview[..n].fill([0.0; 2]);
+                    out.preview_active = true;
+                }
+                for i in 0..steps {
+                    let gain = f32::from(fade.remaining) * inv_total;
+                    out.preview[i][0] += fade.sample[0] * gain;
+                    out.preview[i][1] += fade.sample[1] * gain;
+                    fade.remaining -= 1;
+                }
             }
-            fade.remaining -= 1;
         }
-
-        out
     }
 }
 

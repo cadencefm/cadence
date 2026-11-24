@@ -434,6 +434,32 @@ impl crate::dsp::StereoEffect for Delay {
     }
 
     #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        if buf.is_empty() {
+            return;
+        }
+        self.has_processed = true;
+        if !self.line.is_allocated() {
+            for frame in buf.iter_mut() {
+                *frame = sanitize_frame(*frame);
+            }
+            return;
+        }
+        if self.bypass.check_idle_bypass(bypassed) {
+            self.time_a = self.target_time;
+            self.time_b = self.target_time;
+            self.xfade = 1.0;
+            for frame in buf.iter_mut() {
+                *frame = sanitize_frame(*frame);
+            }
+            return;
+        }
+        for frame in buf.iter_mut() {
+            *frame = Delay::process(self, *frame, bypassed);
+        }
+    }
+
+    #[inline]
     fn reset(&mut self) {
         Delay::reset(self);
     }

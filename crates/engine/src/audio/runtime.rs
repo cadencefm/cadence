@@ -6,7 +6,7 @@ use super::input::{build_input_stream_for_format, resolve_input_stream};
 use super::input::{process_input_slice, InputMeterState};
 use super::shared::*;
 use super::*;
-use cadence_core::dsp::{hann_fade_out, sanitize_sample, stereo_mid_f32};
+use cadence_core::dsp::{hann_fade_out, sanitize_sample, stereo_mid_f32, AUDIO_SUB_BLOCK_FRAMES};
 use cadence_core::mixer::MAX_EFFECT_DEVICES;
 use cadence_core::rack::{compile_zone_graph, ModuleKind, RackPatch, RackZone, SampleLoopMode};
 use cadence_core::runtime::{
@@ -309,18 +309,25 @@ pub(super) fn render_output_slice_with_elapsed<T: OutputSample>(
     let tail_start = frames.saturating_sub(fade_frames);
     let mut block_peak = 0.0_f32;
 
-    for frame_idx in 0..frames {
-        let [left, right] = engine.next_frame();
-        let sl = sanitize_sample(left);
-        let sr = sanitize_sample(right);
-        block_peak = block_peak.max(sl.abs()).max(sr.abs());
-        if frame_idx >= tail_start {
-            if let Some(slot) = watchdog.tail_stereo.get_mut(frame_idx - tail_start) {
-                *slot = [sl, sr];
+    let mut block = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+    let mut frame_idx = 0usize;
+    while frame_idx < frames {
+        let chunk = (frames - frame_idx).min(AUDIO_SUB_BLOCK_FRAMES);
+        engine.render_block(&mut block[..chunk]);
+        for (i, &[left, right]) in block[..chunk].iter().enumerate() {
+            let sl = sanitize_sample(left);
+            let sr = sanitize_sample(right);
+            block_peak = block_peak.max(sl.abs()).max(sr.abs());
+            let abs_idx = frame_idx + i;
+            if abs_idx >= tail_start {
+                if let Some(slot) = watchdog.tail_stereo.get_mut(abs_idx - tail_start) {
+                    *slot = [sl, sr];
+                }
             }
+            let offset = abs_idx * channels;
+            write_stereo_frame(&mut data[offset..offset + channels], sl, sr);
         }
-        let offset = frame_idx * channels;
-        write_stereo_frame(&mut data[offset..offset + channels], sl, sr);
+        frame_idx += chunk;
     }
     let used = frames * channels;
     if used < data.len() {
@@ -863,11 +870,10 @@ impl AudioRuntime {
             .spawn(move || {
                 let quantum = Duration::from_secs_f64(SILENT_BLOCK as f64 / SILENT_RATE as f64);
                 let mut deadline = Instant::now();
+                let mut silent_buf = vec![[0.0_f32; 2]; SILENT_BLOCK];
                 while thread_shared.alive.load(Ordering::Acquire) {
                     engine.poll_controls();
-                    for _ in 0..SILENT_BLOCK {
-                        let _ = engine.next_frame();
-                    }
+                    engine.render_block(&mut silent_buf);
                     deadline += quantum;
                     let now = Instant::now();
                     if deadline > now {
