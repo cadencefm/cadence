@@ -16,6 +16,15 @@ use std::sync::Arc;
 
 const MAX_MATCHED_ZONES: usize = 8;
 const STEAL_FADE_SLOTS: usize = 8;
+const MONO_PITCH_SLOTS: usize = MAX_INSTRUMENTS * 4;
+
+#[derive(Clone, Copy, Default)]
+struct MonoPitchSlot {
+    occupied: bool,
+    track_id: u64,
+    zone_id: u16,
+    pitch: f64,
+}
 
 #[derive(Clone, Copy, Default)]
 struct StealFade {
@@ -169,11 +178,14 @@ pub(super) struct VoicePool {
     steal_fades: [StealFade; STEAL_FADE_SLOTS],
     steal_fade_cursor: usize,
     held_notes: Box<[HeldNotes]>,
+    mono_last_pitch: Box<[MonoPitchSlot]>,
+    mono_pitch_cursor: usize,
 }
 
 impl VoicePool {
     pub(super) fn new(sample_rate: f64) -> Self {
         let held_notes = vec![HeldNotes::default(); MAX_INSTRUMENTS].into_boxed_slice();
+        let mono_last_pitch = vec![MonoPitchSlot::default(); MONO_PITCH_SLOTS].into_boxed_slice();
         let voices = (0..VOICES)
             .map(|_| Voice::new_inactive(sample_rate))
             .collect::<Vec<_>>()
@@ -186,6 +198,8 @@ impl VoicePool {
             steal_fades: [StealFade::default(); STEAL_FADE_SLOTS],
             steal_fade_cursor: 0,
             held_notes,
+            mono_last_pitch,
+            mono_pitch_cursor: 0,
         }
     }
 
@@ -201,6 +215,8 @@ impl VoicePool {
         }
         self.active_voice_count = 0;
         self.steal_fades = [StealFade::default(); STEAL_FADE_SLOTS];
+        self.mono_last_pitch.fill(MonoPitchSlot::default());
+        self.mono_pitch_cursor = 0;
     }
 
     pub(super) fn clear_held_notes(&mut self) {
@@ -252,6 +268,51 @@ impl VoicePool {
                 *held = HeldNotes::default();
             }
         }
+        for slot in self.mono_last_pitch.iter_mut() {
+            if slot.occupied && !project.instruments.iter().any(|t| t.id == slot.track_id) {
+                *slot = MonoPitchSlot::default();
+            }
+        }
+    }
+
+    #[inline]
+    fn last_mono_pitch(&self, track_id: u64, zone_id: u16) -> Option<f64> {
+        self.mono_last_pitch
+            .iter()
+            .find(|s| s.occupied && s.track_id == track_id && s.zone_id == zone_id)
+            .map(|s| s.pitch)
+    }
+
+    #[inline]
+    fn record_mono_pitch(&mut self, track_id: u64, zone_id: u16, pitch: f64) {
+        if !pitch.is_finite() {
+            return;
+        }
+        if let Some(slot) = self
+            .mono_last_pitch
+            .iter_mut()
+            .find(|s| s.occupied && s.track_id == track_id && s.zone_id == zone_id)
+        {
+            slot.pitch = pitch;
+            return;
+        }
+        if let Some(slot) = self.mono_last_pitch.iter_mut().find(|s| !s.occupied) {
+            *slot = MonoPitchSlot {
+                occupied: true,
+                track_id,
+                zone_id,
+                pitch,
+            };
+            return;
+        }
+        let idx = self.mono_pitch_cursor % MONO_PITCH_SLOTS;
+        self.mono_pitch_cursor = self.mono_pitch_cursor.wrapping_add(1);
+        self.mono_last_pitch[idx] = MonoPitchSlot {
+            occupied: true,
+            track_id,
+            zone_id,
+            pitch,
+        };
     }
 
     #[inline]
@@ -452,6 +513,7 @@ impl VoicePool {
                     gate_frames: None,
                     seed: seed_base,
                     clock_seconds,
+                    glide_from_pitch: None,
                 };
                 let voice = &mut self.voices[slot];
                 voice.modular.begin_trigger_from_zone(&ZoneTriggerSpec {
@@ -522,6 +584,7 @@ impl VoicePool {
                         gate_frames: Some(gate_frames),
                         seed: mix_seed(seed_base, layer_idx as u32),
                         clock_seconds,
+                        glide_from_pitch: None,
                     };
                     let slot = self.allocate_voice_slot(sr);
                     let voice = &mut self.voices[slot];
@@ -773,15 +836,20 @@ impl VoicePool {
                 .round()
                 .clamp(1.0, u32::MAX as f64) as u32
         });
+        let is_mono_zone = zone_state.voice.voice_mode == VoiceMode::Mono;
+        let glide_from_pitch = (is_mono_zone && zone_state.voice.glide_ms > 0.0)
+            .then(|| self.last_mono_pitch(track_id, zone_id))
+            .flatten();
         let start = VoiceStart {
             midi: req.midi,
             velocity: raw_vel,
             gate_frames,
             seed: req.seed,
             clock_seconds,
+            glide_from_pitch,
         };
 
-        let mono = (zone_state.voice.voice_mode == VoiceMode::Mono)
+        let mono = is_mono_zone
             .then(|| self.find_mono_retarget(track_id, zone_id, zone_state.voice.legato))
             .flatten();
 
@@ -863,6 +931,7 @@ impl VoicePool {
         voice
             .modular
             .finalize_trigger(start, is_retarget && same_topology, legato);
+        let mono_target_pitch = is_mono_zone.then(|| voice.modular.target_note_pitch());
         voice.active = true;
         voice.track = idx_u8;
         voice.track_id = track_id;
@@ -892,6 +961,9 @@ impl VoicePool {
                 rack_bus.resonance,
                 sr,
             );
+        }
+        if let Some(pitch) = mono_target_pitch {
+            self.record_mono_pitch(track_id, zone_id, pitch);
         }
         self.track_active_slot(slot);
     }
@@ -1061,7 +1133,21 @@ impl VoicePool {
                 out.preview[0] += left;
                 out.preview[1] += right;
             }
+            let retired_mono = if !voice.active {
+                (voice.track != PREVIEW_TRACK && voice.modular.is_mono()).then(|| {
+                    (
+                        voice.track_id,
+                        voice.zone_id,
+                        voice.modular.current_note_pitch(),
+                    )
+                })
+            } else {
+                None
+            };
             if !voice.active {
+                if let Some((tid, zid, pitch)) = retired_mono {
+                    self.record_mono_pitch(tid, zid, pitch);
+                }
                 self.active_voice_count -= 1;
                 self.active_voices[active_idx] = self.active_voices[self.active_voice_count];
             } else {

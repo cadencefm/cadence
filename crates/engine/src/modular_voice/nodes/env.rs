@@ -5,7 +5,7 @@ use super::{
     VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
-use cadence_core::dsp::{acid_filter_decay_ms, ModularEnv};
+use cadence_core::dsp::{acid_filter_decay_ms, smooth_step_f32, ModularEnv};
 use cadence_core::rack::{
     EnvModule, FilterMode, ModuleKind, ModuleKindTag, ModuleParam, TriggerMode,
 };
@@ -129,7 +129,7 @@ impl VoiceModule for EnvNode {
     #[inline]
     fn smooth_step(&mut self, s64: f64) {
         let s32 = s64 as f32;
-        self.current.sustain += (self.target.sustain - self.current.sustain) * s32;
+        smooth_step_f32(&mut self.current.sustain, self.target.sustain, s32);
     }
 
     #[inline]

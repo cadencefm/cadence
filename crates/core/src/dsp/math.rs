@@ -17,6 +17,11 @@ pub const DENORMAL_FLOOR_F64: f64 = 1e-24;
 /// Natural logarithm of `1000` (`ln(1000)`), yielding `-60 dB` (`1e-3`) attenuation at stage end.
 pub const DECAY_LN_60DB: f64 = 6.907_755_278_982_137;
 
+/// Relative settle tolerance for single-precision 1-pole parameter smoothers (`-120 dB` at unity).
+pub const SMOOTH_SETTLE_EPS_F32: f32 = 1e-6;
+/// Relative settle tolerance for double-precision 1-pole parameter smoothers (`-240 dB` at unity).
+pub const SMOOTH_SETTLE_EPS_F64: f64 = 1e-12;
+
 /// Clamp a sample rate to a sane finite range (`1_000..=384_000 Hz`, defaulting to `48_000 Hz`).
 #[inline]
 pub fn sanitize_sample_rate(sample_rate: f64) -> f64 {
@@ -297,8 +302,63 @@ pub struct Smoother {
     coeff: f64,
 }
 
+/// Advance a single-precision 1-pole smoother toward `target` with step coefficient `coeff`,
+/// snapping exactly to `target` once within relative tolerance or upon IEEE-754 ULP stall.
+///
+/// Prevents permanent subnormal stalls approaching `0.0`, prevents ULP stalls short of `1.0`,
+/// and guarantees bit-stable settled values for downstream parameter caches.
+#[inline]
+pub fn smooth_step_f32(current: &mut f32, target: f32, coeff: f32) {
+    let target = sanitize_sample(target);
+    if *current == target {
+        return;
+    }
+    let diff = target - *current;
+    if !diff.is_finite() || diff.abs() <= SMOOTH_SETTLE_EPS_F32 * target.abs().max(1.0) {
+        *current = target;
+        return;
+    }
+    let c = if coeff.is_finite() {
+        coeff.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let next = *current + diff * c;
+    *current = if c > 0.0 && next == *current {
+        target
+    } else {
+        next
+    };
+}
+
+/// Advance a double-precision 1-pole smoother toward `target` with step coefficient `coeff`,
+/// snapping exactly to `target` once within relative tolerance or upon IEEE-754 ULP stall.
+#[inline]
+pub fn smooth_step_f64(current: &mut f64, target: f64, coeff: f64) {
+    let target = sanitize_sample_f64(target);
+    if *current == target {
+        return;
+    }
+    let diff = target - *current;
+    if !diff.is_finite() || diff.abs() <= SMOOTH_SETTLE_EPS_F64 * target.abs().max(1.0) {
+        *current = target;
+        return;
+    }
+    let c = if coeff.is_finite() {
+        coeff.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let next = *current + diff * c;
+    *current = if c > 0.0 && next == *current {
+        target
+    } else {
+        next
+    };
+}
+
 impl Smoother {
-    const SETTLE_EPS: f64 = 1e-12;
+    const SETTLE_EPS: f64 = SMOOTH_SETTLE_EPS_F64;
 
     /// Create a smoother initialized at `initial` with time constant `time_ms` ms at `sample_rate`.
     #[inline]
@@ -331,15 +391,28 @@ impl Smoother {
         self.target
     }
 
+    #[inline]
+    fn settle_tol(&self) -> f64 {
+        Self::SETTLE_EPS * self.target.abs().max(1.0)
+    }
+
     /// Advance by one sample and return the smoothed value.
     #[allow(clippy::should_implement_trait)]
     #[inline]
     pub fn next(&mut self) -> f64 {
+        if self.current == self.target {
+            return self.current;
+        }
         let diff = self.target - self.current;
-        if diff.abs() <= Self::SETTLE_EPS {
+        if diff.abs() <= self.settle_tol() {
             self.current = self.target;
         } else {
-            self.current += diff * self.coeff;
+            let next = self.current + diff * self.coeff;
+            self.current = if self.coeff > 0.0 && next == self.current {
+                self.target
+            } else {
+                next
+            };
         }
         self.current
     }
@@ -353,7 +426,7 @@ impl Smoother {
     /// Whether the smoother has converged to its target.
     #[inline]
     pub fn is_settled(&self) -> bool {
-        (self.target - self.current).abs() <= Self::SETTLE_EPS
+        (self.target - self.current).abs() <= self.settle_tol()
     }
 }
 
@@ -373,7 +446,7 @@ pub struct LogSmoother {
 }
 
 impl LogSmoother {
-    const SETTLE_EPS: f64 = 1e-12;
+    const SETTLE_EPS: f64 = SMOOTH_SETTLE_EPS_F64;
 
     /// Create a log-domain smoother with lower bound `min_val > 0` and no upper cap.
     #[inline]
@@ -447,7 +520,8 @@ impl LogSmoother {
             return self.current_val;
         }
         let diff = self.target_log - self.current_log;
-        if diff.abs() <= Self::SETTLE_EPS {
+        let tol = Self::SETTLE_EPS * self.target_log.abs().max(1.0);
+        if diff.abs() <= tol {
             self.current_log = self.target_log;
         } else {
             let c = if coeff.is_finite() {
@@ -455,7 +529,12 @@ impl LogSmoother {
             } else {
                 1.0
             };
-            self.current_log += diff * c;
+            let next = self.current_log + diff * c;
+            self.current_log = if c > 0.0 && next == self.current_log {
+                self.target_log
+            } else {
+                next
+            };
         }
         self.current_val = self.current_log.exp();
         self.current_val
@@ -476,7 +555,8 @@ impl LogSmoother {
     /// Whether the smoother has converged to its target.
     #[inline]
     pub fn is_settled(&self) -> bool {
-        (self.target_log - self.current_log).abs() <= Self::SETTLE_EPS
+        (self.target_log - self.current_log).abs()
+            <= Self::SETTLE_EPS * self.target_log.abs().max(1.0)
     }
 }
 
@@ -771,5 +851,64 @@ mod tests {
         assert_eq!(hold.observe(f32::NAN, f32::NAN, 10, 0.9, 1e-4), 0.5);
         hold.reset();
         assert_eq!(hold.value(), 0.0);
+    }
+
+    #[test]
+    fn smoothers_settle_cleanly_without_subnormal_or_ulp_stalls() {
+        // Smoother targeting high-magnitude values (e.g. 18 kHz) settles cleanly across sample rates.
+        for sr in [44_100.0_f64, 48_000.0, 192_000.0] {
+            let mut sm = Smoother::new(600.0, 4.0, sr);
+            sm.set_target(18_000.0);
+            let max_frames = (sr * 0.25) as usize;
+            for _ in 0..max_frames {
+                sm.next();
+            }
+            assert!(
+                sm.is_settled() && sm.current() == 18_000.0,
+                "Smoother stalled at sr={sr}: current={} target={}",
+                sm.current(),
+                sm.target()
+            );
+        }
+
+        // LogSmoother settles cleanly even at 384 kHz.
+        let mut lsm = LogSmoother::new_clamped(600.0, 20.0, 20_000.0);
+        lsm.set_target(18_000.0);
+        let coeff_384 = one_pole_coeff_ms(5.0, 384_000.0);
+        for _ in 0..(384_000 / 2) {
+            lsm.step(coeff_384);
+        }
+        assert!(lsm.is_settled());
+
+        // smooth_step_f32 snaps cleanly to 0.0 (no subnormal tail) and 1.0 (no ULP stall).
+        for sr in [48_000.0_f64, 192_000.0] {
+            let s64 = one_pole_coeff_ms(5.0, sr);
+            let s32 = s64 as f32;
+            let frames = (sr * 0.2) as usize;
+
+            let mut to_zero = 1.0_f32;
+            for _ in 0..frames {
+                smooth_step_f32(&mut to_zero, 0.0, s32);
+            }
+            assert_eq!(to_zero, 0.0, "smooth_step_f32 stalled toward 0 at sr={sr}");
+
+            let mut to_one = 0.5_f32;
+            for _ in 0..frames {
+                smooth_step_f32(&mut to_one, 1.0, s32);
+            }
+            assert_eq!(to_one, 1.0, "smooth_step_f32 stalled toward 1 at sr={sr}");
+
+            let mut d_zero = 1.0_f64;
+            let mut d_hi = 600.0_f64;
+            for _ in 0..frames {
+                smooth_step_f64(&mut d_zero, 0.0, s64);
+                smooth_step_f64(&mut d_hi, 18_000.0, s64);
+            }
+            assert_eq!(d_zero, 0.0, "smooth_step_f64 stalled toward 0 at sr={sr}");
+            assert_eq!(
+                d_hi, 18_000.0,
+                "smooth_step_f64 stalled toward 18000 at sr={sr}"
+            );
+        }
     }
 }

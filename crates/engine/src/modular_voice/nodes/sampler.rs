@@ -4,7 +4,9 @@ use super::{
     NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks, VoiceModule, SILENCE_FLOOR,
 };
 use crate::modular_voice::ModuleParams;
-use cadence_core::dsp::{decay_coeff_60db_ms, semitones_to_ratio_f64, SamplerCursor};
+use cadence_core::dsp::{
+    decay_coeff_60db_ms, semitones_to_ratio_f64, smooth_step_f32, smooth_step_f64, SamplerCursor,
+};
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, SampleLoopMode, SamplerParams};
 
 #[derive(Clone, Copy, Debug)]
@@ -22,6 +24,7 @@ pub(in crate::modular_voice) struct SamplerNode {
     pub cached_bank_idx: Option<usize>,
     pub is_preview: bool,
     pub last_step_ratio: f64,
+    cached_ratio_key: (u64, u32, u64),
 }
 
 impl SamplerNode {
@@ -41,6 +44,7 @@ impl SamplerNode {
             cached_bank_idx: None,
             is_preview: false,
             last_step_ratio: 1.0,
+            cached_ratio_key: (u64::MAX, u32::MAX, u64::MAX),
         }
     }
 }
@@ -107,16 +111,21 @@ impl VoiceModule for SamplerNode {
             self.prev_trig = 0.0;
             self.has_trig_in = ctx.has_trig_in;
             self.last_step_ratio = 1.0;
+            self.cached_ratio_key = (u64::MAX, u32::MAX, u64::MAX);
         }
     }
 
     #[inline]
     fn smooth_step(&mut self, s64: f64) {
         let s32 = s64 as f32;
-        self.coarse_smooth += (f64::from(self.target.coarse_semitones) - self.coarse_smooth) * s64;
+        smooth_step_f64(
+            &mut self.coarse_smooth,
+            f64::from(self.target.coarse_semitones),
+            s64,
+        );
         self.current.coarse_semitones = self.target.coarse_semitones;
-        self.current.fine_cents += (self.target.fine_cents - self.current.fine_cents) * s32;
-        self.current.level += (self.target.level - self.current.level) * s32;
+        smooth_step_f32(&mut self.current.fine_cents, self.target.fine_cents, s32);
+        smooth_step_f32(&mut self.current.level, self.target.level, s32);
     }
 
     #[inline]
@@ -159,14 +168,19 @@ impl VoiceModule for SamplerNode {
         };
 
         let sr = ctx.sample_rate;
-        let semis = (ctx.note_pitch - f64::from(smp.root_midi))
+        let semis = ((ctx.note_pitch - f64::from(smp.root_midi))
             + ctx.rack_tune
             + self.coarse_smooth
             + f64::from(smp.fine_cents) * 0.01
-            + inputs.pitch_cv;
-        let step_ratio =
-            (f64::from(sample.sample_rate) / sr) * semitones_to_ratio_f64(semis.clamp(-96.0, 96.0));
-        self.last_step_ratio = step_ratio;
+            + inputs.pitch_cv)
+            .clamp(-96.0, 96.0);
+        let ratio_key = (semis.to_bits(), sample.sample_rate, sr.to_bits());
+        if ratio_key != self.cached_ratio_key {
+            self.cached_ratio_key = ratio_key;
+            self.last_step_ratio =
+                (f64::from(sample.sample_rate) / sr) * semitones_to_ratio_f64(semis);
+        }
+        let step_ratio = self.last_step_ratio;
         let raw = self.cursor.step(sample, smp.region(), step_ratio, sr);
         let mut gain = f64::from(smp.level);
         if self.releasing {

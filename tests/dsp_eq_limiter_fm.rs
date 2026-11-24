@@ -461,6 +461,7 @@ fn rack_linear_fm_silent_modulator_sidebands_automation_and_serde_roundtrip() {
                 gate_frames: None,
                 seed: 42,
                 clock_seconds: 0.0,
+                glide_from_pitch: None,
             },
         );
         let bank = Vec::new();

@@ -57,7 +57,8 @@ pub use math::{
     lin_to_db_f64, log_to_norm, midi_to_hz, norm_to_log, octaves_to_ratio_f32,
     octaves_to_ratio_f64, one_pole_coeff_ms, one_pole_decay_ms, sanitize_frame, sanitize_sample,
     sanitize_sample_f64, sanitize_sample_rate, semitones_to_ratio_f32, semitones_to_ratio_f64,
-    LogSmoother, PeakHold, Smoother, DECAY_LN_60DB,
+    smooth_step_f32, smooth_step_f64, LogSmoother, PeakHold, Smoother, DECAY_LN_60DB,
+    SMOOTH_SETTLE_EPS_F32, SMOOTH_SETTLE_EPS_F64,
 };
 pub use noise::{
     mix_seed, NoiseGen, PinkFilter, XorShift32, GOLDEN_RATIO_32, NOISE_REF_SAMPLE_RATE,
@@ -79,8 +80,10 @@ pub use sampler_voice::{sample_hermite_stereo_f64, SamplerCursor, SamplerRegion}
 pub use saturate::{
     asymmetric_drive_shape, asymmetric_drive_shape_f64, drive_shape_mode, drive_shape_mode_asym,
     drive_shape_mode_asym_f64, drive_shape_mode_f64, drive_transfer_sample,
-    shape_drive_oversampled_2x, soft_clip_drive, soft_clip_drive_f64, soft_guard, soft_guard_f64,
-    soft_knee_guard_f64, Drive, Halfband2x,
+    shape_drive_oversampled_2x, shape_drive_oversampled_2x_coeffs, soft_clip_drive,
+    soft_clip_drive_f64, soft_guard, soft_guard_f64, soft_knee_guard_f64, Drive, DriveShaperCoeffs,
+    Halfband2x, SoftClipCoeffs, DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB,
+    DRIVE_MIN_TONE_HZ,
 };
 
 /// Uniform zero-allocation stereo insert effect contract implemented by all

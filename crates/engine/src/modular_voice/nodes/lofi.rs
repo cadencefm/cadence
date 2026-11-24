@@ -5,7 +5,9 @@ use super::{
     VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
-use cadence_core::dsp::{LoFiProcessor, LogSmoother, LOFI_MAX_RATE_HZ, LOFI_MIN_RATE_HZ};
+use cadence_core::dsp::{
+    smooth_step_f32, LoFiProcessor, LogSmoother, LOFI_MAX_RATE_HZ, LOFI_MIN_RATE_HZ,
+};
 use cadence_core::rack::{LoFiModule, ModuleKind, ModuleKindTag, ModuleParam};
 
 #[derive(Clone, Copy, Debug)]
@@ -111,8 +113,8 @@ impl VoiceModule for LoFiNode {
     #[inline]
     fn smooth_step(&mut self, s64: f64) {
         let s32 = s64 as f32;
-        self.current.bits += (self.target.bits - self.current.bits) * s32;
-        self.current.mix += (self.target.mix - self.current.mix) * s32;
+        smooth_step_f32(&mut self.current.bits, self.target.bits, s32);
+        smooth_step_f32(&mut self.current.mix, self.target.mix, s32);
         self.current.rate_hz = self.rate.step(s64) as f32;
     }
 

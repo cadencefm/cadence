@@ -5,7 +5,9 @@ use super::{
     VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
-use cadence_core::dsp::{mix_seed, LogSmoother, NoiseGen, TptOnePoleHpf, TptOnePoleLpf};
+use cadence_core::dsp::{
+    mix_seed, smooth_step_f32, LogSmoother, NoiseGen, TptOnePoleHpf, TptOnePoleLpf,
+};
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, NoiseModule};
 
 #[derive(Clone, Copy, Debug)]
@@ -17,20 +19,32 @@ pub(in crate::modular_voice) struct NoiseNode {
     lpf: TptOnePoleLpf,
     hp: LogSmoother,
     lp: LogSmoother,
+    cached_hp_key: (u64, u64),
+    cached_lp_key: (u64, u64),
 }
 
 impl NoiseNode {
     #[inline]
     pub(super) fn new(params: NoiseModule, sample_rate: f64) -> Self {
+        let hp = LogSmoother::new(f64::from(params.highpass_hz), 20.0);
+        let lp = LogSmoother::new(f64::from(params.lowpass_hz), 20.0);
+        let sr_bits = sample_rate.to_bits();
         Self {
             current: params,
             target: params,
             gen: NoiseGen::new(1, sample_rate),
-            hpf: TptOnePoleHpf::new(sample_rate, f64::from(params.highpass_hz)),
-            lpf: TptOnePoleLpf::new(sample_rate, f64::from(params.lowpass_hz)),
-            hp: LogSmoother::new(f64::from(params.highpass_hz), 20.0),
-            lp: LogSmoother::new(f64::from(params.lowpass_hz), 20.0),
+            hpf: TptOnePoleHpf::new(sample_rate, hp.current()),
+            lpf: TptOnePoleLpf::new(sample_rate, lp.current()),
+            cached_hp_key: (hp.current().to_bits(), sr_bits),
+            cached_lp_key: (lp.current().to_bits(), sr_bits),
+            hp,
+            lp,
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::modular_voice) fn cached_filter_sr_bits(&self) -> (u64, u64) {
+        (self.cached_hp_key.1, self.cached_lp_key.1)
     }
 }
 
@@ -103,32 +117,53 @@ impl VoiceModule for NoiseNode {
             if !ctx.eff_legato {
                 self.hp.snap_to_target();
                 self.lp.snap_to_target();
-                self.hpf.set_cutoff(ctx.sample_rate, self.hp.current());
-                self.lpf.set_cutoff(ctx.sample_rate, self.lp.current());
+                let hp_hz = self.hp.current();
+                let lp_hz = self.lp.current();
+                let sr_bits = ctx.sample_rate.to_bits();
+                self.hpf.set_cutoff(ctx.sample_rate, hp_hz);
+                self.lpf.set_cutoff(ctx.sample_rate, lp_hz);
+                self.cached_hp_key = (hp_hz.to_bits(), sr_bits);
+                self.cached_lp_key = (lp_hz.to_bits(), sr_bits);
             }
             return;
         }
 
         let seed = mix_seed(ctx.base_seed, u32::from(ctx.mod_id));
         self.gen = NoiseGen::new(seed, ctx.sample_rate);
-        self.hpf = TptOnePoleHpf::new(ctx.sample_rate, f64::from(noise.highpass_hz));
-        self.lpf = TptOnePoleLpf::new(ctx.sample_rate, f64::from(noise.lowpass_hz));
         self.hp = LogSmoother::new(f64::from(noise.highpass_hz), 20.0);
         self.lp = LogSmoother::new(f64::from(noise.lowpass_hz), 20.0);
+        let hp_hz = self.hp.current();
+        let lp_hz = self.lp.current();
+        let sr_bits = ctx.sample_rate.to_bits();
+        self.hpf = TptOnePoleHpf::new(ctx.sample_rate, hp_hz);
+        self.lpf = TptOnePoleLpf::new(ctx.sample_rate, lp_hz);
+        self.cached_hp_key = (hp_hz.to_bits(), sr_bits);
+        self.cached_lp_key = (lp_hz.to_bits(), sr_bits);
     }
 
     #[inline]
     fn smooth_step(&mut self, s64: f64) {
         let s32 = s64 as f32;
-        self.current.level += (self.target.level - self.current.level) * s32;
+        smooth_step_f32(&mut self.current.level, self.target.level, s32);
         self.current.highpass_hz = self.hp.step(s64) as f32;
         self.current.lowpass_hz = self.lp.step(s64) as f32;
     }
 
     #[inline]
     fn control_tick(&mut self, sample_rate: f64) {
-        self.hpf.set_cutoff(sample_rate, self.hp.current());
-        self.lpf.set_cutoff(sample_rate, self.lp.current());
+        let sr_bits = sample_rate.to_bits();
+        let hp_hz = self.hp.current();
+        let hp_key = (hp_hz.to_bits(), sr_bits);
+        if hp_key != self.cached_hp_key {
+            self.cached_hp_key = hp_key;
+            self.hpf.set_cutoff(sample_rate, hp_hz);
+        }
+        let lp_hz = self.lp.current();
+        let lp_key = (lp_hz.to_bits(), sr_bits);
+        if lp_key != self.cached_lp_key {
+            self.cached_lp_key = lp_key;
+            self.lpf.set_cutoff(sample_rate, lp_hz);
+        }
     }
 
     #[inline]

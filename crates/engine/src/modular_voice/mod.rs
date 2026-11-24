@@ -8,15 +8,15 @@ mod nodes;
 
 use cadence_core::dsp::{
     decay_coeff_60db_ms, flush_denormal_f64, fm_depth_from_amount, glide_coeff_ms,
-    one_pole_coeff_ms, sanitize_sample, sanitize_sample_rate, soft_knee_guard_f64, AdsrStage,
-    ModalResonator,
+    one_pole_coeff_ms, sanitize_sample, sanitize_sample_rate, smooth_step_f32, smooth_step_f64,
+    soft_knee_guard_f64, AdsrStage, ModalResonator,
 };
 pub use cadence_core::rack::SamplerParams;
 use cadence_core::rack::{
     denormalize_cable_amount, module_sample_key, CompiledCable, CompiledOp, CompiledZoneGraph,
     DriveModule, EnvModule, FilterMode, FilterModule, InPort, LfoModule, LoFiModule, ModuleKind,
     ModuleKindTag, ModuleParam, NoiseModule, OutModule, OutPort, PitchTracking, RackZone,
-    ResonatorModule, SampleLoopMode, TriggerMode, UpdatePolicy, VcaModule, VcoModule,
+    ResonatorModule, SampleLoopMode, TriggerMode, UpdatePolicy, VcaModule, VcoModule, VoiceMode,
     VoiceSettings, MAX_CABLES_PER_ZONE, MAX_MODULES_PER_ZONE, MAX_RESONATORS_PER_ZONE,
 };
 #[cfg(test)]
@@ -30,6 +30,9 @@ use std::sync::Arc;
 
 const CONTROL_FRAMES: u32 = 16;
 const FEEDBACK_SOFT_KNEE: f64 = 4.0;
+const DEFAULT_TAIL_TIMEOUT_SEC: f64 = 2.0;
+const MAX_RESONATOR_TAIL_SEC: f64 = 12.0;
+const RESONATOR_TAIL_SAFETY_MULT: f64 = 1.4;
 
 /// Maximum number of inline per-voice P-locks tracked without heap allocation.
 pub const MAX_VOICE_LOCKS: usize = 32;
@@ -44,6 +47,9 @@ pub struct VoiceStart {
     pub seed: u32,
     /// Used only to initialize free-running oscillator/LFO phase when phase reset/retrigger is off.
     pub clock_seconds: f64,
+    /// Prior monophonic pitch (fractional MIDI note) to portamento-glide from on a fresh trigger
+    /// when `glide_ms > 0` and no active mono voice is being retargeted.
+    pub glide_from_pitch: Option<f64>,
 }
 
 /// Borrowed zone trigger specification for staging or retargeting a [`ModularVoice`].
@@ -221,6 +227,10 @@ pub struct ModularVoice {
     out_slot: u8,
     lifetime_envs: [u8; MAX_MODULES_PER_ZONE],
     lifetime_env_count: usize,
+    env_gated_vcas: [u8; MAX_MODULES_PER_ZONE],
+    env_gated_vca_count: usize,
+    post_gate_tail_slots: [u8; MAX_MODULES_PER_ZONE],
+    post_gate_tail_count: usize,
     sampler_slots: [u8; MAX_MODULES_PER_ZONE],
     sampler_slot_count: usize,
 
@@ -265,7 +275,7 @@ impl ModularVoice {
             target_rack_tune: 0.0,
             smoothing: one_pole_coeff_ms(5.0, sr),
             control_count: 0,
-            tail_frames: (sr * 2.0) as u32,
+            tail_frames: (sr * DEFAULT_TAIL_TIMEOUT_SEC) as u32,
             fallback_env: 0.0,
             fallback_releasing: false,
             fallback_release_coeff: decay_coeff_60db_ms(10.0, sr),
@@ -281,6 +291,10 @@ impl ModularVoice {
             out_slot: 0,
             lifetime_envs: [0; MAX_MODULES_PER_ZONE],
             lifetime_env_count: 0,
+            env_gated_vcas: [0; MAX_MODULES_PER_ZONE],
+            env_gated_vca_count: 0,
+            post_gate_tail_slots: [0; MAX_MODULES_PER_ZONE],
+            post_gate_tail_count: 0,
             sampler_slots: [0; MAX_MODULES_PER_ZONE],
             sampler_slot_count: 0,
             cable_current: [0.0; MAX_CABLES_PER_ZONE],
@@ -447,10 +461,22 @@ impl ModularVoice {
         }
     }
 
-    /// Diagnostic query: current pitch (fractional MIDI note, including glide).
+    /// Current pitch (fractional MIDI note, including active portamento glide).
     #[inline]
     pub fn current_note_pitch(&self) -> f64 {
         self.note_pitch
+    }
+
+    /// Target pitch (fractional MIDI note) configured by the most recent trigger/retarget.
+    #[inline]
+    pub fn target_note_pitch(&self) -> f64 {
+        self.target_note_pitch
+    }
+
+    /// Whether this voice's zone is configured for monophonic voice allocation.
+    #[inline]
+    pub fn is_mono(&self) -> bool {
+        self.voice_settings.voice_mode == VoiceMode::Mono
     }
 
     /// Diagnostic query: last computed playback step ratio of a `Sampler` module.
@@ -562,6 +588,14 @@ impl ModularVoice {
         self.lifetime_env_count = graph.lifetime_envs.len().min(MAX_MODULES_PER_ZONE);
         self.lifetime_envs[..self.lifetime_env_count]
             .copy_from_slice(&graph.lifetime_envs[..self.lifetime_env_count]);
+
+        self.env_gated_vca_count = graph.env_gated_vcas.len().min(MAX_MODULES_PER_ZONE);
+        self.env_gated_vcas[..self.env_gated_vca_count]
+            .copy_from_slice(&graph.env_gated_vcas[..self.env_gated_vca_count]);
+
+        self.post_gate_tail_count = graph.post_gate_tail_slots.len().min(MAX_MODULES_PER_ZONE);
+        self.post_gate_tail_slots[..self.post_gate_tail_count]
+            .copy_from_slice(&graph.post_gate_tail_slots[..self.post_gate_tail_count]);
 
         self.sampler_slot_count = graph.sampler_slots.len().min(MAX_MODULES_PER_ZONE);
         self.sampler_slots[..self.sampler_slot_count]
@@ -683,7 +717,15 @@ impl ModularVoice {
         };
         self.target_note_pitch = target_pitch;
         self.sync_glide_coeff();
-        if !(eff_retarget && self.voice_settings.glide_ms > 0.0) {
+        if eff_retarget && self.voice_settings.glide_ms > 0.0 {
+            // Continue gliding smoothly from the currently sounding/releasing voice pitch.
+        } else if let Some(prev_pitch) = start.glide_from_pitch.filter(|p| {
+            p.is_finite()
+                && self.voice_settings.glide_ms > 0.0
+                && self.voice_settings.pitch_tracking != PitchTracking::Fixed
+        }) {
+            self.note_pitch = prev_pitch.clamp(0.0, 127.0);
+        } else {
             self.note_pitch = target_pitch;
         }
 
@@ -721,7 +763,7 @@ impl ModularVoice {
         self.released = false;
         self.age = 0;
         self.gate_frames = start.gate_frames;
-        self.tail_frames = (sr * 2.0) as u32;
+        self.tail_frames = (sr * DEFAULT_TAIL_TIMEOUT_SEC) as u32;
         self.control_count = 0;
         self.fallback_env = 1.0;
         self.fallback_releasing = false;
@@ -780,9 +822,30 @@ impl ModularVoice {
             };
             self.nodes[s].on_trigger(&tctx, &mut tstate);
         }
-        if tstate.max_res_decay_ms > 0.0 {
-            let res_tail_sec = (tstate.max_res_decay_ms * 0.001 * 1.4).clamp(2.0, 12.0);
-            self.tail_frames = self.tail_frames.max((sr * res_tail_sec) as u32);
+        let triggered_max_res_decay_ms = tstate.max_res_decay_ms;
+        if triggered_max_res_decay_ms > 0.0 {
+            let max_tail_res_decay_ms = if self.lifetime_env_count == 0 && !self.sampler_only {
+                // Fallback gate attenuates `Out` directly; no resonator sits post-gate.
+                0.0
+            } else if self.lifetime_env_count > 0
+                && !(self.sampler_only && !self.any_sampler_has_trig_in)
+                && self.all_env_gates_closed()
+            {
+                let mut best = 0.0_f64;
+                for &slot in &self.post_gate_tail_slots[..self.post_gate_tail_count] {
+                    if let Some(ModuleNode::Resonator(res)) = self.nodes.get(usize::from(slot)) {
+                        best = best.max(res.max_tail_decay_ms());
+                    }
+                }
+                best
+            } else {
+                triggered_max_res_decay_ms
+            };
+            if max_tail_res_decay_ms > 0.0 {
+                let res_tail_sec = (max_tail_res_decay_ms * 0.001 * RESONATOR_TAIL_SAFETY_MULT)
+                    .clamp(DEFAULT_TAIL_TIMEOUT_SEC, MAX_RESONATOR_TAIL_SEC);
+                self.tail_frames = self.tail_frames.max((sr * res_tail_sec) as u32);
+            }
         }
     }
 
@@ -924,12 +987,12 @@ impl ModularVoice {
     fn smooth_params(&mut self) {
         let s64 = self.smoothing;
         let s32 = s64 as f32;
-        self.velocity += (self.target_velocity - self.velocity) * s64;
-        self.zone_pan += (self.target_zone_pan - self.zone_pan) * s32;
-        self.rack_tune += (self.target_rack_tune - self.rack_tune) * s64;
+        smooth_step_f64(&mut self.velocity, self.target_velocity, s64);
+        smooth_step_f32(&mut self.zone_pan, self.target_zone_pan, s32);
+        smooth_step_f64(&mut self.rack_tune, self.target_rack_tune, s64);
 
         for ci in 0..self.cable_count {
-            self.cable_current[ci] += (self.cable_target[ci] - self.cable_current[ci]) * s32;
+            smooth_step_f32(&mut self.cable_current[ci], self.cable_target[ci], s32);
         }
 
         for node in &mut self.nodes[..self.op_count] {
@@ -965,7 +1028,11 @@ impl ModularVoice {
         self.smooth_params();
 
         if self.voice_settings.glide_ms > 0.0 {
-            self.note_pitch += (self.target_note_pitch - self.note_pitch) * self.glide_coeff;
+            smooth_step_f64(
+                &mut self.note_pitch,
+                self.target_note_pitch,
+                self.glide_coeff,
+            );
         } else {
             self.note_pitch = self.target_note_pitch;
         }
@@ -1030,6 +1097,16 @@ impl ModularVoice {
     }
 
     #[inline]
+    fn all_env_gates_closed(&self) -> bool {
+        self.env_gated_vcas[..self.env_gated_vca_count]
+            .iter()
+            .all(|&s| match self.nodes.get(usize::from(s)) {
+                Some(ModuleNode::Vca(node)) => node.is_bias_closed(),
+                _ => true,
+            })
+    }
+
+    #[inline]
     fn update_voice_lifetime(&mut self) {
         let envs_done = if self.lifetime_env_count > 0 {
             self.lifetime_envs[..self.lifetime_env_count]
@@ -1066,19 +1143,38 @@ impl ModularVoice {
             self.fallback_releasing && self.fallback_env <= SILENCE_FLOOR
         };
 
-        if sources_done {
-            self.tail_frames = self.tail_frames.saturating_sub(1);
-            if self.tail_frames == 0 || self.tails_quiet() {
-                self.active = false;
-            }
+        if !sources_done {
+            return;
+        }
+
+        self.tail_frames = self.tail_frames.saturating_sub(1);
+        if self.tail_frames == 0 || self.tails_quiet(envs_done) {
+            self.active = false;
         }
     }
 
     #[inline]
-    fn tails_quiet(&self) -> bool {
-        self.nodes[..self.op_count]
-            .iter()
-            .all(|node| node.is_tail_quiet(&self.resonator_banks))
+    fn tails_quiet(&self, envs_done: bool) -> bool {
+        if self.lifetime_env_count == 0 && !self.sampler_only {
+            let out_idx = usize::from(self.out_slot).min(self.op_count.saturating_sub(1));
+            return self
+                .nodes
+                .get(out_idx)
+                .is_none_or(|node| node.is_tail_quiet(&self.resonator_banks));
+        }
+        if envs_done && self.all_env_gates_closed() {
+            self.post_gate_tail_slots[..self.post_gate_tail_count]
+                .iter()
+                .all(|&s| {
+                    self.nodes
+                        .get(usize::from(s))
+                        .is_none_or(|node| node.is_tail_quiet(&self.resonator_banks))
+                })
+        } else {
+            self.nodes[..self.op_count]
+                .iter()
+                .all(|node| node.is_tail_quiet(&self.resonator_banks))
+        }
     }
 }
 

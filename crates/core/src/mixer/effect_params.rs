@@ -1,6 +1,9 @@
 //! Effect parameter metadata, units, normalization, formatting, and value parsing.
 
 use super::{DelayMode, DriveMode, EffectKind};
+use crate::dsp::saturate::{
+    DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ,
+};
 use crate::filter_patterns::{
     filter_env_preset_name, find_filter_groove_index, FILTER_ENV_PATTERN_COUNT,
 };
@@ -110,8 +113,8 @@ define_effect_params! {
     Rate       => ("rate",        "Rate",       0.05,   6.0,                                Hertz,            log),
     Depth      => ("depth",       "Depth",      0.0,    1.0,                                Ratio,            lin),
     Drive      => ("drive",       "Drive",      0.0,    1.0,                                Ratio,            lin),
-    Tone       => ("tone",        "Tone",       600.0,  18000.0,                            Hertz,            log),
-    Output     => ("output",      "Output",     -12.0,  6.0,                                Decibels,         lin),
+    Tone       => ("tone",        "Tone",       DRIVE_MIN_TONE_HZ,   DRIVE_MAX_TONE_HZ,                  Hertz,            log),
+    Output     => ("output",      "Output",     DRIVE_MIN_OUTPUT_DB, DRIVE_MAX_OUTPUT_DB,                Decibels,         lin),
     FilterMode => ("mode",        "Mode",       0.0,    (FilterMode::ALL.len() - 1) as f32, FilterMode,       lin, ["filter_mode", "filtermode"]),
     Cutoff     => ("cutoff",      "Cutoff",     20.0,   18000.0,                            Hertz,            log, ["freq", "frequency"]),
     Resonance  => ("resonance",   "Resonance",  0.0,    0.95,                               Ratio,            lin, ["res", "q"]),
