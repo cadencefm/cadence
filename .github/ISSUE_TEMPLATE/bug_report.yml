@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a bug, crash, audio glitch, or unexpected behavior in Cadence
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: Clear description of the bug and what you expected instead.
+      placeholder: Describe the unexpected behavior...
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal keys, Ex commands, project file, or CLI command to reproduce.
+      placeholder: |
+        1. Run `cargo run --release -- --empty`
+        2. Press ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Audio Engine / DSP (`cadence-engine` / `cadence-core`)
+        - Controller / Keymap / Commands (`cadence-app`)
+        - GPU Renderer / Layout (`cadence-gui`)
+        - Formats / Import (`cadence-formats`)
+        - CLI / Live `--ctl` / Host I/O
+        - Documentation / Examples
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: OS, GPU backend (Metal / Vulkan / DX12), audio/MIDI interface, and Cadence version or commit SHA.
+      placeholder: e.g. macOS 15 (Apple Silicon, Metal), CoreAudio 48 kHz, v0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots
+      description: Any terminal output, panic backtrace, or screenshot (optional).

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: GitHub Discussions
+    url: https://github.com/cadencefm/cadence/discussions
+    about: Ask questions, share showcase tracks/presets, or discuss open-ended musical ideas
+  - name: Cadence Documentation
+    url: https://cadence.fm/
+    about: Read the User Guide, Keymap Spec, DSP & Engine Spec, and CLI reference

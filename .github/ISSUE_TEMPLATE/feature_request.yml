@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a new musical capability, deck workflow, DSP module, or UX improvement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Musical or workflow motivation
+      description: What are you trying to compose, perform, mix, or automate that feels awkward or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed design
+      description: Describe the expected interaction, deck/keymap behavior, Ex command, or DSP capability.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - Material Algebra & Patterns (`cadence-core`)
+        - Modular Rack & DSP (`cadence-core` / `cadence-engine`)
+        - Mixer, FX & Signal Graph
+        - Devices (Audio / MIDI / Recording)
+        - Keymap, Decks & GPU UI (`cadence-app` / `cadence-gui`)
+        - Formats, CLI & Live `--ctl`
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Reference hardware/software workflows, mockups, or related issues (optional).
