@@ -6,7 +6,8 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    db_to_lin_f64, pan_mono_equal_power_f64, soft_guard_f64, DcBlocker, ModalResonator,
+    db_to_lin_f64, pan_mono_equal_power_f64, smooth_step_f32, soft_guard_f64, DcBlocker,
+    ModalResonator,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, OutModule};
 
@@ -16,6 +17,10 @@ pub(in crate::modular_voice) struct OutNode {
     pub target: OutModule,
     dc_blocker: DcBlocker,
     has_cv: bool,
+    cached_gain_db_bits: u32,
+    cached_gain_lin: f64,
+    cached_pan_bits: u64,
+    cached_pan: [f64; 2],
 }
 
 impl Default for OutNode {
@@ -27,11 +32,16 @@ impl Default for OutNode {
 impl OutNode {
     #[inline]
     pub(super) fn new(params: OutModule, sample_rate: f64) -> Self {
+        let pan = f64::from(params.pan).clamp(-1.0, 1.0);
         Self {
             current: params,
             target: params,
             dc_blocker: DcBlocker::new(sample_rate),
             has_cv: false,
+            cached_gain_db_bits: params.gain_db.to_bits(),
+            cached_gain_lin: db_to_lin_f64(f64::from(params.gain_db)),
+            cached_pan_bits: pan.to_bits(),
+            cached_pan: pan_mono_equal_power_f64(pan),
         }
     }
 }
@@ -99,9 +109,9 @@ impl VoiceModule for OutNode {
     #[inline]
     fn smooth_step(&mut self, s64: f64) {
         let s32 = s64 as f32;
-        self.current.gain_db += (self.target.gain_db - self.current.gain_db) * s32;
-        self.current.pan += (self.target.pan - self.current.pan) * s32;
-        self.current.spread += (self.target.spread - self.current.spread) * s32;
+        smooth_step_f32(&mut self.current.gain_db, self.target.gain_db, s32);
+        smooth_step_f32(&mut self.current.pan, self.target.pan, s32);
+        smooth_step_f32(&mut self.current.spread, self.target.spread, s32);
     }
 
     #[inline]
@@ -121,10 +131,19 @@ impl VoiceModule for OutNode {
             sig = [mid + side, mid - side];
         }
         let centered = self.dc_blocker.process_stereo(sig);
-        let gain = db_to_lin_f64(f64::from(out_p.gain_db)) * ctx.velocity;
-        let [pl, pr] = pan_mono_equal_power_f64(
-            (f64::from(out_p.pan) + f64::from(ctx.zone_pan)).clamp(-1.0, 1.0),
-        );
+        let gain_db_bits = out_p.gain_db.to_bits();
+        if gain_db_bits != self.cached_gain_db_bits {
+            self.cached_gain_db_bits = gain_db_bits;
+            self.cached_gain_lin = db_to_lin_f64(f64::from(out_p.gain_db));
+        }
+        let gain = self.cached_gain_lin * ctx.velocity;
+        let eff_pan = (f64::from(out_p.pan) + f64::from(ctx.zone_pan)).clamp(-1.0, 1.0);
+        let pan_bits = eff_pan.to_bits();
+        if pan_bits != self.cached_pan_bits {
+            self.cached_pan_bits = pan_bits;
+            self.cached_pan = pan_mono_equal_power_f64(eff_pan);
+        }
+        let [pl, pr] = self.cached_pan;
         [
             soft_guard_f64(centered[0] * gain * pl),
             soft_guard_f64(centered[1] * gain * pr),

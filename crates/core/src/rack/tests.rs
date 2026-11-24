@@ -358,3 +358,114 @@ fn module_sample_key_is_collision_free_and_multisample_auto_splits_roots() {
     acid.write_param_native(env_mod, -1.5).unwrap();
     assert_eq!(acid.format_param(env_mod, 0).unwrap(), "-1.50 oct");
 }
+
+#[test]
+fn compiled_post_gate_tail_slots_track_frontier_env_gated_vcas() {
+    let make_zone = |modules: Vec<RackModule>, cables: Vec<PatchCable>| -> RackZone {
+        RackZone {
+            id: 1,
+            name: "GateTest".into(),
+            low_midi: 0,
+            high_midi: 127,
+            root_midi: 60,
+            low_vel: 0.0,
+            high_vel: 1.0,
+            gain_db: 0.0,
+            pan: 0.0,
+            choke_group: None,
+            voice: VoiceSettings::default(),
+            modules,
+            cables,
+        }
+    };
+
+    // 1. Out.Cv strictly driven by lifetime Env: env_gated_vcas is empty and only Out is post-gate,
+    //    even if an upstream VCA exists in series.
+    let z_out_cv = make_zone(
+        vec![
+            RackModule::new(1, "Vco", ModuleKind::Vco(VcoModule::default())),
+            RackModule::new(2, "UpVca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(3, "Env", ModuleKind::Env(EnvModule::default())),
+            RackModule::new(4, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+            PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            PatchCable::new(4, 3, 4, InPort::Cv, 1.0),
+        ],
+    );
+    let g_out = compile_zone_graph(&z_out_cv).unwrap();
+    assert!(g_out.env_gated_vcas.is_empty());
+    assert_eq!(g_out.post_gate_tail_slots.as_ref(), &[g_out.out_slot]);
+
+    // 2. Chained VCAs (Vca1 -> Vca2 -> Out): only frontier Vca2 is recorded in env_gated_vcas.
+    let z_chain = make_zone(
+        vec![
+            RackModule::new(1, "Vco", ModuleKind::Vco(VcoModule::default())),
+            RackModule::new(2, "Vca1", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(3, "Vca2", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(4, "Env", ModuleKind::Env(EnvModule::default())),
+            RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 4, 2, InPort::Cv, 1.0),
+            PatchCable::new(3, 2, 3, InPort::In, 1.0),
+            PatchCable::new(4, 4, 3, InPort::Cv, 1.0),
+            PatchCable::new(5, 3, 5, InPort::In, 1.0),
+        ],
+    );
+    let g_chain = compile_zone_graph(&z_chain).unwrap();
+    let vca2_slot = g_chain.slot_for_module(3).unwrap() as u8;
+    assert_eq!(g_chain.env_gated_vcas.as_ref(), &[vca2_slot]);
+    assert_eq!(g_chain.post_gate_tail_slots.as_ref(), &[g_chain.out_slot]);
+
+    // 3. Diamond with ungated parallel branch retains shared upstream Resonator in post_gate_tail_slots.
+    let z_diamond = make_zone(
+        vec![
+            RackModule::new(1, "Vco", ModuleKind::Vco(VcoModule::default())),
+            RackModule::new(2, "Res", ModuleKind::Resonator(ResonatorModule::default())),
+            RackModule::new(3, "Vca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(4, "Flt", ModuleKind::Filter(FilterModule::default())),
+            RackModule::new(5, "Env", ModuleKind::Env(EnvModule::default())),
+            RackModule::new(6, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 2, 3, InPort::In, 1.0),
+            PatchCable::new(3, 5, 3, InPort::Cv, 1.0),
+            PatchCable::new(4, 3, 6, InPort::In, 1.0),
+            PatchCable::new(5, 2, 4, InPort::In, 1.0),
+            PatchCable::new(6, 4, 6, InPort::In, 1.0),
+        ],
+    );
+    let g_dia = compile_zone_graph(&z_diamond).unwrap();
+    let res_slot = g_dia.slot_for_module(2).unwrap() as u8;
+    let flt_slot = g_dia.slot_for_module(4).unwrap() as u8;
+    assert!(g_dia.post_gate_tail_slots.contains(&res_slot));
+    assert!(g_dia.post_gate_tail_slots.contains(&flt_slot));
+
+    // 4. VCA driven by both Env and LFO on Cv is NOT strictly env-gated.
+    let z_mixed = make_zone(
+        vec![
+            RackModule::new(1, "Vco", ModuleKind::Vco(VcoModule::default())),
+            RackModule::new(2, "Res", ModuleKind::Resonator(ResonatorModule::default())),
+            RackModule::new(3, "Vca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(4, "Env", ModuleKind::Env(EnvModule::default())),
+            RackModule::new(5, "Lfo", ModuleKind::Lfo(LfoModule::default())),
+            RackModule::new(6, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 2, 3, InPort::In, 1.0),
+            PatchCable::new(3, 4, 3, InPort::Cv, 1.0),
+            PatchCable::new(4, 5, 3, InPort::Cv, 0.5),
+            PatchCable::new(5, 3, 6, InPort::In, 1.0),
+        ],
+    );
+    let g_mixed = compile_zone_graph(&z_mixed).unwrap();
+    let res_slot_m = g_mixed.slot_for_module(2).unwrap() as u8;
+    assert!(g_mixed.env_gated_vcas.is_empty());
+    assert!(g_mixed.post_gate_tail_slots.contains(&res_slot_m));
+}

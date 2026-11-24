@@ -2497,6 +2497,7 @@ fn engine_and_mixer_multi_sample_rate_stability_pdc_and_zero_rt_allocs() {
             gate_frames: Some(4800),
             seed: 1,
             clock_seconds: 0.0,
+            glide_from_pitch: None,
         },
     );
     let mut peak_before = 0.0_f32;
@@ -3306,4 +3307,92 @@ fn rack_bus_wide_open_cutoff_bypasses_svf_at_all_sample_rates() {
             "sr={sr}: 2 kHz rack LPF must attenuate {sine_hz} Hz sine strongly (open={rms_open:.4}, closed={rms_closed:.4})"
         );
     }
+}
+
+#[test]
+fn mono_portamento_glides_across_detached_rests_after_voice_retirement_and_clears_on_reset() {
+    let sr = 16_000_u32;
+    let mut rack = RackPatch::default_synth();
+    rack.zones[0].voice.voice_mode = VoiceMode::Mono;
+    rack.zones[0].voice.legato = true;
+    rack.zones[0].voice.glide_ms = 60.0;
+    let env = amp_env_mut(&mut rack);
+    env.attack_ms = 1.0;
+    env.decay_ms = 10.0;
+    env.sustain = 0.8;
+    env.release_ms = 15.0;
+
+    let mut n1 = note(1);
+    n1.gate = 0.25;
+    let mut n2 = note(8); // +1 octave above degree 1
+    n2.gate = 0.75;
+    let mut steps = vec![Step::default(); 16];
+    steps[0] = n1;
+    steps[8] = n2;
+
+    let score = rack_project(steps, rack).compile().unwrap();
+    let shared = Shared::new_arc();
+    shared.playing.store(true, Ordering::Release);
+    let mut engine = Engine::new(score, Vec::new(), sr, Arc::clone(&shared));
+
+    // Frame 0 triggers step 0 (very first note after init): must start cleanly at target pitch.
+    let _ = engine.next_frame();
+    let first_voice = engine
+        .voices()
+        .iter()
+        .find(|v| v.active)
+        .expect("step 0 note must be active");
+    let pitch1 = first_voice.modular.target_note_pitch();
+    assert_eq!(
+        first_voice.modular.current_note_pitch(),
+        pitch1,
+        "first mono note after reset must not phantom-glide"
+    );
+
+    // Advance 6 steps (750 ms @ 120 BPM): short gate + 15 ms release must retire completely.
+    for _ in 1..12_000 {
+        let _ = engine.next_frame();
+    }
+    assert!(
+        engine.voices().iter().all(|v| !v.active),
+        "mono voice must retire cleanly before the detached second note"
+    );
+
+    // Advance across step 8 (frame 16_000) under zero-alloc guard: detached note 2 must glide from pitch1.
+    crate::mix_engine::tests::assert_no_heap_operations(|| {
+        for _ in 12_000..16_016 {
+            let _ = engine.next_frame();
+        }
+    });
+    let second_voice = engine
+        .voices()
+        .iter()
+        .find(|v| v.active)
+        .expect("step 8 detached note must be active");
+    let pitch2 = second_voice.modular.target_note_pitch();
+    let curr2 = second_voice.modular.current_note_pitch();
+    assert!(
+        (pitch2 - (pitch1 + 12.0)).abs() < 1e-6,
+        "step 8 should target one octave above step 0 (p1={pitch1}, p2={pitch2})"
+    );
+    assert!(
+        curr2 > pitch1 && curr2 < pitch2 - 6.0,
+        "detached mono note after voice retirement must glide smoothly from prior pitch (p1={pitch1}, curr={curr2}, p2={pitch2})"
+    );
+
+    // After silencing and seeking transport back to step 0 (which clears voice pool),
+    // note 1 starts cleanly at pitch1 again with no stale glide memory.
+    engine.silence_in_place();
+    engine.seek_to_step(0);
+    let _ = engine.next_frame();
+    let reset_voice = engine
+        .voices()
+        .iter()
+        .find(|v| v.active)
+        .expect("step 0 after seek must be active");
+    assert_eq!(
+        reset_voice.modular.current_note_pitch(),
+        pitch1,
+        "transport seek/clear_all must clear mono portamento pitch memory"
+    );
 }

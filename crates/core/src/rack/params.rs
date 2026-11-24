@@ -5,6 +5,9 @@ use crate::dsp::env::EnvMode;
 use crate::dsp::lofi::{LOFI_MAX_BITS, LOFI_MAX_RATE_HZ, LOFI_MIN_BITS, LOFI_MIN_RATE_HZ};
 use crate::dsp::math::{log_to_norm, norm_to_log};
 use crate::dsp::resonator::{RESONATOR_MAX_DECAY_MS, RESONATOR_MIN_DECAY_MS};
+use crate::dsp::saturate::{
+    DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ,
+};
 use crate::mixer::DriveMode;
 use crate::params::{
     format_choice_index, format_db, format_hz, format_ms, format_pan, normalize_choice_token,
@@ -617,8 +620,8 @@ define_module_params! {
     // Drive (48..52)
     DriveMode      => ("drive_mode",       "Mode",          OnTrigger,  (Choice DriveMode),                                  Plain),
     Asymmetry      => ("asymmetry",        "Asymmetry",     Continuous, (Linear -1.0, 1.0),                                  Percent),
-    ToneHz         => ("tone_hz",          "Tone",          Continuous, (Log 600.0, 18_000.0),                               Hz),
-    OutputDb       => ("output_db",        "Output",        Continuous, (Linear -12.0, 6.0),                                 Db),
+    ToneHz         => ("tone_hz",          "Tone",          Continuous, (Log DRIVE_MIN_TONE_HZ, DRIVE_MAX_TONE_HZ),          Hz),
+    OutputDb       => ("output_db",        "Output",        Continuous, (Linear DRIVE_MIN_OUTPUT_DB, DRIVE_MAX_OUTPUT_DB),   Db),
     // LoFi (52..54)
     Bits           => ("bits",             "Bits",          Continuous, (Linear LOFI_MIN_BITS, LOFI_MAX_BITS),               Bits),
     SampleRateHz   => ("sample_rate_hz",   "Clock",         Continuous, (Log LOFI_MIN_RATE_HZ, LOFI_MAX_RATE_HZ),            Hz),

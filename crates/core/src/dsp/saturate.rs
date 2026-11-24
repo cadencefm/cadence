@@ -12,29 +12,264 @@ use crate::dsp::math::{
 };
 use crate::mixer::{DriveMode, DrivePatch};
 
+/// Minimum post-shaper tone low-pass cutoff in Hz shared by `Drive` and `DriveModule`.
+pub const DRIVE_MIN_TONE_HZ: f32 = 600.0;
+/// Maximum post-shaper tone low-pass cutoff in Hz shared by `Drive` and `DriveModule`.
+pub const DRIVE_MAX_TONE_HZ: f32 = 18_000.0;
+/// Minimum post-shaper output trim in dB shared by `Drive` and `DriveModule`.
+pub const DRIVE_MIN_OUTPUT_DB: f32 = -12.0;
+/// Maximum post-shaper output trim in dB shared by `Drive` and `DriveModule`.
+pub const DRIVE_MAX_OUTPUT_DB: f32 = 6.0;
+
+/// Precomputed parameter-only coefficients for [`soft_clip_drive_f64`], avoiding
+/// redundant per-sample `powf` and `tanh(k)` calls across stereo channels and steady-state frames.
+#[derive(Clone, Copy, Debug)]
+pub struct SoftClipCoeffs {
+    k: f64,
+    scale: f64,
+    bypass: bool,
+    linear_only: bool,
+}
+
+impl SoftClipCoeffs {
+    pub const BYPASS: Self = Self {
+        k: 0.0,
+        scale: 1.0,
+        bypass: true,
+        linear_only: false,
+    };
+
+    #[inline]
+    pub fn new(drive: f64) -> Self {
+        let d = sanitize_sample_f64(drive).clamp(0.0, 1.0);
+        if d <= 0.0 {
+            return Self::BYPASS;
+        }
+        let k = d * 5.0;
+        let comp = (1.0 + k).powf(-0.22);
+        if k < 1e-4 {
+            return Self {
+                k,
+                scale: comp,
+                bypass: false,
+                linear_only: true,
+            };
+        }
+        Self {
+            k,
+            scale: comp / k.tanh(),
+            bypass: false,
+            linear_only: false,
+        }
+    }
+
+    #[inline]
+    pub fn shape(self, x: f64) -> f64 {
+        let x = sanitize_sample_f64(x);
+        if self.bypass {
+            return x;
+        }
+        if self.linear_only {
+            return x * self.scale;
+        }
+        (self.k * x).tanh() * self.scale
+    }
+}
+
 /// Symmetric soft-clipping saturator in `f64` for synth voices and filter pre-drive.
 ///
 /// Satisfies `soft_clip_drive_f64(x, 0.0) == x` exactly, is `C^∞` smooth across
 /// `drive ∈ [0.0, 1.0]`, odd-symmetric (zero DC offset), and strictly bounded.
 #[inline]
 pub fn soft_clip_drive_f64(x: f64, drive: f64) -> f64 {
-    let x = sanitize_sample_f64(x);
-    let d = sanitize_sample_f64(drive).clamp(0.0, 1.0);
-    if d <= 0.0 {
-        return x;
-    }
-    let k = d * 5.0;
-    let comp = (1.0 + k).powf(-0.22);
-    if k < 1e-4 {
-        return x * comp;
-    }
-    ((k * x).tanh() / k.tanh()) * comp
+    SoftClipCoeffs::new(drive).shape(x)
 }
 
 /// Symmetric soft-clipping saturator (`f32` wrapper over [`soft_clip_drive_f64`]).
 #[inline]
 pub fn soft_clip_drive(x: f32, drive: f32) -> f32 {
     soft_clip_drive_f64(f64::from(x), f64::from(drive)) as f32
+}
+
+/// Precomputed parameter-only waveshaper coefficients shared by [`drive_shape_mode_asym_f64`],
+/// [`shape_drive_oversampled_2x_coeffs`], [`Drive`], and `cadence-engine`'s `DriveNode`.
+///
+/// Computing `exp`, `powf`, `tanh(k)`, `tanh(bias)`, and `sin(bias)` once per parameter update
+/// eliminates 4× redundant transcendental work per oversampled stereo frame while keeping the
+/// waveshaper transfer function strictly identical.
+#[derive(Clone, Copy, Debug)]
+pub struct DriveShaperCoeffs {
+    mode: DriveMode,
+    bypass: bool,
+    linear_only: bool,
+    has_asym: bool,
+    k: f64,
+    bias: f64,
+    bias_offset: f64,
+    scale: f64,
+    w: f64,
+    quad: f64,
+    ceil_pos: f64,
+    ceil_neg: f64,
+}
+
+impl DriveShaperCoeffs {
+    pub const BYPASS: Self = Self {
+        mode: DriveMode::Tape,
+        bypass: true,
+        linear_only: false,
+        has_asym: false,
+        k: 0.0,
+        bias: 0.0,
+        bias_offset: 0.0,
+        scale: 1.0,
+        w: 0.0,
+        quad: 0.0,
+        ceil_pos: 1.0,
+        ceil_neg: 1.0,
+    };
+
+    #[inline]
+    pub fn new(drive: f64, asymmetry: f64, mode: DriveMode) -> Self {
+        let d = sanitize_sample_f64(drive).clamp(0.0, 1.0);
+        if d <= 0.0 {
+            return Self::BYPASS;
+        }
+        let a = sanitize_sample_f64(asymmetry).clamp(-1.0, 1.0);
+        let d2 = d * d;
+        let has_asym = a != 0.0;
+        let env_a = if has_asym {
+            1.0 - (-5.0 * d).exp()
+        } else {
+            0.0
+        };
+        match mode {
+            DriveMode::Tape => {
+                let k = d * 1.5 + d2 * 12.5;
+                let bias = 0.08 * d2 + 0.70 * a * env_a;
+                let comp = (1.0 + k).powf(-0.18);
+                if k < 1e-4 {
+                    Self {
+                        mode,
+                        bypass: false,
+                        linear_only: true,
+                        has_asym,
+                        k,
+                        bias,
+                        bias_offset: 0.0,
+                        scale: comp,
+                        w: 0.0,
+                        quad: 0.0,
+                        ceil_pos: 1.0,
+                        ceil_neg: 1.0,
+                    }
+                } else {
+                    Self {
+                        mode,
+                        bypass: false,
+                        linear_only: false,
+                        has_asym,
+                        k,
+                        bias,
+                        bias_offset: bias.tanh(),
+                        scale: comp / k.tanh(),
+                        w: 0.0,
+                        quad: 0.0,
+                        ceil_pos: 1.0,
+                        ceil_neg: 1.0,
+                    }
+                }
+            }
+            DriveMode::HardClip => {
+                let k = 1.0 + d * 2.5 + d2 * 16.0 + d2 * d * 45.0;
+                let w = 1.0 - (-30.0 * d2).exp();
+                let comp = k.powf(-0.15);
+                Self {
+                    mode,
+                    bypass: false,
+                    linear_only: false,
+                    has_asym,
+                    k,
+                    bias: 0.0,
+                    bias_offset: 0.0,
+                    scale: comp * w,
+                    w,
+                    quad: 0.24 * a * env_a,
+                    ceil_pos: 1.0 - 0.30 * a * env_a,
+                    ceil_neg: 1.0 + 0.30 * a * env_a,
+                }
+            }
+            DriveMode::Fold => {
+                let k = 1.0 + d * 2.5 + d2 * 14.0;
+                let w = 1.0 - (-30.0 * d2).exp();
+                let env_5d = if has_asym {
+                    env_a
+                } else {
+                    1.0 - (-5.0 * d).exp()
+                };
+                let fold_scale = 1.0 / (1.0 + 0.5 * env_5d);
+                let bias = 0.55 * a * env_a;
+                Self {
+                    mode,
+                    bypass: false,
+                    linear_only: false,
+                    has_asym,
+                    k,
+                    bias,
+                    bias_offset: bias.sin(),
+                    scale: fold_scale * w,
+                    w,
+                    quad: 0.0,
+                    ceil_pos: 1.0,
+                    ceil_neg: 1.0,
+                }
+            }
+        }
+    }
+
+    #[inline]
+    pub const fn is_bypass(self) -> bool {
+        self.bypass
+    }
+
+    #[inline]
+    pub fn shape(self, x: f64) -> f64 {
+        let x = sanitize_sample_f64(x);
+        if self.bypass {
+            return x;
+        }
+        match self.mode {
+            DriveMode::Tape => {
+                if self.linear_only {
+                    return x * self.scale;
+                }
+                ((self.k * x + self.bias).tanh() - self.bias_offset) * self.scale
+            }
+            DriveMode::HardClip => {
+                let u = self.k * x;
+                let u_asym = if !self.has_asym {
+                    u
+                } else {
+                    u + self.quad * (u * u) / (1.0 + 0.5 * u.abs())
+                };
+                let ceil = if !self.has_asym {
+                    1.0
+                } else if u_asym >= 0.0 {
+                    self.ceil_pos
+                } else {
+                    self.ceil_neg
+                };
+                let knee = 0.96 * ceil;
+                let span = (ceil - knee).max(1e-6);
+                let clipped = soft_knee_guard_f64(u_asym, knee, span);
+                x * (1.0 - self.w) + clipped * self.scale
+            }
+            DriveMode::Fold => {
+                let folded = (self.k * x + self.bias).sin() - self.bias_offset;
+                x * (1.0 - self.w) + folded * self.scale
+            }
+        }
+    }
 }
 
 /// Single-point-of-truth waveshaper in `f64` for all [`DriveMode`] circuits with
@@ -55,67 +290,7 @@ pub fn soft_clip_drive(x: f32, drive: f32) -> f32 {
 /// symmetric operation when `asymmetry == 0.0`.
 #[inline]
 pub fn drive_shape_mode_asym_f64(x: f64, drive: f64, asymmetry: f64, mode: DriveMode) -> f64 {
-    let x = sanitize_sample_f64(x);
-    let d = sanitize_sample_f64(drive).clamp(0.0, 1.0);
-    if d <= 0.0 {
-        return x;
-    }
-    let a = sanitize_sample_f64(asymmetry).clamp(-1.0, 1.0);
-    let d2 = d * d;
-    let env_a = if a == 0.0 {
-        0.0
-    } else {
-        1.0 - (-5.0 * d).exp()
-    };
-    match mode {
-        DriveMode::Tape => {
-            let k = d * 1.5 + d2 * 12.5;
-            // Subtle quadratic bias introduces warm even harmonics while remaining O(d^2) near d = 0.
-            let bias = 0.08 * d2 + 0.70 * a * env_a;
-            let comp = (1.0 + k).powf(-0.18);
-            if k < 1e-4 {
-                return x * comp;
-            }
-            let raw = (k * x + bias).tanh() - bias.tanh();
-            (raw / k.tanh()) * comp
-        }
-        DriveMode::HardClip => {
-            // Crisp diode/op-amp hard clipper (1x..64.5x = +36 dB overdrive) with a tight
-            // C^2 tanh corner above 0.96*ceil so odd harmonics stay bright and aggressive across
-            // the upper spectrum (kept clean by 2x oversampling in `Drive::process`), paired with
-            // smooth zero-pop onset from linear `x` and optional diode asymmetry.
-            let k = 1.0 + d * 2.5 + d2 * 16.0 + d2 * d * 45.0;
-            let w = 1.0 - (-30.0 * d2).exp();
-            let u = k * x;
-            let u_asym = if a == 0.0 {
-                u
-            } else {
-                let quad = 0.24 * a * env_a;
-                u + quad * (u * u) / (1.0 + 0.5 * u.abs())
-            };
-            let ceil = if a == 0.0 {
-                1.0
-            } else if u_asym >= 0.0 {
-                1.0 - 0.30 * a * env_a
-            } else {
-                1.0 + 0.30 * a * env_a
-            };
-            let knee = 0.96 * ceil;
-            let span = (ceil - knee).max(1e-6);
-            let clipped = soft_knee_guard_f64(u_asym, knee, span);
-            let comp = k.powf(-0.15);
-            x * (1.0 - w) + clipped * comp * w
-        }
-        DriveMode::Fold => {
-            let k = 1.0 + d * 2.5 + d2 * 14.0;
-            // C^∞ zero-pop crossfade from linear identity `x` at d = 0 into full West-Coast foldback.
-            let w = 1.0 - (-30.0 * d2).exp();
-            let fold_scale = 1.0 / (1.0 + 0.5 * (1.0 - (-5.0 * d).exp()));
-            let bias = 0.55 * a * env_a;
-            let folded = ((k * x + bias).sin() - bias.sin()) * fold_scale;
-            x * (1.0 - w) + folded * w
-        }
-    }
+    DriveShaperCoeffs::new(drive, asymmetry, mode).shape(x)
 }
 
 /// Multi-mode saturation waveshaper with asymmetry (`f32` wrapper over [`drive_shape_mode_asym_f64`]).
@@ -194,8 +369,9 @@ pub fn soft_guard(x: f32) -> f32 {
 pub fn drive_transfer_sample(x: f32, patch: &DrivePatch) -> f32 {
     let x = sanitize_sample(x);
     let shaped = drive_shape_mode_asym(x, patch.drive, patch.asymmetry, patch.mode);
-    let out_gain = db_to_lin(patch.output_db.clamp(-12.0, 6.0));
-    let mix = patch.mix.clamp(0.0, 1.0);
+    let out_gain =
+        db_to_lin(sanitize_sample(patch.output_db).clamp(DRIVE_MIN_OUTPUT_DB, DRIVE_MAX_OUTPUT_DB));
+    let mix = sanitize_sample(patch.mix).clamp(0.0, 1.0);
     x * (1.0 - mix) + shaped * out_gain * mix
 }
 
@@ -312,6 +488,19 @@ impl Halfband2x {
     }
 }
 
+/// Zero-alloc 2× oversampled stereo drive shaper using precomputed [`DriveShaperCoeffs`].
+#[inline]
+pub fn shape_drive_oversampled_2x_coeffs(
+    os: &mut Halfband2x,
+    input: [f64; 2],
+    coeffs: DriveShaperCoeffs,
+) -> [f64; 2] {
+    if coeffs.is_bypass() {
+        return os.process_stereo_with(input, |x| x);
+    }
+    os.process_stereo_with(input, |x| [coeffs.shape(x[0]), coeffs.shape(x[1])])
+}
+
 /// Single-point-of-truth zero-alloc 2× oversampled stereo drive shaper
 /// (polyphase elliptic halfband upsample → waveshaper → polyphase halfband downsample)
 /// shared by [`Drive`] channel inserts and `cadence-engine` modular rack `Drive` modules.
@@ -327,15 +516,8 @@ pub fn shape_drive_oversampled_2x(
     asymmetry: f64,
     mode: DriveMode,
 ) -> [f64; 2] {
-    if drive <= 0.0 {
-        return os.process_stereo_with(input, |x| x);
-    }
-    os.process_stereo_with(input, |x| {
-        [
-            drive_shape_mode_asym_f64(x[0], drive, asymmetry, mode),
-            drive_shape_mode_asym_f64(x[1], drive, asymmetry, mode),
-        ]
-    })
+    let coeffs = DriveShaperCoeffs::new(drive, asymmetry, mode);
+    shape_drive_oversampled_2x_coeffs(os, input, coeffs)
 }
 
 /// Multi-mode saturator/distortion/wavefolder insert composing [`drive_shape_mode_asym_f64`],
@@ -359,19 +541,24 @@ pub struct Drive {
     has_processed: bool,
     was_active: bool,
     ctrl_count: u8,
+    cached_shaper_key: (u64, u64, DriveMode),
+    cached_shaper: DriveShaperCoeffs,
+    cached_tone_bits: u64,
 }
 
 impl Drive {
     pub fn new(sample_rate: f64) -> Self {
         let sr = sanitize_sample_rate(sample_rate);
         let default = DrivePatch::default();
+        let init_drive = f64::from(sanitize_sample(default.drive).clamp(0.0, 1.0));
+        let init_asym = f64::from(sanitize_sample(default.asymmetry).clamp(-1.0, 1.0));
         let mut d = Self {
             sample_rate: sr,
             mode: default.mode,
             prev_mode: default.mode,
             mode_xfade: Smoother::new(1.0, 3.0, sr),
-            drive: Smoother::new(f64::from(default.drive), 4.0, sr),
-            asymmetry: Smoother::new(f64::from(default.asymmetry), 4.0, sr),
+            drive: Smoother::new(init_drive, 4.0, sr),
+            asymmetry: Smoother::new(init_asym, 4.0, sr),
             output_gain: Smoother::new(db_to_lin_f64(f64::from(default.output_db)), 4.0, sr),
             mix: Smoother::new(f64::from(default.mix), 4.0, sr),
             tone_hz: Smoother::new(f64::from(default.tone_hz), 4.0, sr),
@@ -382,6 +569,9 @@ impl Drive {
             has_processed: false,
             was_active: false,
             ctrl_count: 0,
+            cached_shaper_key: (init_drive.to_bits(), init_asym.to_bits(), default.mode),
+            cached_shaper: DriveShaperCoeffs::new(init_drive, init_asym, default.mode),
+            cached_tone_bits: f64::from(default.tone_hz).to_bits(),
         };
         d.set_parameters(default);
         d
@@ -400,6 +590,11 @@ impl Drive {
         self.tone_hz.snap(self.tone_hz.target());
         self.tone_lpf
             .set_cutoff(self.sample_rate, self.tone_hz.current());
+        self.cached_tone_bits = self.tone_hz.current().to_bits();
+        let d = self.drive.current();
+        let a = self.asymmetry.current();
+        self.cached_shaper_key = (d.to_bits(), a.to_bits(), self.mode);
+        self.cached_shaper = DriveShaperCoeffs::new(d, a, self.mode);
         self.bypass_wet.snap(1.0);
         self.has_processed = false;
         self.was_active = false;
@@ -407,11 +602,18 @@ impl Drive {
     }
 
     pub fn set_parameters(&mut self, patch: DrivePatch) {
-        let drive = f64::from(patch.drive.clamp(0.0, 1.0));
-        let asym = f64::from(patch.asymmetry.clamp(-1.0, 1.0));
-        let out_gain = db_to_lin_f64(f64::from(patch.output_db.clamp(-12.0, 6.0)));
-        let mix = f64::from(patch.mix.clamp(0.0, 1.0));
-        let tone = f64::from(patch.tone_hz).clamp(600.0, self.sample_rate * 0.45);
+        let drive = f64::from(sanitize_sample(patch.drive).clamp(0.0, 1.0));
+        let asym = f64::from(sanitize_sample(patch.asymmetry).clamp(-1.0, 1.0));
+        let out_gain = db_to_lin_f64(f64::from(
+            sanitize_sample(patch.output_db).clamp(DRIVE_MIN_OUTPUT_DB, DRIVE_MAX_OUTPUT_DB),
+        ));
+        let mix = f64::from(sanitize_sample(patch.mix).clamp(0.0, 1.0));
+        let tone_raw = if patch.tone_hz.is_finite() {
+            f64::from(patch.tone_hz)
+        } else {
+            f64::from(DRIVE_MAX_TONE_HZ)
+        };
+        let tone = tone_raw.clamp(f64::from(DRIVE_MIN_TONE_HZ), self.sample_rate * 0.45);
         if !self.has_processed {
             self.mode = patch.mode;
             self.prev_mode = patch.mode;
@@ -422,6 +624,9 @@ impl Drive {
             self.mix.snap(mix);
             self.tone_hz.snap(tone);
             self.tone_lpf.set_cutoff(self.sample_rate, tone);
+            self.cached_tone_bits = tone.to_bits();
+            self.cached_shaper_key = (drive.to_bits(), asym.to_bits(), patch.mode);
+            self.cached_shaper = DriveShaperCoeffs::new(drive, asym, patch.mode);
         } else {
             if patch.mode != self.mode {
                 self.prev_mode = self.mode;
@@ -463,23 +668,31 @@ impl Drive {
         let tone = self.tone_hz.next();
         let m_xf = self.mode_xfade.next();
         if self.ctrl_count == 0 {
-            self.tone_lpf.set_cutoff(self.sample_rate, tone);
+            let tone_bits = tone.to_bits();
+            if tone_bits != self.cached_tone_bits {
+                self.cached_tone_bits = tone_bits;
+                self.tone_lpf.set_cutoff(self.sample_rate, tone);
+            }
         }
         self.ctrl_count = (self.ctrl_count + 1) & 7;
 
         let dry64 = [f64::from(dry[0]), f64::from(dry[1])];
         let shaped = if drv <= 0.0 || m_xf >= 1.0 - 1e-6 {
-            shape_drive_oversampled_2x(&mut self.os, dry64, drv, asym, self.mode)
+            let key = (drv.to_bits(), asym.to_bits(), self.mode);
+            if key != self.cached_shaper_key {
+                self.cached_shaper_key = key;
+                self.cached_shaper = DriveShaperCoeffs::new(drv, asym, self.mode);
+            }
+            shape_drive_oversampled_2x_coeffs(&mut self.os, dry64, self.cached_shaper)
         } else {
             // All three modes share the same 2× halfband oversampler: blend linearly at 2× rate.
             let inv = 1.0 - m_xf;
-            let (a, b) = (self.prev_mode, self.mode);
+            let ca = DriveShaperCoeffs::new(drv, asym, self.prev_mode);
+            let cb = DriveShaperCoeffs::new(drv, asym, self.mode);
             self.os.process_stereo_with(dry64, |x| {
                 [
-                    drive_shape_mode_asym_f64(x[0], drv, asym, a) * inv
-                        + drive_shape_mode_asym_f64(x[0], drv, asym, b) * m_xf,
-                    drive_shape_mode_asym_f64(x[1], drv, asym, a) * inv
-                        + drive_shape_mode_asym_f64(x[1], drv, asym, b) * m_xf,
+                    ca.shape(x[0]) * inv + cb.shape(x[0]) * m_xf,
+                    ca.shape(x[1]) * inv + cb.shape(x[1]) * m_xf,
                 ]
             })
         };
@@ -963,5 +1176,144 @@ mod tests {
         assert_eq!(soft_knee_guard_f64(f64::INFINITY, 4.0, 4.0), 0.0);
         assert_eq!(soft_knee_guard_f64(10.0, 2.0, 0.0), 2.0);
         assert_eq!(soft_knee_guard_f64(-10.0, 2.0, -1.0), -2.0);
+    }
+
+    #[test]
+    fn precomputed_shaper_coeffs_match_closed_form_reference_across_all_modes() {
+        let ref_soft_clip = |x: f64, drive: f64| -> f64 {
+            let x = sanitize_sample_f64(x);
+            let d = sanitize_sample_f64(drive).clamp(0.0, 1.0);
+            if d <= 0.0 {
+                return x;
+            }
+            let k = d * 5.0;
+            let comp = (1.0 + k).powf(-0.22);
+            if k < 1e-4 {
+                x * comp
+            } else {
+                (k * x).tanh() / k.tanh() * comp
+            }
+        };
+        let ref_drive = |x: f64, drive: f64, asym: f64, mode: DriveMode| -> f64 {
+            let x = sanitize_sample_f64(x);
+            let d = sanitize_sample_f64(drive).clamp(0.0, 1.0);
+            if d <= 0.0 {
+                return x;
+            }
+            let a = sanitize_sample_f64(asym).clamp(-1.0, 1.0);
+            let d2 = d * d;
+            let env_a = 1.0 - (-5.0 * d).exp();
+            match mode {
+                DriveMode::Tape => {
+                    let k = d * 1.5 + d2 * 12.5;
+                    let bias = 0.08 * d2 + 0.70 * a * env_a;
+                    let comp = (1.0 + k).powf(-0.18);
+                    if k < 1e-4 {
+                        x * comp
+                    } else {
+                        ((k * x + bias).tanh() - bias.tanh()) / k.tanh() * comp
+                    }
+                }
+                DriveMode::HardClip => {
+                    let k = 1.0 + d * 2.5 + d2 * 16.0 + d2 * d * 45.0;
+                    let w = 1.0 - (-30.0 * d2).exp();
+                    let comp = k.powf(-0.15);
+                    let u = k * x;
+                    let u_asym = u + (0.24 * a * env_a) * (u * u) / (1.0 + 0.5 * u.abs());
+                    let ceil = if u_asym >= 0.0 {
+                        1.0 - 0.30 * a * env_a
+                    } else {
+                        1.0 + 0.30 * a * env_a
+                    };
+                    let knee = 0.96 * ceil;
+                    let clipped = soft_knee_guard_f64(u_asym, knee, (ceil - knee).max(1e-6));
+                    x * (1.0 - w) + clipped * comp * w
+                }
+                DriveMode::Fold => {
+                    let k = 1.0 + d * 2.5 + d2 * 14.0;
+                    let w = 1.0 - (-30.0 * d2).exp();
+                    let fold_scale = 1.0 / (1.0 + 0.5 * env_a);
+                    let bias = 0.55 * a * env_a;
+                    let folded = (k * x + bias).sin() - bias.sin();
+                    x * (1.0 - w) + folded * fold_scale * w
+                }
+            }
+        };
+
+        let xs = [-2.5_f64, -1.0, -0.45, -0.02, 0.0, 0.02, 0.45, 1.0, 2.5];
+        let drives = [0.0_f64, 1e-5, 0.15, 0.5, 0.85, 1.0];
+        let asyms = [-1.0_f64, -0.4, 0.0, 0.4, 1.0];
+        for &d in &drives {
+            let sc = SoftClipCoeffs::new(d);
+            for &x in &xs {
+                let got = sc.shape(x);
+                let expected = ref_soft_clip(x, d);
+                assert!(
+                    (got - expected).abs() <= 1e-13,
+                    "SoftClipCoeffs mismatch d={d} x={x}: got={got} expected={expected}"
+                );
+            }
+            for mode in [DriveMode::Tape, DriveMode::HardClip, DriveMode::Fold] {
+                for &a in &asyms {
+                    let dc = DriveShaperCoeffs::new(d, a, mode);
+                    for &x in &xs {
+                        let got = dc.shape(x);
+                        let expected = ref_drive(x, d, a, mode);
+                        assert!(
+                            (got - expected).abs() <= 1e-13,
+                            "DriveShaperCoeffs mismatch mode={mode:?} d={d} a={a} x={x}: got={got} expected={expected}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(SoftClipCoeffs::new(f64::NAN).shape(0.5), 0.5);
+        assert_eq!(
+            DriveShaperCoeffs::new(f64::NAN, 0.5, DriveMode::Tape).shape(0.5),
+            0.5
+        );
+    }
+
+    #[test]
+    fn drive_insert_parameter_sweeps_mode_crossfade_and_reset_stay_coherent() {
+        let sr = 48_000.0;
+        let mut drv = Drive::new(sr);
+        let p_tape = DrivePatch {
+            mode: DriveMode::Tape,
+            drive: 0.65,
+            asymmetry: 0.3,
+            tone_hz: 6_000.0,
+            output_db: -2.0,
+            mix: 1.0,
+        };
+        let p_fold = DrivePatch {
+            mode: DriveMode::Fold,
+            drive: 0.8,
+            asymmetry: -0.4,
+            tone_hz: 12_000.0,
+            output_db: 1.0,
+            mix: 1.0,
+        };
+        drv.set_parameters(p_tape);
+        for i in 0..512 {
+            let s = (std::f64::consts::TAU * 330.0 * i as f64 / sr).sin() as f32 * 0.6;
+            let out = drv.process([s, -s], false);
+            assert!(out[0].is_finite() && out[1].is_finite());
+        }
+        // Switch mode + parameters mid-stream (exercises mode crossfade and cache refresh).
+        drv.set_parameters(p_fold);
+        for i in 512..3072 {
+            let s = (std::f64::consts::TAU * 330.0 * i as f64 / sr).sin() as f32 * 0.6;
+            let out = drv.process([s, -s], false);
+            assert!(out[0].is_finite() && out[1].is_finite());
+        }
+        // After reset + fresh init at p_fold, steady-state outputs must match bit-for-bit.
+        drv.reset();
+        let mut fresh = Drive::new(sr);
+        fresh.set_parameters(p_fold);
+        for i in 0..256 {
+            let s = (std::f64::consts::TAU * 440.0 * i as f64 / sr).sin() as f32 * 0.5;
+            assert_eq!(drv.process([s, s], false), fresh.process([s, s], false));
+        }
     }
 }

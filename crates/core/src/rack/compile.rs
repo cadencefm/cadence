@@ -68,6 +68,15 @@ pub struct CompiledZoneGraph {
     /// Execution slots of `Env` modules that gate voice lifetime (patched to `Vca.Cv` or
     /// `Out.Cv` on an audio path reaching `Out`).
     pub lifetime_envs: Box<[u8]>,
+    /// Execution slots of frontier `Vca` modules reached from `out_slot` along `InPort::In`
+    /// whose `Cv` inputs are non-empty and strictly driven by [`Self::lifetime_envs`]
+    /// (empty when `Out.Cv` itself is strictly driven by [`Self::lifetime_envs`]). When all
+    /// lifetime envelopes finish and `bias == 0`, these VCAs close their audio path to exact silence.
+    pub env_gated_vcas: Box<[u8]>,
+    /// Execution slots of stateful tail-bearing modules (`Filter`, `Drive`, `Resonator`, `Out`)
+    /// reachable from `out_slot` along `InPort::In` without crossing any [`Self::env_gated_vcas`]
+    /// (or strictly `[out_slot]` when `Out.Cv` itself is strictly driven by [`Self::lifetime_envs`]).
+    pub post_gate_tail_slots: Box<[u8]>,
     /// Execution slots of `Sampler` modules in this zone (for voice lifetime when no Env gates audio).
     pub sampler_slots: Box<[u8]>,
     /// SPOT Patchbay column index (`0..=3`) per execution slot (`column_layout.len() == ops.len()`).
@@ -287,6 +296,73 @@ pub fn compile_zone_graph(zone: &RackZone) -> Result<CompiledZoneGraph> {
     }
     lifetime_envs.sort_unstable();
 
+    // Identify audio-path VCAs (and Out) whose `Cv` inputs are non-empty and strictly driven
+    // by lifetime envelopes. Once those envelopes complete (and VCA bias is 0), upstream stateful
+    // modules behind them cannot emit audio to `Out` and must not trap voice retirement.
+    let slot_cv_strictly_lifetime = |slot: usize| -> bool {
+        let op = &ops[slot];
+        let slice = &compiled_cables
+            [usize::from(op.in_cable_start)..usize::from(op.in_cable_start + op.in_cable_len)];
+        let mut saw_cv = false;
+        for c in slice {
+            if c.to_port == InPort::Cv {
+                saw_cv = true;
+                if !lifetime_envs.contains(&c.from_slot) {
+                    return false;
+                }
+            }
+        }
+        saw_cv
+    };
+
+    let mut is_env_gated_vca = vec![false; n];
+    for slot in 0..n {
+        if on_audio_chain[slot]
+            && ops[slot].kind == ModuleKindTag::Vca
+            && slot_cv_strictly_lifetime(slot)
+        {
+            is_env_gated_vca[slot] = true;
+        }
+    }
+
+    let out_env_gated = slot_cv_strictly_lifetime(usize::from(out_slot));
+    let mut env_gated_vcas: Vec<u8> = Vec::new();
+    let mut post_gate_tail_slots: Vec<u8> = Vec::new();
+    if out_env_gated {
+        post_gate_tail_slots.push(out_slot);
+    } else {
+        let mut visited = vec![false; n];
+        visited[usize::from(out_slot)] = true;
+        let mut tail_queue = vec![out_slot];
+        while let Some(dst) = tail_queue.pop() {
+            let dst_idx = usize::from(dst);
+            if matches!(
+                ops[dst_idx].kind,
+                ModuleKindTag::Filter
+                    | ModuleKindTag::Drive
+                    | ModuleKindTag::Resonator
+                    | ModuleKindTag::Out
+            ) {
+                post_gate_tail_slots.push(dst);
+            }
+            if is_env_gated_vca[dst_idx] {
+                env_gated_vcas.push(dst);
+                continue;
+            }
+            let op = &ops[dst_idx];
+            let slice = &compiled_cables
+                [usize::from(op.in_cable_start)..usize::from(op.in_cable_start + op.in_cable_len)];
+            for c in slice {
+                if c.to_port == InPort::In && !visited[usize::from(c.from_slot)] {
+                    visited[usize::from(c.from_slot)] = true;
+                    tail_queue.push(c.from_slot);
+                }
+            }
+        }
+        env_gated_vcas.sort_unstable();
+        post_gate_tail_slots.sort_unstable();
+    }
+
     let mut module_slot_by_id: Vec<(u16, u8)> = ops
         .iter()
         .enumerate()
@@ -311,6 +387,8 @@ pub fn compile_zone_graph(zone: &RackZone) -> Result<CompiledZoneGraph> {
         cable_index_by_id: cable_index_by_id.into_boxed_slice(),
         out_slot,
         lifetime_envs: lifetime_envs.into_boxed_slice(),
+        env_gated_vcas: env_gated_vcas.into_boxed_slice(),
+        post_gate_tail_slots: post_gate_tail_slots.into_boxed_slice(),
         sampler_slots: sampler_slots.into_boxed_slice(),
         column_layout,
     })

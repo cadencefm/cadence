@@ -15,6 +15,7 @@ fn start(midi: u8, gate_frames: Option<u32>) -> VoiceStart {
         gate_frames,
         seed: 0x1234_abcd,
         clock_seconds: 1.25,
+        glide_from_pitch: None,
     }
 }
 
@@ -1405,4 +1406,531 @@ fn resonator_string_and_nonlinear_feedback_plate_ring_out_and_are_zero_alloc() {
         peak > 0.05,
         "nonlinear plate crash must produce audible signal (peak={peak})"
     );
+}
+
+#[test]
+fn voice_retirement_ignores_upstream_stateful_nodes_and_preserves_post_vca_tails() {
+    let bank: SampleBank = Vec::new();
+
+    // 1. Subtractive voice with Filter + Resonator + Drive upstream of an envelope-gated VCA:
+    //    VCO keeps driving upstream modules forever, yet voice must retire promptly after Env ends.
+    let upstream_zone = build_zone(
+        vec![
+            RackModule::new(1, "Osc", ModuleKind::Vco(VcoModule::default())),
+            RackModule::new(
+                2,
+                "LPF",
+                ModuleKind::Filter(FilterModule {
+                    mode: FilterMode::LowPass,
+                    cutoff_hz: 2400.0,
+                    resonance: 0.4,
+                    drive: 0.25,
+                    ..FilterModule::default()
+                }),
+            ),
+            RackModule::new(
+                3,
+                "Res",
+                ModuleKind::Resonator(ResonatorModule {
+                    mode: ResonatorMode::Bar,
+                    decay_ms: 4000.0,
+                    mix: 0.35,
+                    ..ResonatorModule::default()
+                }),
+            ),
+            RackModule::new(
+                4,
+                "Drv",
+                ModuleKind::Drive(DriveModule {
+                    mode: DriveMode::Tape,
+                    drive: 0.45,
+                    asymmetry: 0.15,
+                    ..DriveModule::default()
+                }),
+            ),
+            RackModule::new(5, "AmpVca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(
+                6,
+                "AmpEnv",
+                ModuleKind::Env(EnvModule {
+                    attack_ms: 1.0,
+                    decay_ms: 20.0,
+                    sustain: 0.8,
+                    release_ms: 25.0,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(7, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 2, 3, InPort::In, 1.0),
+            PatchCable::new(3, 3, 4, InPort::In, 1.0),
+            PatchCable::new(4, 4, 5, InPort::In, 1.0),
+            PatchCable::new(5, 6, 5, InPort::Cv, 1.0),
+            PatchCable::new(6, 5, 7, InPort::In, 1.0),
+        ],
+    );
+    let g_up = compile_zone_graph(&upstream_zone).unwrap();
+    assert_eq!(g_up.env_gated_vcas.len(), 1);
+    assert_eq!(
+        g_up.post_gate_tail_slots.as_ref(),
+        &[g_up.out_slot],
+        "only Out sits downstream of the closed AmpVca"
+    );
+
+    for sr in [44_100.0_f64, 48_000.0, 96_000.0] {
+        let gate_frames = (sr * 0.03) as u32;
+        let mut voice = ModularVoice::new_boxed(
+            &spec(&upstream_zone, &g_up, sr, 136.0),
+            start(69, Some(gate_frames)),
+        );
+        // Gate (30 ms) + release (25 ms to -60 dB => ~55 ms to -120 dB) + Out DcBlocker settle.
+        // Must retire well under 250 ms — never waiting for the 2 s / 12 s timeout!
+        let max_frames = (sr * 0.25) as usize;
+        let mut active_frames = 0usize;
+        let mut peak = 0.0_f32;
+        for _ in 0..max_frames {
+            if !voice.is_active() {
+                break;
+            }
+            let f = voice.next_frame(&bank, None);
+            peak = peak.max(f[0].abs()).max(f[1].abs());
+            active_frames += 1;
+        }
+        assert!(peak > 0.1, "voice must produce audible audio at sr={sr}");
+        assert!(
+            !voice.is_active(),
+            "upstream stateful modules behind closed VCA must not trap voice alive at sr={sr} (still active after {active_frames} frames)"
+        );
+    }
+
+    // 2. Post-VCA Resonator tail MUST ring out naturally long after the short strike envelope ends.
+    let sr = 48_000.0;
+    let post_res_zone = build_zone(
+        vec![
+            RackModule::new(1, "Strike", ModuleKind::Noise(NoiseModule::default())),
+            RackModule::new(2, "StrikeVca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(
+                3,
+                "StrikeEnv",
+                ModuleKind::Env(EnvModule {
+                    mode: EnvMode::HoldDecay,
+                    attack_ms: 0.5,
+                    hold_ms: 0.0,
+                    decay_ms: 10.0,
+                    sustain: 0.0,
+                    release_ms: 10.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(
+                4,
+                "Plate",
+                ModuleKind::Resonator(ResonatorModule {
+                    mode: ResonatorMode::Plate,
+                    decay_ms: 1200.0,
+                    brightness: 0.75,
+                    mix: 1.0,
+                    ..ResonatorModule::default()
+                }),
+            ),
+            RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+            PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            PatchCable::new(4, 4, 5, InPort::In, 1.0),
+        ],
+    );
+    let g_post = compile_zone_graph(&post_res_zone).unwrap();
+    let plate_slot = g_post.slot_for_module(4).unwrap() as u8;
+    assert!(
+        g_post.post_gate_tail_slots.contains(&plate_slot),
+        "downstream Plate resonator must remain in post_gate_tail_slots"
+    );
+    let mut ring_voice = ModularVoice::new_boxed(
+        &spec(&post_res_zone, &g_post, sr, 120.0),
+        start(60, Some(480)),
+    );
+    let mut late_peak = 0.0_f32;
+    for i in 0..(sr * 0.45) as usize {
+        let f = ring_voice.next_frame(&bank, None);
+        if i >= (sr * 0.25) as usize {
+            late_peak = late_peak.max(f[0].abs()).max(f[1].abs());
+        }
+    }
+    assert!(
+        ring_voice.is_active() && late_peak > 1e-3,
+        "post-VCA plate resonator must continue ringing past 450 ms (active={}, late_peak={late_peak})",
+        ring_voice.is_active()
+    );
+
+    // 3. Env-gated VCA with non-zero DC bias bleeds audible audio and must NOT retire prematurely.
+    let mut biased_zone = upstream_zone.clone();
+    if let ModuleKind::Vca(v) = &mut biased_zone.modules[4].kind {
+        v.bias = 0.25;
+    }
+    let g_bias = compile_zone_graph(&biased_zone).unwrap();
+    let mut biased_voice = ModularVoice::new_boxed(
+        &spec(&biased_zone, &g_bias, sr, 120.0),
+        start(69, Some(1440)),
+    );
+    let mut bleed_peak = 0.0_f32;
+    for i in 0..(sr * 0.4) as usize {
+        let f = biased_voice.next_frame(&bank, None);
+        if i >= (sr * 0.3) as usize {
+            bleed_peak = bleed_peak.max(f[0].abs()).max(f[1].abs());
+        }
+    }
+    assert!(
+        biased_voice.is_active() && bleed_peak > 1e-2,
+        "non-zero VCA bias bleed must not be prematurely cut off (active={}, bleed_peak={bleed_peak})",
+        biased_voice.is_active()
+    );
+}
+
+#[test]
+fn sampler_voice_reuse_and_non_legato_retarget_preserve_pitch_and_sample_rate_ratio() {
+    let engine_sr = 48_000.0_f64;
+    let sample_sr = 44_100_u32;
+    let base_hz = 440.0_f64;
+    // 44.1 kHz sample played on a 48 kHz engine one octave above root (midi 72 vs root 60):
+    // expected played frequency is 880 Hz (step_ratio = (44100/48000) * 2.0 != 1.0).
+    let sample = synthetic_sample(sample_sr as usize, sample_sr, base_hz);
+    let zone = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "Smp",
+                ModuleKind::Sampler(SamplerModule {
+                    root_midi: 60,
+                    one_shot: false,
+                    ..SamplerModule::default()
+                }),
+            ),
+            RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+    );
+    let graph = compile_zone_graph(&zone).unwrap();
+    let sample_key = module_sample_key(1, zone.id, 1);
+    let bank: SampleBank = vec![(sample_key, sample)];
+
+    let mut voice = ModularVoice::new_boxed(
+        &spec(&zone, &graph, engine_sr, 120.0),
+        start(72, Some(2400)),
+    );
+    let mut first_buf = Vec::with_capacity(2048);
+    for _ in 0..2048 {
+        first_buf.push(f64::from(voice.next_frame(&bank, None)[0]));
+    }
+    let expected_hz = base_hz * 2.0; // 880 Hz
+    let wrong_unity_hz = base_hz * (engine_sr / f64::from(sample_sr)); // ~478.9 Hz if step_ratio==1.0
+    let p1_expected = dft_power(&first_buf, expected_hz, engine_sr);
+    let p1_wrong = dft_power(&first_buf, wrong_unity_hz, engine_sr);
+    assert!(
+        p1_expected > p1_wrong * 50.0,
+        "first trigger should play at {expected_hz} Hz (p_exp={p1_expected}, p_wrong={p1_wrong})"
+    );
+
+    // Non-legato retarget at the exact same MIDI note & sample rate must NOT fall back to ratio 1.0.
+    voice.retarget_from_zone(
+        &spec(&zone, &graph, engine_sr, 120.0),
+        start(72, Some(2400)),
+        false,
+    );
+    let mut second_buf = Vec::with_capacity(2048);
+    for _ in 0..2048 {
+        second_buf.push(f64::from(voice.next_frame(&bank, None)[0]));
+    }
+    let p2_expected = dft_power(&second_buf, expected_hz, engine_sr);
+    let p2_wrong = dft_power(&second_buf, wrong_unity_hz, engine_sr);
+    assert!(
+        p2_expected > p2_wrong * 50.0,
+        "reused non-legato trigger must keep {expected_hz} Hz ratio (p_exp={p2_expected}, p_wrong={p2_wrong})"
+    );
+}
+
+#[test]
+fn voice_retirement_preserves_sampler_env_predelay_lfo_chopped_quiet_and_legato_resonator_tails() {
+    let sr = 48_000.0_f64;
+    let empty_bank: SampleBank = Vec::new();
+
+    // 1. Sampler + upstream Resonator + pre-delayed Env: short sample finishes while Env is still
+    //    in pre-delay; voice must stay alive so the delayed Env opens and plays the Resonator tail.
+    let short_sample = synthetic_sample(480, 48_000, 440.0); // 10 ms impulse
+    let z_predelay = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "Smp",
+                ModuleKind::Sampler(SamplerModule {
+                    one_shot: true,
+                    ..SamplerModule::default()
+                }),
+            ),
+            RackModule::new(
+                2,
+                "Res",
+                ModuleKind::Resonator(ResonatorModule {
+                    mode: ResonatorMode::Plate,
+                    decay_ms: 1200.0,
+                    mix: 1.0,
+                    ..ResonatorModule::default()
+                }),
+            ),
+            RackModule::new(3, "Vca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(
+                4,
+                "DelayEnv",
+                ModuleKind::Env(EnvModule {
+                    delay_ms: 40.0,
+                    attack_ms: 2.0,
+                    decay_ms: 150.0,
+                    sustain: 0.0,
+                    release_ms: 50.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 2, 3, InPort::In, 1.0),
+            PatchCable::new(3, 4, 3, InPort::Cv, 1.0),
+            PatchCable::new(4, 3, 5, InPort::In, 1.0),
+        ],
+    );
+    let g_pre = compile_zone_graph(&z_predelay).unwrap();
+    let smp_bank: SampleBank = vec![(module_sample_key(1, z_predelay.id, 1), short_sample)];
+    let mut v_pre =
+        ModularVoice::new_boxed(&spec(&z_predelay, &g_pre, sr, 120.0), start(60, Some(9600)));
+    let mut post_delay_peak = 0.0_f32;
+    for i in 0..(sr * 0.12) as usize {
+        let f = v_pre.next_frame(&smp_bank, None);
+        if i >= (sr * 0.05) as usize {
+            post_delay_peak = post_delay_peak.max(f[0].abs()).max(f[1].abs());
+        }
+    }
+    assert!(
+        post_delay_peak > 1e-3,
+        "pre-delayed Env on sampler_only zone must open and pass upstream Resonator tail (peak={post_delay_peak})"
+    );
+
+    // 2. LFO-chopped post-VCA Plate resonator: voice must survive >20 ms LFO-off silent gaps.
+    let z_lfo_chop = build_zone(
+        vec![
+            RackModule::new(1, "Noise", ModuleKind::Noise(NoiseModule::default())),
+            RackModule::new(2, "StrikeVca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(
+                3,
+                "StrikeEnv",
+                ModuleKind::Env(EnvModule {
+                    mode: EnvMode::HoldDecay,
+                    attack_ms: 0.5,
+                    decay_ms: 10.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(
+                4,
+                "Plate",
+                ModuleKind::Resonator(ResonatorModule {
+                    mode: ResonatorMode::Plate,
+                    decay_ms: 1500.0,
+                    brightness: 0.75,
+                    mix: 1.0,
+                    ..ResonatorModule::default()
+                }),
+            ),
+            RackModule::new(5, "GateVca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(
+                6,
+                "ChopLfo",
+                ModuleKind::Lfo(LfoModule {
+                    shape: LfoShape::Square,
+                    rate_hz: 10.0, // 50 ms high, 50 ms exact zero
+                    sync: false,
+                    retrigger: true,
+                    bipolar: false,
+                    ..LfoModule::default()
+                }),
+            ),
+            RackModule::new(7, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+            PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            PatchCable::new(4, 4, 5, InPort::In, 1.0),
+            PatchCable::new(5, 6, 5, InPort::Cv, 1.0),
+            PatchCable::new(6, 5, 7, InPort::In, 1.0),
+        ],
+    );
+    let g_chop = compile_zone_graph(&z_lfo_chop).unwrap();
+    let mut v_chop =
+        ModularVoice::new_boxed(&spec(&z_lfo_chop, &g_chop, sr, 120.0), start(60, Some(480)));
+    let mut second_pulse_peak = 0.0_f32;
+    for i in 0..(sr * 0.25) as usize {
+        let f = v_chop.next_frame(&empty_bank, None);
+        if i >= (sr * 0.12) as usize {
+            second_pulse_peak = second_pulse_peak.max(f[0].abs()).max(f[1].abs());
+        }
+    }
+    assert!(
+        v_chop.is_active() && second_pulse_peak > 1e-3,
+        "LFO-chopped post-VCA resonator must survive 50 ms LFO-off gaps (active={}, peak={second_pulse_peak})",
+        v_chop.is_active()
+    );
+
+    // 3. Quiet post-VCA resonator (Out.gain_db = -36 dB, velocity = 0.05) must not cut off while ringing.
+    let z_quiet = build_zone(
+        vec![
+            RackModule::new(1, "Noise", ModuleKind::Noise(NoiseModule::default())),
+            RackModule::new(2, "StrikeVca", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(
+                3,
+                "StrikeEnv",
+                ModuleKind::Env(EnvModule {
+                    mode: EnvMode::HoldDecay,
+                    attack_ms: 0.5,
+                    decay_ms: 10.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(
+                4,
+                "Plate",
+                ModuleKind::Resonator(ResonatorModule {
+                    mode: ResonatorMode::Plate,
+                    decay_ms: 1200.0,
+                    mix: 1.0,
+                    ..ResonatorModule::default()
+                }),
+            ),
+            RackModule::new(
+                5,
+                "Out",
+                ModuleKind::Out(OutModule {
+                    gain_db: -36.0,
+                    ..OutModule::default()
+                }),
+            ),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+            PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            PatchCable::new(4, 4, 5, InPort::In, 1.0),
+        ],
+    );
+    let g_quiet = compile_zone_graph(&z_quiet).unwrap();
+    let mut low_start = start(60, Some(480));
+    low_start.velocity = 0.05;
+    let mut v_quiet = ModularVoice::new_boxed(&spec(&z_quiet, &g_quiet, sr, 120.0), low_start);
+    for _ in 0..(sr * 0.2) as usize {
+        let _ = v_quiet.next_frame(&empty_bank, None);
+    }
+    assert!(
+        v_quiet.is_active(),
+        "quiet post-VCA resonator must remain active while modal bank is still ringing"
+    );
+
+    // 4. Legato retarget raising post-VCA resonator decay from 50 ms to 4000 ms must extend tail_frames.
+    let mut z_legato = z_quiet.clone();
+    if let ModuleKind::Resonator(r) = &mut z_legato.modules[3].kind {
+        r.decay_ms = 50.0;
+    }
+    if let ModuleKind::Out(o) = &mut z_legato.modules[4].kind {
+        o.gain_db = 0.0;
+    }
+    let g_leg = compile_zone_graph(&z_legato).unwrap();
+    let mut v_leg =
+        ModularVoice::new_boxed(&spec(&z_legato, &g_leg, sr, 120.0), start(60, Some(480)));
+    for _ in 0..128 {
+        let _ = v_leg.next_frame(&empty_bank, None);
+    }
+    let mut z_legato_long = z_legato.clone();
+    if let ModuleKind::Resonator(r) = &mut z_legato_long.modules[3].kind {
+        r.decay_ms = 4000.0;
+    }
+    let g_leg_long = compile_zone_graph(&z_legato_long).unwrap();
+    v_leg.retarget_from_zone(
+        &spec(&z_legato_long, &g_leg_long, sr, 120.0),
+        start(64, Some(480)),
+        true,
+    );
+    for _ in 0..(sr * 2.3) as usize {
+        let _ = v_leg.next_frame(&empty_bank, None);
+    }
+    assert!(
+        v_leg.is_active(),
+        "legato retarget increasing post-VCA resonator decay to 4000 ms must outlive 2.0 s default tail cap"
+    );
+
+    // 5. DriveNode and NoiseNode legato retarget across a sample-rate change refreshes filter coeffs.
+    let z_sr = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "Noise",
+                ModuleKind::Noise(NoiseModule {
+                    highpass_hz: 1_500.0,
+                    lowpass_hz: 4_000.0,
+                    ..NoiseModule::default()
+                }),
+            ),
+            RackModule::new(
+                2,
+                "Drive",
+                ModuleKind::Drive(DriveModule {
+                    drive: 0.4,
+                    tone_hz: 3_000.0,
+                    mix: 1.0,
+                    ..DriveModule::default()
+                }),
+            ),
+            RackModule::new(3, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 2, 3, InPort::In, 1.0),
+        ],
+    );
+    let g_sr = compile_zone_graph(&z_sr).unwrap();
+    let mut v_sr = ModularVoice::new_boxed(&spec(&z_sr, &g_sr, 48_000.0, 120.0), start(60, None));
+    for _ in 0..64 {
+        let _ = v_sr.next_frame(&empty_bank, None);
+    }
+    v_sr.retarget_from_zone(&spec(&z_sr, &g_sr, 96_000.0, 120.0), start(62, None), true);
+    // Run enough frames to pass control_tick; NoiseNode & DriveNode cached keys must refresh for 96 kHz.
+    let mut energy = 0.0_f64;
+    for _ in 0..256 {
+        let f = v_sr.next_frame(&empty_bank, None);
+        assert!(f[0].is_finite() && f[1].is_finite());
+        energy += f64::from(f[0] * f[0]);
+    }
+    assert!(energy > 0.0);
+    // Verify NoiseNode and DriveNode filter caches refreshed for 96 kHz.
+    let noise_slot = g_sr.slot_for_module(1).unwrap();
+    let drive_slot = g_sr.slot_for_module(2).unwrap();
+    if let ModuleNode::Noise(ref n) = v_sr.nodes[noise_slot] {
+        assert_eq!(
+            n.cached_filter_sr_bits(),
+            (96_000.0_f64.to_bits(), 96_000.0_f64.to_bits())
+        );
+    } else {
+        panic!("expected NoiseNode at slot {noise_slot}");
+    }
+    if let ModuleNode::Drive(ref d) = v_sr.nodes[drive_slot] {
+        assert_eq!(d.cached_tone_sr_bits(), 96_000.0_f64.to_bits());
+    } else {
+        panic!("expected DriveNode at slot {drive_slot}");
+    }
 }

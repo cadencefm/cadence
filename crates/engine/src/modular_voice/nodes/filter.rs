@@ -6,8 +6,8 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    filter_velocity_mod, octaves_to_ratio_f64, soft_clip_drive_f64, AcidCoeffs, AcidLadder,
-    LogSmoother, ModalResonator, Svf, SvfCoeffs, TptOnePoleLpf,
+    filter_velocity_mod, octaves_to_ratio_f64, smooth_step_f32, AcidCoeffs, AcidLadder,
+    LogSmoother, ModalResonator, SoftClipCoeffs, Svf, SvfCoeffs, TptOnePoleLpf,
 };
 use cadence_core::rack::{FilterMode, FilterModule, ModuleKind, ModuleKindTag, ModuleParam};
 
@@ -28,12 +28,16 @@ pub(in crate::modular_voice) struct FilterNode {
     last_cv_octaves: f64,
     cv_sub_counter: u8,
     has_cv: bool,
+    cached_drive_bits: u64,
+    cached_drive_coeffs: SoftClipCoeffs,
+    cached_coeff_key: (FilterMode, u64, u32, u64),
 }
 
 impl FilterNode {
     #[inline]
     pub(super) fn new(params: FilterModule, sample_rate: f64) -> Self {
         let fc = f64::from(params.cutoff_hz).clamp(20.0, sample_rate * 0.45);
+        let drv = f64::from(params.drive.clamp(0.0, 1.0));
         Self {
             current: params,
             target: params,
@@ -47,6 +51,14 @@ impl FilterNode {
             last_cv_octaves: f64::NAN,
             cv_sub_counter: 0,
             has_cv: false,
+            cached_drive_bits: drv.to_bits(),
+            cached_drive_coeffs: SoftClipCoeffs::new(drv),
+            cached_coeff_key: (
+                params.mode,
+                fc.to_bits(),
+                params.resonance.to_bits(),
+                sample_rate.to_bits(),
+            ),
         }
     }
 
@@ -58,6 +70,16 @@ impl FilterNode {
         cutoff_hz: f64,
         resonance: f32,
     ) {
+        let key = (
+            mode,
+            cutoff_hz.to_bits(),
+            resonance.to_bits(),
+            sample_rate.to_bits(),
+        );
+        if key == self.cached_coeff_key {
+            return;
+        }
+        self.cached_coeff_key = key;
         match mode {
             FilterMode::AcidLowPass => {
                 self.acid_coeffs = AcidCoeffs::new(sample_rate, cutoff_hz, resonance);
@@ -170,6 +192,12 @@ impl VoiceModule for FilterNode {
         self.one_pole = TptOnePoleLpf::new(sr, fc);
         self.svf_coeffs = SvfCoeffs::new(sr, fc, flt.resonance);
         self.acid_coeffs = AcidCoeffs::new(sr, fc, flt.resonance);
+        self.cached_coeff_key = (
+            flt.mode,
+            fc.to_bits(),
+            flt.resonance.to_bits(),
+            sr.to_bits(),
+        );
         self.cutoff = LogSmoother::new(f64::from(flt.cutoff_hz), 20.0);
         self.effective_cutoff_hz = fc as f32;
         self.last_cv_octaves = f64::NAN;
@@ -180,11 +208,15 @@ impl VoiceModule for FilterNode {
     fn smooth_step(&mut self, s64: f64) {
         let s32 = s64 as f32;
         self.current.cutoff_hz = self.cutoff.step(s64) as f32;
-        self.current.resonance += (self.target.resonance - self.current.resonance) * s32;
-        self.current.drive += (self.target.drive - self.current.drive) * s32;
-        self.current.key_tracking += (self.target.key_tracking - self.current.key_tracking) * s32;
-        self.current.vel_amount += (self.target.vel_amount - self.current.vel_amount) * s32;
-        self.current.mix += (self.target.mix - self.current.mix) * s32;
+        smooth_step_f32(&mut self.current.resonance, self.target.resonance, s32);
+        smooth_step_f32(&mut self.current.drive, self.target.drive, s32);
+        smooth_step_f32(
+            &mut self.current.key_tracking,
+            self.target.key_tracking,
+            s32,
+        );
+        smooth_step_f32(&mut self.current.vel_amount, self.target.vel_amount, s32);
+        smooth_step_f32(&mut self.current.mix, self.target.mix, s32);
     }
 
     #[inline]
@@ -228,10 +260,13 @@ impl VoiceModule for FilterNode {
 
         let drv = f64::from(flt.drive.clamp(0.0, 1.0));
         let driven = if drv > 0.0 {
-            [
-                soft_clip_drive_f64(inputs.in_audio[0], drv),
-                soft_clip_drive_f64(inputs.in_audio[1], drv),
-            ]
+            let drv_bits = drv.to_bits();
+            if drv_bits != self.cached_drive_bits {
+                self.cached_drive_bits = drv_bits;
+                self.cached_drive_coeffs = SoftClipCoeffs::new(drv);
+            }
+            let c = self.cached_drive_coeffs;
+            [c.shape(inputs.in_audio[0]), c.shape(inputs.in_audio[1])]
         } else {
             inputs.in_audio
         };

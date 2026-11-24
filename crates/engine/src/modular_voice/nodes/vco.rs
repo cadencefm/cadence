@@ -7,8 +7,8 @@ use super::{
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
     midi_to_hz, mix_seed, pan_mono_equal_power_f64, phase_wrap, semitones_to_ratio_f64,
-    step_vco_bank, step_vco_bank_fm_2x, unison_gain_comp, unison_offsets, Halfband2x, LogSmoother,
-    VcoStepParams, XorShift32, MAX_UNISON,
+    smooth_step_f32, step_vco_bank, step_vco_bank_fm_2x, unison_gain_comp, unison_offsets,
+    Halfband2x, LogSmoother, VcoStepParams, XorShift32, MAX_UNISON,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking, VcoModule};
 use std::f64::consts::SQRT_2;
@@ -28,6 +28,9 @@ pub(in crate::modular_voice) struct VcoNode {
     unison_pan: [[f64; 2]; MAX_UNISON],
     fixed_hz: LogSmoother,
     has_fm_in: bool,
+    cached_unison_key: (u8, u32, u32),
+    cached_pitch_key: (PitchTracking, u64, u64, u64),
+    cached_base_hz: f64,
 }
 
 impl VcoNode {
@@ -43,6 +46,9 @@ impl VcoNode {
             unison_pan: [[1.0; 2]; MAX_UNISON],
             fixed_hz: LogSmoother::new(f64::from(params.fixed_hz), 20.0),
             has_fm_in: false,
+            cached_unison_key: (0, u32::MAX, u32::MAX),
+            cached_pitch_key: (PitchTracking::Chromatic, u64::MAX, u64::MAX, u64::MAX),
+            cached_base_hz: 440.0,
         };
         node.update_unison();
         node
@@ -90,7 +96,17 @@ impl VcoNode {
 
     #[inline]
     fn update_unison(&mut self) {
-        let count = usize::from(self.current.unison_voices.clamp(1, MAX_UNISON as u8));
+        let count_u8 = self.current.unison_voices.clamp(1, MAX_UNISON as u8);
+        let key = (
+            count_u8,
+            self.current.unison_detune_cents.to_bits(),
+            self.current.unison_width.to_bits(),
+        );
+        if key == self.cached_unison_key {
+            return;
+        }
+        self.cached_unison_key = key;
+        let count = usize::from(count_u8);
         let offsets = unison_offsets(
             count,
             self.current.unison_detune_cents,
@@ -207,14 +223,24 @@ impl VoiceModule for VcoNode {
     #[inline]
     fn smooth_step(&mut self, s64: f64) {
         let s32 = s64 as f32;
-        self.current.tune_semitones +=
-            (self.target.tune_semitones - self.current.tune_semitones) * s32;
-        self.current.fine_cents += (self.target.fine_cents - self.current.fine_cents) * s32;
-        self.current.pulse_width += (self.target.pulse_width - self.current.pulse_width) * s32;
-        self.current.level += (self.target.level - self.current.level) * s32;
-        self.current.unison_detune_cents +=
-            (self.target.unison_detune_cents - self.current.unison_detune_cents) * s32;
-        self.current.unison_width += (self.target.unison_width - self.current.unison_width) * s32;
+        smooth_step_f32(
+            &mut self.current.tune_semitones,
+            self.target.tune_semitones,
+            s32,
+        );
+        smooth_step_f32(&mut self.current.fine_cents, self.target.fine_cents, s32);
+        smooth_step_f32(&mut self.current.pulse_width, self.target.pulse_width, s32);
+        smooth_step_f32(&mut self.current.level, self.target.level, s32);
+        smooth_step_f32(
+            &mut self.current.unison_detune_cents,
+            self.target.unison_detune_cents,
+            s32,
+        );
+        smooth_step_f32(
+            &mut self.current.unison_width,
+            self.target.unison_width,
+            s32,
+        );
         self.current.fixed_hz = self.fixed_hz.step(s64) as f32;
     }
 
@@ -227,25 +253,41 @@ impl VoiceModule for VcoNode {
     fn process(&mut self, inputs: &NodeInputs, ctx: &mut ProcessCtx<'_>) -> [f64; 2] {
         let vco = self.current;
         let sr = ctx.sample_rate;
-        let base_hz = match vco.pitch_tracking {
-            PitchTracking::Fixed => {
-                let semi = ctx.rack_tune
+        let (pitch_arg, fixed_hz_val) = match vco.pitch_tracking {
+            PitchTracking::Fixed => (
+                (ctx.rack_tune
                     + f64::from(vco.tune_semitones)
                     + f64::from(vco.fine_cents) * 0.01
-                    + inputs.pitch_cv;
-                (self.fixed_hz.current() * semitones_to_ratio_f64(semi.clamp(-96.0, 96.0)))
-                    .clamp(0.01, sr * 0.45)
-            }
-            PitchTracking::Chromatic => midi_to_hz(
+                    + inputs.pitch_cv)
+                    .clamp(-96.0, 96.0),
+                self.fixed_hz.current(),
+            ),
+            PitchTracking::Chromatic => (
                 (ctx.note_pitch
                     + ctx.rack_tune
                     + f64::from(vco.tune_semitones)
                     + f64::from(vco.fine_cents) * 0.01
                     + inputs.pitch_cv)
                     .clamp(-64.0, 180.0),
-            )
-            .clamp(0.01, sr * 0.45),
+                0.0,
+            ),
         };
+        let pitch_key = (
+            vco.pitch_tracking,
+            pitch_arg.to_bits(),
+            fixed_hz_val.to_bits(),
+            sr.to_bits(),
+        );
+        if pitch_key != self.cached_pitch_key {
+            self.cached_pitch_key = pitch_key;
+            self.cached_base_hz = match vco.pitch_tracking {
+                PitchTracking::Fixed => {
+                    (fixed_hz_val * semitones_to_ratio_f64(pitch_arg)).clamp(0.01, sr * 0.45)
+                }
+                PitchTracking::Chromatic => midi_to_hz(pitch_arg).clamp(0.01, sr * 0.45),
+            };
+        }
+        let base_hz = self.cached_base_hz;
         let pw = (f64::from(vco.pulse_width) + inputs.pw_cv).clamp(0.02, 0.98);
         let unison_count = usize::from(vco.unison_voices.clamp(1, MAX_UNISON as u8));
         let level = f64::from(vco.level) * unison_gain_comp(unison_count);
