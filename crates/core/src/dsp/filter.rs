@@ -842,6 +842,17 @@ impl crate::dsp::StereoEffect for RhythmicFilter {
     fn reset(&mut self) {
         RhythmicFilter::reset(self);
     }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.bypass.is_settled_for(bypassed)
+            && (bypassed
+                || (self.env_amount_ln2 == 0.0
+                    && self.svf.quiet()
+                    && self.acid.quiet()
+                    && self.one_pole.quiet()
+                    && self.dc_blocker.quiet()))
+    }
 }
 
 #[cfg(test)]

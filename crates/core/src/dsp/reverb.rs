@@ -210,7 +210,8 @@ pub struct Reverb {
     target: ReverbPatch,
     ctrl_count: u32,
     ctrl_mask: u32,
-    silent_bypass_frames: u32,
+    tail_silent_frames: u32,
+    tail_quiet: bool,
     has_processed: bool,
 }
 
@@ -260,7 +261,8 @@ impl Reverb {
             target: default,
             ctrl_count: 0,
             ctrl_mask: control_stride_mask(sr, 3_000.0),
-            silent_bypass_frames: 0,
+            tail_silent_frames: 0,
+            tail_quiet: true,
             has_processed: false,
         };
         effect.set_parameters(default);
@@ -318,7 +320,8 @@ impl Reverb {
         self.width.snap(self.width.target());
         self.bypass.reset();
         self.ctrl_count = 0;
-        self.silent_bypass_frames = 0;
+        self.tail_silent_frames = 0;
+        self.tail_quiet = true;
         self.has_processed = false;
         self.set_parameters(self.target);
     }
@@ -415,10 +418,7 @@ impl Reverb {
                 return dry;
             }
             BypassStep::SettledBypass => (0.0, true),
-            BypassStep::Active(w) => {
-                self.silent_bypass_frames = 0;
-                (w, false)
-            }
+            BypassStep::Active(w) => (w, false),
         };
 
         let damp = self.damping_hz.step(self.damping_coeff);
@@ -439,6 +439,12 @@ impl Reverb {
 
         // Age reverb tails naturally when bypassed by feeding silence into the network.
         let feed = if bypassed { [0.0; 2] } else { dry };
+        let feed_silent =
+            feed[0].abs() < TAIL_SILENCE_FLOOR_F32 && feed[1].abs() < TAIL_SILENCE_FLOOR_F32;
+        if !feed_silent {
+            self.tail_quiet = false;
+            self.tail_silent_frames = 0;
+        }
         let mut diffuse = [0.0_f32; 2];
         for ch in 0..2 {
             let predelayed = if predelay_frames < 1.0 {
@@ -507,11 +513,11 @@ impl Reverb {
             self.lines[i].write(written);
         }
 
-        if bypass_settled {
+        if !self.tail_quiet && feed_silent {
             if max_tail_abs < TAIL_SILENCE_FLOOR_F32
                 && self.damping_lpf.iter().all(TptOnePoleLpf::quiet)
             {
-                self.silent_bypass_frames = self.silent_bypass_frames.saturating_add(1);
+                self.tail_silent_frames = self.tail_silent_frames.saturating_add(1);
                 let max_predelay = predelay_frames.max(self.predelay_frames.target());
                 let max_diff = (self.diffuser_lengths[0] + self.diffuser_lengths[1])
                     .max(self.diffuser_lengths[2] + self.diffuser_lengths[3]);
@@ -527,8 +533,8 @@ impl Reverb {
                     .saturating_add(max_diff)
                     .saturating_add(max_fdn)
                     .saturating_add(4) as u32;
-                if self.silent_bypass_frames >= drain_frames {
-                    // O(1) ring resets (zero memset on RT thread) guarantee zero stale tails on un-bypass.
+                if self.tail_silent_frames >= drain_frames {
+                    // O(1) ring resets (zero memset on RT thread) guarantee zero stale tails.
                     for ring in self
                         .lines
                         .iter_mut()
@@ -540,14 +546,19 @@ impl Reverb {
                     for lpf in &mut self.damping_lpf {
                         lpf.reset();
                     }
-                    self.lengths_a = self.target_lengths;
-                    self.lengths_b = self.target_lengths;
-                    self.size_xfade = 1.0;
-                    self.silent_bypass_frames = 0;
-                    self.bypass.mark_idle();
+                    self.tail_silent_frames = 0;
+                    self.tail_quiet = true;
                 }
             } else {
-                self.silent_bypass_frames = 0;
+                self.tail_silent_frames = 0;
+            }
+        }
+        if bypass_settled {
+            if self.tail_quiet {
+                self.lengths_a = self.target_lengths;
+                self.lengths_b = self.target_lengths;
+                self.size_xfade = 1.0;
+                self.bypass.mark_idle();
             }
             return dry;
         }
@@ -586,6 +597,11 @@ impl crate::dsp::StereoEffect for Reverb {
     #[inline]
     fn reset(&mut self) {
         Reverb::reset(self);
+    }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.tail_quiet && self.bypass.is_settled_for(bypassed)
     }
 }
 

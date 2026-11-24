@@ -137,6 +137,18 @@ pub trait StereoEffect {
     fn gain_reduction_db(&self) -> Option<f32> {
         None
     }
+
+    /// True when internal delay/reverb/filter/envelope/lookahead state is completely
+    /// drained and bypass crossfade is settled for `bypassed`, so feeding `[0.0, 0.0]`
+    /// produces `[0.0, 0.0]` with no ringing tail or state drift.
+    fn is_quiet(&self, _bypassed: bool) -> bool {
+        false
+    }
+
+    /// Advance any free-running phase state (e.g., `Chorus` LFO) across `frames`
+    /// skipped silent frames in O(1).
+    #[inline]
+    fn advance_silent_frames(&mut self, _frames: usize, _bypassed: bool) {}
 }
 
 #[cfg(test)]
@@ -280,5 +292,122 @@ mod tests {
             "Delay",
         );
         verify_pair(Reverb::new(sr_u32), Reverb::new(sr_u32), &input, "Reverb");
+    }
+
+    #[test]
+    fn stereo_effect_is_quiet_drains_tails_accurately_across_all_eight_effects() {
+        let sr = 48_000.0;
+        let sr_u32 = 48_000_u32;
+
+        fn verify_tail<E: StereoEffect>(mut fx: E, name: &str, max_drain_frames: usize) {
+            // Fresh instance starts quiet in both active and bypassed states.
+            assert!(fx.is_quiet(false), "{name}: fresh active must be quiet");
+            assert!(fx.is_quiet(true), "{name}: fresh bypassed must be quiet");
+
+            // Feed a 64-frame loud burst so filters/delays/reverbs/dynamics excite fully.
+            let mut burst = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+            for (i, dst) in burst.iter_mut().enumerate() {
+                let x = (i as f32 * 0.25).sin() * 0.9;
+                *dst = [x, -x];
+            }
+            fx.process_block(&mut burst, false);
+            assert!(
+                !fx.is_quiet(false),
+                "{name}: must NOT report quiet immediately after loud burst"
+            );
+
+            // Feed silence until quiet; once quiet, verify feeding more silence outputs < 1e-6!
+            let mut drained = false;
+            for _ in 0..max_drain_frames {
+                let y = fx.process([0.0, 0.0], false);
+                if fx.is_quiet(false) {
+                    assert!(
+                        y[0].abs() < 1e-6 && y[1].abs() < 1e-6,
+                        "{name}: reported quiet while still outputting audible signal {y:?}"
+                    );
+                    drained = true;
+                    break;
+                }
+            }
+            assert!(
+                drained,
+                "{name}: failed to settle to is_quiet within {max_drain_frames} frames"
+            );
+
+            // Double-check 256 additional silent frames stay strictly below silence floor.
+            for frame in 0..256 {
+                let y = fx.process([0.0, 0.0], false);
+                assert!(
+                    y[0].abs() < 1e-6 && y[1].abs() < 1e-6,
+                    "{name}: tail resurfaced at post-quiet frame {frame}: {y:?}"
+                );
+            }
+        }
+
+        let mut eq = Eq::new(sr);
+        eq.set_parameters(crate::mixer::EqPatch {
+            hpf_hz: 120.0,
+            low_db: 4.0,
+            ..Default::default()
+        });
+        verify_tail(eq, "Eq", 48_000);
+
+        let mut flt = RhythmicFilter::new(sr);
+        flt.set_parameters(crate::mixer::FilterPatch {
+            cutoff_hz: 800.0,
+            resonance: 0.6,
+            env_amount: 0.0,
+            ..Default::default()
+        });
+        verify_tail(flt, "RhythmicFilter", 48_000);
+
+        let mut comp = Compressor::new(sr);
+        comp.set_parameters(crate::mixer::CompressorPatch {
+            threshold_db: -24.0,
+            ratio: 8.0,
+            attack_ms: 0.5,
+            release_ms: 40.0,
+            ..Default::default()
+        });
+        verify_tail(comp, "Compressor", 96_000);
+
+        let mut lim = Limiter::new(sr);
+        lim.set_parameters(crate::mixer::LimiterPatch {
+            ceiling_db: -6.0,
+            input_drive_db: 6.0,
+            release_ms: 40.0,
+            mix: 1.0,
+        });
+        verify_tail(lim, "Limiter", 96_000);
+
+        let mut drv = Drive::new(sr);
+        drv.set_parameters(crate::mixer::DrivePatch {
+            drive: 0.7,
+            tone_hz: 4_000.0,
+            ..Default::default()
+        });
+        verify_tail(drv, "Drive", 48_000);
+
+        verify_tail(Chorus::new(sr), "Chorus", 48_000);
+
+        let mut delay = Delay::with_max_seconds(sr_u32, 1.0);
+        delay.set_parameters(
+            crate::mixer::DelayPatch {
+                mode: crate::mixer::DelayMode::PingPong,
+                steps: 0.5,
+                feedback: 0.6,
+                mix: 0.5,
+            },
+            120.0,
+        );
+        verify_tail(delay, "Delay", 240_000);
+
+        let mut rev = Reverb::new(sr_u32);
+        rev.set_parameters(crate::mixer::ReverbPatch {
+            decay_seconds: 0.6,
+            mix: 0.5,
+            ..Default::default()
+        });
+        verify_tail(rev, "Reverb", 240_000);
     }
 }

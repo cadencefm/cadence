@@ -208,6 +208,15 @@ impl StereoBiquad {
         self.current = self.target;
     }
 
+    /// Whether both stereo biquad delay registers have decayed below silence (`1e-7`).
+    #[inline]
+    pub fn quiet(&self) -> bool {
+        self.z1
+            .iter()
+            .chain(self.z2.iter())
+            .all(|v| v.abs() < TAIL_SILENCE_FLOOR_F64)
+    }
+
     /// Snap coefficients immediately (for initialization or reset).
     pub fn snap_coeffs(&mut self, coeffs: BiquadCoeffs) {
         self.current = coeffs;
@@ -640,6 +649,13 @@ impl crate::dsp::StereoEffect for Eq {
     #[inline]
     fn reset(&mut self) {
         Eq::reset(self);
+    }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.bypass.is_settled_for(bypassed)
+            && (bypassed
+                || (self.hpf.quiet() && self.low.quiet() && self.mid.quiet() && self.high.quiet()))
     }
 }
 

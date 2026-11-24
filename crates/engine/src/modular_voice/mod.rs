@@ -895,6 +895,14 @@ impl ModularVoice {
         }
     }
 
+    /// Fast-path update for continuous `Zone.Pan` and `Rack.Tune` modulation lanes
+    /// without rescanning unchanged module/cable topology.
+    #[inline]
+    pub fn set_continuous_zone_pan_and_tune(&mut self, zone_pan: f32, rack_tune: f32) {
+        self.target_zone_pan = sanitize_sample(zone_pan).clamp(-1.0, 1.0);
+        self.target_rack_tune = f64::from(sanitize_sample(rack_tune).clamp(-24.0, 24.0));
+    }
+
     /// Apply one unlocked continuous module modulation (`ModLane`) directly onto this voice.
     #[inline]
     pub fn apply_continuous_module_param(&mut self, module_id: u16, param: ModuleParam, norm: f32) {

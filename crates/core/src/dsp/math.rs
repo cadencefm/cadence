@@ -578,6 +578,17 @@ impl BypassFader {
         !self.was_active
     }
 
+    /// True when the bypass crossfade has fully settled for `bypassed` (either
+    /// idle-bypassed or active at unity wet gain).
+    #[inline]
+    pub fn is_settled_for(&self, bypassed: bool) -> bool {
+        if bypassed {
+            !self.was_active
+        } else {
+            self.wet.current() == 1.0 && self.wet.target() == 1.0
+        }
+    }
+
     /// Transition cleanly to idle-bypassed state after resetting internal effect buffers.
     #[inline]
     pub fn mark_idle(&mut self) {

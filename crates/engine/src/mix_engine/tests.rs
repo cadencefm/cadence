@@ -1687,3 +1687,194 @@ fn master_metering_observes_final_output_with_preview_monitor_and_mute() {
         "Master clip metering must catch limited strip + monitor > 1.0: {m_lim:?}"
     );
 }
+
+#[test]
+fn muted_channel_preserves_input_metering_drains_inserts_and_wakes_cleanly() {
+    use cadence_core::mixer::{DelayMode, DelayPatch};
+    let mut score = stereo_score();
+    score.mixer.channel_mut(1).unwrap().inserts = vec![
+        EffectDevice {
+            id: 801,
+            name: "Delay".into(),
+            bypassed: false,
+            kind: EffectKind::Delay(DelayPatch {
+                mode: DelayMode::Stereo,
+                steps: 0.25,
+                feedback: 0.5,
+                mix: 1.0,
+            }),
+        },
+        EffectDevice {
+            id: 802,
+            name: "Reverb".into(),
+            bypassed: false,
+            kind: EffectKind::Reverb(ReverbPatch {
+                decay_seconds: 0.4,
+                mix: 0.6,
+                ..ReverbPatch::default()
+            }),
+        },
+    ];
+    score
+        .mixer
+        .flags
+        .set_channel_muted(ChannelRef::Channel(1), true)
+        .unwrap();
+
+    let mut mix = MixerEngine::new(&score, RATE);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.snap_smoothers();
+
+    // 1. Muted channel receiving signal still reports live input meter peaks while outputting 0.0.
+    let mut src_block = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    src_block[0].fill([0.6, -0.4]);
+    let mut out = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+    mix.process_block(&src_block, 1, &[], &[], &mut out);
+    assert!(
+        out.iter().all(|&f| f == [0.0, 0.0]),
+        "muted channel must output silence"
+    );
+    let m = meter(&mix, ChannelRef::Channel(1));
+    assert!(
+        m.input_peak[0] > 0.55 && m.input_peak[1] > 0.35 && m.output_peak == [0.0, 0.0],
+        "muted channel must preserve live input metering: {m:?}"
+    );
+
+    // 2. Un-mute, excite Delay+Reverb, then mute and let inserts drain silently to quiet;
+    //    un-muting again must produce zero stale audio burst.
+    score
+        .mixer
+        .flags
+        .set_channel_muted(ChannelRef::Channel(1), false)
+        .unwrap();
+    mix.adopt(&score, false);
+    mix.update_controls(&score, 0.0, 0.0);
+    for _ in 0..8 {
+        mix.process_block(&src_block, 1, &[], &[], &mut out);
+    }
+
+    score
+        .mixer
+        .flags
+        .set_channel_muted(ChannelRef::Channel(1), true)
+        .unwrap();
+    mix.adopt(&score, false);
+    mix.update_controls(&score, 0.0, 0.0);
+    // Drain ~4s while muted (more than enough for 0.4s reverb + 0.5-fb delay).
+    let silent = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    for _ in 0..((RATE as usize * 4) / AUDIO_SUB_BLOCK_FRAMES) {
+        mix.process_block(&src_block, 1, &[], &[], &mut out);
+        assert!(out.iter().all(|&f| f == [0.0, 0.0]));
+    }
+
+    // Un-mute with silent input: inserts must be fully drained (zero stale tail burst).
+    score
+        .mixer
+        .flags
+        .set_channel_muted(ChannelRef::Channel(1), false)
+        .unwrap();
+    mix.adopt(&score, false);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.process_block(&silent, 0, &[], &[], &mut out);
+    let max_stale = out
+        .iter()
+        .fold(0.0_f32, |acc, &[l, r]| acc.max(l.abs()).max(r.abs()));
+    assert!(
+        max_stale < 1e-6,
+        "muted insert draining must prevent stale bursts on un-mute, got {max_stale}"
+    );
+}
+
+#[test]
+fn silent_channel_sleeping_preserves_delay_reverb_limiter_tails_and_gr_stats() {
+    use cadence_core::mixer::{DelayMode, DelayPatch, LimiterPatch};
+    let mut score = stereo_score();
+    score.mixer.channel_mut(1).unwrap().inserts = vec![
+        EffectDevice {
+            id: 811,
+            name: "Delay".into(),
+            bypassed: false,
+            kind: EffectKind::Delay(DelayPatch {
+                mode: DelayMode::Stereo,
+                steps: 0.5, // 62.5 ms @ 120 BPM (~3000 frames @ 48 kHz)
+                feedback: 0.6,
+                mix: 0.5,
+            }),
+        },
+        EffectDevice {
+            id: 812,
+            name: "Reverb".into(),
+            bypassed: false,
+            kind: EffectKind::Reverb(ReverbPatch {
+                decay_seconds: 0.5,
+                mix: 0.4,
+                ..ReverbPatch::default()
+            }),
+        },
+    ];
+    score.mixer.master.inserts.push(EffectDevice {
+        id: 813,
+        name: "Limiter".into(),
+        bypassed: false,
+        kind: EffectKind::Limiter(LimiterPatch {
+            ceiling_db: -6.0,
+            input_drive_db: 6.0,
+            release_ms: 40.0,
+            mix: 1.0,
+        }),
+    });
+
+    let mut mix = MixerEngine::new(&score, RATE);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.snap_smoothers();
+
+    // Feed a short loud burst on channel 1, then feed silence for 5 seconds.
+    let mut burst = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    for (i, dst) in burst[0].iter_mut().enumerate() {
+        let x = (i as f32 * 0.2).sin() * 0.9;
+        *dst = [x, -x];
+    }
+    let silent = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    let mut out = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+
+    mix.process_block(&burst, 1, &[], &[], &mut out);
+
+    // Confirm delayed echoes & reverb tail remain audible well past the 62.5 ms first echo.
+    let mut echo_peak = 0.0_f32;
+    let total_silent_blocks = (RATE as usize * 5) / AUDIO_SUB_BLOCK_FRAMES;
+    for blk in 0..total_silent_blocks {
+        mix.process_block(&silent, 0, &[], &[], &mut out);
+        if (40..120).contains(&blk) {
+            for &[l, r] in &out {
+                echo_peak = echo_peak.max(l.abs()).max(r.abs());
+            }
+        }
+    }
+    assert!(
+        echo_peak > 0.05,
+        "silent sleeping must NOT truncate Delay/Reverb tails (echo_peak={echo_peak})"
+    );
+    // After 5 seconds of silence, tail must be fully settled and Limiter GR stats must stay accurate.
+    assert!(
+        out.iter().all(|&[l, r]| l.abs() < 1e-6 && r.abs() < 1e-6),
+        "tail must settle cleanly after 5s"
+    );
+    let (_, max_gr, avg_gr) = mix
+        .render_effect_stats()
+        .find(|(id, _, _)| *id == 813)
+        .expect("limiter render stats");
+    let lim_slot = mix
+        .effects
+        .iter()
+        .find(|s| s.id == Some(813))
+        .expect("limiter slot");
+    assert_eq!(
+        lim_slot.render_gr_frames,
+        ((1 + total_silent_blocks) * AUDIO_SUB_BLOCK_FRAMES) as u64,
+        "sleeping silent blocks must still advance Limiter render_gr_frames for exact avg_gr_db"
+    );
+    assert!(
+        max_gr > 0.5 && avg_gr > 0.0 && avg_gr < max_gr,
+        "Limiter stats must reflect active GR and silent-block averaging: max={max_gr}, avg={avg_gr}"
+    );
+}

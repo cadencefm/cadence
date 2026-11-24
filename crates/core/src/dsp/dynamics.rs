@@ -8,7 +8,7 @@
 use crate::dsp::math::{
     db_to_lin_f64, lin_to_db_f64, mix_stereo_f64, one_pole_decay_ms, sanitize_clamp_f32,
     sanitize_clamp_f64, sanitize_frame, sanitize_sample_f64, sanitize_sample_rate, BypassFader,
-    BypassStep, Smoother, LN_100,
+    BypassStep, Smoother, LN_100, TAIL_SILENCE_FLOOR_F32,
 };
 use crate::mixer::{CompressorPatch, LimiterPatch};
 
@@ -295,6 +295,11 @@ impl crate::dsp::StereoEffect for Compressor {
     fn gain_reduction_db(&self) -> Option<f32> {
         Some(Compressor::gain_reduction_db(self))
     }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.bypass.is_settled_for(bypassed) && self.gr_db == 0.0 && self.current_gr_db == 0.0
+    }
 }
 
 /// Stereo-linked lookahead brickwall peak limiter (`1.5 ms` lookahead) with
@@ -323,6 +328,8 @@ pub struct Limiter {
     gr_db: f64,
     current_gr_db: f32,
     last_patch: LimiterPatch,
+    tail_silent_frames: u32,
+    tail_quiet: bool,
     has_processed: bool,
 }
 
@@ -358,6 +365,8 @@ impl Limiter {
             gr_db: 0.0,
             current_gr_db: 0.0,
             last_patch: default,
+            tail_silent_frames: 0,
+            tail_quiet: true,
             has_processed: false,
         };
         lim.set_parameters(default);
@@ -381,7 +390,27 @@ impl Limiter {
         self.drive_db.snap(self.drive_db.target());
         self.mix.snap(self.mix.target());
         self.bypass.reset();
+        self.tail_silent_frames = 0;
+        self.tail_quiet = true;
         self.has_processed = false;
+    }
+
+    #[inline]
+    fn observe_tail_silence(&mut self, dry_in: [f32; 2]) {
+        if dry_in[0].abs() >= TAIL_SILENCE_FLOOR_F32 || dry_in[1].abs() >= TAIL_SILENCE_FLOOR_F32 {
+            self.tail_quiet = false;
+            self.tail_silent_frames = 0;
+        } else if !self.tail_quiet && self.gr_db == 0.0 && self.current_gr_db == 0.0 {
+            self.tail_silent_frames = self.tail_silent_frames.saturating_add(1);
+            if self.tail_silent_frames >= self.lookahead as u32 {
+                self.deque_head = 0;
+                self.deque_tail = 0;
+                self.tail_quiet = true;
+                self.tail_silent_frames = 0;
+            }
+        } else if !self.tail_quiet {
+            self.tail_silent_frames = 0;
+        }
     }
 
     /// Lookahead latency in sample frames (constant across active & bypassed states for PDC).
@@ -483,6 +512,7 @@ impl Limiter {
             BypassStep::Idle => {
                 self.gr_db = 0.0;
                 self.current_gr_db = 0.0;
+                self.observe_tail_silence(dry_in);
                 return delayed_dry;
             }
             BypassStep::SettledBypass => {
@@ -491,6 +521,7 @@ impl Limiter {
                 self.gr_db = 0.0;
                 self.current_gr_db = 0.0;
                 self.bypass.mark_idle();
+                self.observe_tail_silence(dry_in);
                 return delayed_dry;
             }
             BypassStep::Active(w) => w,
@@ -562,6 +593,7 @@ impl Limiter {
             [wet_l, wet_r],
             mix * bypass_w,
         );
+        self.observe_tail_silence(dry_in);
         [out[0] as f32, out[1] as f32]
     }
 }
@@ -592,6 +624,7 @@ impl crate::dsp::StereoEffect for Limiter {
                     w = 0;
                 }
                 *frame = delayed_dry;
+                self.observe_tail_silence(dry_in);
             }
             self.write_idx = w;
             return;
@@ -637,6 +670,14 @@ impl crate::dsp::StereoEffect for Limiter {
     #[inline]
     fn gain_reduction_db(&self) -> Option<f32> {
         Some(Limiter::gain_reduction_db(self))
+    }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.tail_quiet
+            && self.gr_db == 0.0
+            && self.current_gr_db == 0.0
+            && self.bypass.is_settled_for(bypassed)
     }
 }
 

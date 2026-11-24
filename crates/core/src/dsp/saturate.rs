@@ -835,6 +835,16 @@ impl crate::dsp::StereoEffect for Drive {
     fn reset(&mut self) {
         Drive::reset(self);
     }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.bypass.is_settled_for(bypassed)
+            && (bypassed
+                || (self.os.quiet()
+                    && self.dry_align.quiet()
+                    && self.tone_lpf.quiet()
+                    && self.dc_blocker.quiet()))
+    }
 }
 
 #[cfg(test)]
