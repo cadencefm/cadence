@@ -615,10 +615,11 @@ pub fn render_stems_with_samples_report(
             ));
         }
     } else {
+        type StemJobOutcome = (usize, Result<RenderReport>);
         let next_job = AtomicUsize::new(0);
         let jobs_ref = &jobs;
         let samples_ref = &samples;
-        let batches: Vec<Vec<(usize, Result<RenderReport>)>> = std::thread::scope(|scope| {
+        let batches: Vec<Result<Vec<StemJobOutcome>>> = std::thread::scope(|scope| {
             let handles: Vec<_> = (0..worker_count)
                 .map(|_| {
                     let next_job = &next_job;
@@ -646,14 +647,13 @@ pub fn render_stems_with_samples_report(
             handles
                 .into_iter()
                 .map(|h| {
-                    h.join().unwrap_or_else(|_| {
-                        vec![(0, Err(anyhow::anyhow!("Stem export worker panicked")))]
-                    })
+                    h.join()
+                        .map_err(|_| anyhow::anyhow!("Stem export worker panicked"))
                 })
                 .collect()
         });
         for batch in batches {
-            for (idx, res) in batch {
+            for (idx, res) in batch? {
                 if let Some(slot) = outcomes.get_mut(idx) {
                     *slot = Some(res);
                 }

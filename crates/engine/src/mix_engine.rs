@@ -810,7 +810,23 @@ impl MixerEngine {
 
     #[cfg(test)]
     pub(crate) fn adopt(&mut self, score: &ScoreWindow, boundary: bool) {
-        let mut retired = Vec::new();
+        let evicting = self.effects.iter().any(|slot| {
+            slot.id.is_some_and(|id| {
+                !score
+                    .mixer
+                    .channels
+                    .iter()
+                    .take(MAX_MIXER_CHANNELS)
+                    .flat_map(|c| c.inserts.iter())
+                    .chain(score.mixer.master.inserts.iter())
+                    .any(|d| d.id == id && slot.tag() == Some(d.kind.tag()))
+            })
+        });
+        let mut retired = if evicting {
+            Vec::with_capacity(MAX_EFFECT_DEVICES)
+        } else {
+            Vec::new()
+        };
         self.adopt_prepared(score, boundary, &mut [], &mut retired);
     }
 
@@ -839,8 +855,9 @@ impl MixerEngine {
             wanted_count += 1;
         }
 
-        // Pass 1: keep live matching `(id, tag)` slots (resetting on boundary unless a
-        // freshly prepared replacement is provided), and retire removed or re-typed slots.
+        // Pass 1: keep live matching `(id, tag)` slots unless a freshly prepared
+        // replacement is provided (resetting on boundary), and retire removed,
+        // re-typed, or freshly replaced slots.
         for slot in self.effects.iter_mut() {
             let Some(id) = slot.id else {
                 continue;
@@ -848,12 +865,11 @@ impl MixerEngine {
             let matches_wanted = wanted[..wanted_count]
                 .iter()
                 .any(|&(wid, wtag)| wid == Some(id) && slot.tag() == Some(wtag));
-            let has_fresh_replacement = boundary
-                && slot.tag().is_some_and(|tag| {
-                    prepared
-                        .iter()
-                        .any(|p| p.id == id && p.tag == tag && p.effect.is_some())
-                });
+            let has_fresh_replacement = slot.tag().is_some_and(|tag| {
+                prepared
+                    .iter()
+                    .any(|p| p.id == id && p.tag == tag && p.effect.is_some())
+            });
             if matches_wanted && !has_fresh_replacement {
                 if boundary {
                     slot.reset();
@@ -872,7 +888,7 @@ impl MixerEngine {
             }
         }
 
-        // Pass 2: install newly added, kind-swapped, or boundary-replaced effects from `prepared`.
+        // Pass 2: install newly added, kind-swapped, or freshly replaced effects from `prepared`.
         for &(id_opt, tag) in &wanted[..wanted_count] {
             let Some(id) = id_opt else {
                 continue;
@@ -1749,6 +1765,30 @@ fn observe_silent_inserts(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn process_channel_inserts_block(
+    inserts: [Option<u8>; MAX_INSERTS],
+    effects: &mut [EffectSlot],
+    input: Option<&[[f32; 2]]>,
+    inserts_quiet: bool,
+    work: &mut [[f32; 2]],
+    hold_frames: u32,
+    hold_decay: f32,
+    gr_scratch: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+) {
+    if let Some(src) = input {
+        work.copy_from_slice(src);
+        run_inserts_block(inserts, effects, work, hold_frames, hold_decay, gr_scratch);
+    } else if !inserts_quiet {
+        work.fill([0.0; 2]);
+        run_inserts_block(inserts, effects, work, hold_frames, hold_decay, gr_scratch);
+    } else {
+        work.fill([0.0; 2]);
+        observe_silent_inserts(inserts, effects, work.len(), hold_frames, hold_decay);
+    }
+}
+
 #[inline]
 fn apply_pan_lr(input: [f32; 2], pan_lr: [f32; 2]) -> [f32; 2] {
     [
@@ -1915,36 +1955,16 @@ impl MixerEngine {
             &mut scratch.send_amt_buf,
         );
         let plan = self.channels[slot];
-        if has_input {
-            scratch.work[..frames].copy_from_slice(&scratch.buses[index][..frames]);
-            run_inserts_block(
-                plan.inserts,
-                &mut self.effects,
-                &mut scratch.work[..frames],
-                hold_frames,
-                hold_decay,
-                &mut scratch.gr_scratch,
-            );
-        } else if !inserts_quiet {
-            scratch.work[..frames].fill([0.0; 2]);
-            run_inserts_block(
-                plan.inserts,
-                &mut self.effects,
-                &mut scratch.work[..frames],
-                hold_frames,
-                hold_decay,
-                &mut scratch.gr_scratch,
-            );
-        } else {
-            scratch.work[..frames].fill([0.0; 2]);
-            observe_silent_inserts(
-                plan.inserts,
-                &mut self.effects,
-                frames,
-                hold_frames,
-                hold_decay,
-            );
-        }
+        process_channel_inserts_block(
+            plan.inserts,
+            &mut self.effects,
+            has_input.then_some(&scratch.buses[index][..frames]),
+            inserts_quiet,
+            &mut scratch.work[..frames],
+            hold_frames,
+            hold_decay,
+            &mut scratch.gr_scratch,
+        );
 
         let has_duck = duck_dirty[slot];
         let mut inserts_non_finite = false;
@@ -2345,36 +2365,16 @@ impl MixerEngine {
                 &mut scratch.send_amt_buf,
             );
             let plan = self.channels[slot];
-            if has_input {
-                scratch.work[..frames].copy_from_slice(&scratch.returns[index][..frames]);
-                run_inserts_block(
-                    plan.inserts,
-                    &mut self.effects,
-                    &mut scratch.work[..frames],
-                    hold_frames,
-                    hold_decay,
-                    &mut scratch.gr_scratch,
-                );
-            } else if !inserts_quiet {
-                scratch.work[..frames].fill([0.0; 2]);
-                run_inserts_block(
-                    plan.inserts,
-                    &mut self.effects,
-                    &mut scratch.work[..frames],
-                    hold_frames,
-                    hold_decay,
-                    &mut scratch.gr_scratch,
-                );
-            } else {
-                scratch.work[..frames].fill([0.0; 2]);
-                observe_silent_inserts(
-                    plan.inserts,
-                    &mut self.effects,
-                    frames,
-                    hold_frames,
-                    hold_decay,
-                );
-            }
+            process_channel_inserts_block(
+                plan.inserts,
+                &mut self.effects,
+                has_input.then_some(&scratch.returns[index][..frames]),
+                inserts_quiet,
+                &mut scratch.work[..frames],
+                hold_frames,
+                hold_decay,
+                &mut scratch.gr_scratch,
+            );
 
             let has_duck = duck_dirty[slot];
             let mut inserts_non_finite = false;
@@ -2541,36 +2541,16 @@ impl MixerEngine {
             &mut scratch.send_amt_buf,
         );
         let master_plan = self.channels[MASTER];
-        if master_active {
-            scratch.work[..frames].copy_from_slice(&scratch.master[..frames]);
-            run_inserts_block(
-                master_plan.inserts,
-                &mut self.effects,
-                &mut scratch.work[..frames],
-                hold_frames,
-                hold_decay,
-                &mut scratch.gr_scratch,
-            );
-        } else if !master_inserts_quiet {
-            scratch.work[..frames].fill([0.0; 2]);
-            run_inserts_block(
-                master_plan.inserts,
-                &mut self.effects,
-                &mut scratch.work[..frames],
-                hold_frames,
-                hold_decay,
-                &mut scratch.gr_scratch,
-            );
-        } else {
-            scratch.work[..frames].fill([0.0; 2]);
-            observe_silent_inserts(
-                master_plan.inserts,
-                &mut self.effects,
-                frames,
-                hold_frames,
-                hold_decay,
-            );
-        }
+        process_channel_inserts_block(
+            master_plan.inserts,
+            &mut self.effects,
+            master_active.then_some(&scratch.master[..frames]),
+            master_inserts_quiet,
+            &mut scratch.work[..frames],
+            hold_frames,
+            hold_decay,
+            &mut scratch.gr_scratch,
+        );
 
         let has_duck = duck_dirty[MASTER];
         let mut master_non_finite = false;

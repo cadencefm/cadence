@@ -371,7 +371,6 @@ pub(super) struct Shared {
     pub(super) sample_rate: AtomicU32,
     pub(super) input_mode: AtomicU8,
     pub(super) input_monitor_mode: AtomicU8,
-    pub(super) input_monitoring_active: AtomicBool,
     pub(super) capture_phase: AtomicU8,
     pub(super) capture_quantized: AtomicBool,
     pub(super) capture_has_punch_out: AtomicBool,
@@ -450,6 +449,7 @@ pub(super) struct Shared {
     // ── Input-RT written status & live input metering ──
     _pad_input_rt: CacheLineAlign,
     pub(super) input_status: AtomicU8,
+    pub(super) input_monitoring_active: AtomicBool,
     pub(super) input_clipped: AtomicBool,
     pub(super) input_clear_meters: AtomicBool,
     pub(super) input_nonzero_seen: AtomicBool,
@@ -497,6 +497,10 @@ const _: () = {
     assert!(
         std::mem::offset_of!(Shared, input_status) / CACHE_LINE_BYTES
             != std::mem::offset_of!(Shared, step_position) / CACHE_LINE_BYTES
+    );
+    assert!(
+        std::mem::offset_of!(Shared, input_monitoring_active) / CACHE_LINE_BYTES
+            != std::mem::offset_of!(Shared, playing) / CACHE_LINE_BYTES
     );
     assert!(
         std::mem::offset_of!(Shared, input_status) / CACHE_LINE_BYTES
@@ -563,7 +567,6 @@ impl Shared {
             sample_rate: AtomicU32::new(SILENT_RATE),
             input_mode: AtomicU8::new(AudioInputMode::Stereo.to_u8()),
             input_monitor_mode: AtomicU8::new(InputMonitorMode::Off.to_u8()),
-            input_monitoring_active: AtomicBool::new(false),
             capture_phase: AtomicU8::new(CapturePhase::Idle as u8),
             capture_quantized: AtomicBool::new(true),
             capture_has_punch_out: AtomicBool::new(false),
@@ -627,6 +630,7 @@ impl Shared {
             tap_read: AtomicU64::new(0),
             _pad_input_rt: CacheLineAlign,
             input_status: AtomicU8::new(AudioInputStatus::Inactive as u8),
+            input_monitoring_active: AtomicBool::new(false),
             input_clipped: AtomicBool::new(false),
             input_clear_meters: AtomicBool::new(false),
             input_nonzero_seen: AtomicBool::new(false),

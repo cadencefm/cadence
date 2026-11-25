@@ -1,9 +1,8 @@
 //! Zero-allocation stereo [`DelayLine`] (integer, linear, and cubic Hermite reads)
 //! and Cadence's multi-mode [`Delay`] insert processor (`PingPong` & `Stereo`).
 //!
-//! Supports lazy `new_unallocated` / `allocate` (0 heap bytes for unused slots),
-//! mono-seeded L→R→L ping-pong bounce, independent stereo dual-delay mode with
-//! smooth click-free feedback-matrix blending, crossfaded time changes without
+//! Supports mono-seeded L→R→L ping-pong bounce, independent stereo dual-delay mode
+//! with smooth click-free feedback-matrix blending, crossfaded time changes without
 //! pitch chirp, `.max(20.0)` BPM guard, TPT feedback damping, and click-free
 //! bypass crossfade.
 
@@ -36,34 +35,10 @@ impl DelayLine {
         }
     }
 
-    /// Create an unallocated placeholder (0 bytes heap usage until [`allocate`] is called).
-    pub fn unallocated() -> Self {
-        Self {
-            data: Box::new([]),
-            write: 0,
-            valid: 0,
-        }
-    }
-
-    #[inline]
-    pub fn is_allocated(&self) -> bool {
-        !self.data.is_empty()
-    }
-
-    /// Maximum usable delay length in frames (`0` when unallocated).
+    /// Maximum usable delay length in frames.
     #[inline]
     pub fn capacity(&self) -> usize {
         self.data.len().saturating_sub(4)
-    }
-
-    /// Allocate (or reallocate) off the real-time audio thread.
-    pub fn allocate(&mut self, capacity_frames: usize) {
-        let len = capacity_frames.max(4).saturating_add(4);
-        if self.data.len() != len {
-            self.data = vec![[0.0; 2]; len].into_boxed_slice();
-        }
-        self.write = 0;
-        self.valid = 0;
     }
 
     /// O(1) reset: marks historical frames unreadable without zeroing megabytes on the RT thread.
@@ -215,20 +190,9 @@ impl Delay {
         let sr = sanitize_sample_rate(f64::from(sample_rate));
         let secs = sanitize_clamp_f64(max_seconds, 0.1, MAX_DELAY_SECONDS, MAX_DELAY_SECONDS);
         let cap = (sr * secs).ceil() as usize;
-        Self::from_line(sr, DelayLine::new(cap))
-    }
-
-    /// Construct an unallocated delay slot (`0` heap bytes until [`allocate`] is called off-RT),
-    /// keeping unused `MixerEngine` slots memory-free.
-    pub fn new_unallocated(sample_rate: u32) -> Self {
-        let sr = sanitize_sample_rate(f64::from(sample_rate));
-        Self::from_line(sr, DelayLine::unallocated())
-    }
-
-    fn from_line(sr: f64, line: DelayLine) -> Self {
         let xfade_frames = (sr * Self::XFADE_SEC).max(16.0);
         Self {
-            line,
+            line: DelayLine::new(cap),
             sample_rate: sr,
             time_a: 1.0,
             time_b: 1.0,
@@ -250,21 +214,6 @@ impl Delay {
     #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
         self.bypass.is_idle()
-    }
-
-    /// Allocate (or resize) the delay buffer off the real-time audio thread.
-    pub fn allocate(&mut self, max_seconds: f64) {
-        let secs = sanitize_clamp_f64(max_seconds, 0.1, MAX_DELAY_SECONDS, MAX_DELAY_SECONDS);
-        let cap = (self.sample_rate * secs).ceil() as usize;
-        self.line.allocate(cap);
-        self.tail_silent_frames = 0;
-        self.tail_quiet = true;
-        self.has_processed = false;
-    }
-
-    #[inline]
-    pub fn is_allocated(&self) -> bool {
-        self.line.is_allocated()
     }
 
     pub fn reset(&mut self) {
@@ -355,9 +304,6 @@ impl Delay {
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
-        if !self.line.is_allocated() {
-            return dry;
-        }
 
         let (bypass_w, bypass_settled) = match self.bypass.step(bypassed) {
             BypassStep::Idle => {
@@ -472,12 +418,6 @@ impl crate::dsp::StereoEffect for Delay {
             return;
         }
         self.has_processed = true;
-        if !self.line.is_allocated() {
-            for frame in buf.iter_mut() {
-                *frame = sanitize_frame(*frame);
-            }
-            return;
-        }
         if self.bypass.check_idle_bypass(bypassed) {
             self.advance_silent_frames(buf.len(), true);
             for frame in buf.iter_mut() {
@@ -497,7 +437,7 @@ impl crate::dsp::StereoEffect for Delay {
 
     #[inline]
     fn is_quiet(&self, bypassed: bool) -> bool {
-        (!self.line.is_allocated() || self.tail_quiet) && self.bypass.is_settled_for(bypassed)
+        self.tail_quiet && self.bypass.is_settled_for(bypassed)
     }
 
     #[inline]
@@ -575,26 +515,21 @@ mod tests {
     }
 
     #[test]
-    fn unallocated_delay_uses_zero_storage_and_allocates_cleanly() {
-        let mut delay = Delay::new_unallocated(48_000);
-        assert!(!delay.is_allocated());
-        assert_eq!(delay.process([0.5, -0.5], false), [0.5, -0.5]);
-        delay.allocate(1.0);
-        assert!(delay.is_allocated());
-        delay.set_parameters(
-            DelayPatch {
-                mode: DelayMode::PingPong,
-                steps: 0.5,
-                feedback: 0.0,
-                mix: 1.0,
-            },
-            300.0,
-        );
-        // BPM guard protects against bpm = 0.0 / negative / NaN.
-        delay.set_parameters(DelayPatch::default(), 0.0);
-        delay.set_parameters(DelayPatch::default(), f64::NAN);
-        let y = delay.process([0.5, 0.5], false);
-        assert!(y[0].is_finite() && y[1].is_finite());
+    fn delay_guards_invalid_and_extreme_bpm_values() {
+        let mut delay = Delay::with_max_seconds(48_000, 1.0);
+        for bpm in [300.0, 0.0, -40.0, f64::NAN, f64::INFINITY] {
+            delay.set_parameters(
+                DelayPatch {
+                    mode: DelayMode::PingPong,
+                    steps: 0.5,
+                    feedback: 0.3,
+                    mix: 1.0,
+                },
+                bpm,
+            );
+            let y = delay.process([0.5, -0.5], false);
+            assert!(y[0].is_finite() && y[1].is_finite(), "bpm={bpm}: y={y:?}");
+        }
     }
 
     #[test]
@@ -895,10 +830,10 @@ mod tests {
     fn delay_line_read_cubic_channel_matches_read_cubic_across_sample_rates() {
         use std::f64::consts::TAU;
 
-        let empty = DelayLine::unallocated();
-        assert_eq!(empty.read_cubic_channel(4.5, 0), 0.0);
-        assert_eq!(empty.read_cubic_channel(4.5, 1), 0.0);
-        assert_eq!(empty.read_cubic_channel(4.5, 2), 0.0);
+        let fresh = DelayLine::new(16);
+        assert_eq!(fresh.read_cubic_channel(4.5, 0), 0.0);
+        assert_eq!(fresh.read_cubic_channel(4.5, 1), 0.0);
+        assert_eq!(fresh.read_cubic_channel(4.5, 2), 0.0);
 
         for sr in [44_100.0_f64, 48_000.0, 96_000.0, 192_000.0] {
             let cap = (sr * 0.02).ceil() as usize;

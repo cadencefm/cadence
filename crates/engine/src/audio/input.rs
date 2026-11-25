@@ -218,9 +218,11 @@ pub(super) fn process_input_slice<T: InputSample>(
             CapturePhase::Armed | CapturePhase::Recording | CapturePhase::Finishing
         ),
     };
-    shared
-        .input_monitoring_active
-        .store(monitoring, Ordering::Release);
+    if shared.input_monitoring_active.load(Ordering::Relaxed) != monitoring {
+        shared
+            .input_monitoring_active
+            .store(monitoring, Ordering::Release);
+    }
 
     let mut cap_write = shared.capture_write.load(Ordering::Relaxed);
     let cap_read = shared.capture_read.load(Ordering::Acquire);

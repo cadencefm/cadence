@@ -1187,9 +1187,9 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
         }
     });
     assert_eq!(mix.allocated_effect_count(), 1);
-    // Every hot-swap retired the previous effect off-RT rather than dropping on the RT thread.
+    // Every swap with a freshly prepared replacement retired the previous effect off-RT.
     let total_retired: usize = swaps.iter().map(|(_, _, r)| r.len()).sum();
-    assert_eq!(total_retired, EffectKindTag::ALL.len() - 1);
+    assert_eq!(total_retired, EffectKindTag::ALL.len());
     // Drop retired effects off-RT.
     drop(swaps);
 }
@@ -1896,5 +1896,105 @@ fn silent_channel_sleeping_preserves_delay_reverb_limiter_tails_and_gr_stats() {
     assert!(
         max_gr > 0.5 && avg_gr > 0.0 && avg_gr < max_gr,
         "Limiter stats must reflect active GR and silent-block averaging: max={max_gr}, avg={avg_gr}"
+    );
+}
+
+#[test]
+fn adopt_prepared_replaces_live_effect_on_non_boundary_fresh_preparation() {
+    use cadence_core::mixer::{DelayMode, DelayPatch};
+
+    let mut score = stereo_score();
+    score.mixer.channel_mut(1).unwrap().inserts = vec![EffectDevice {
+        id: 902,
+        name: "Reverb".into(),
+        bypassed: false,
+        kind: EffectKind::Reverb(ReverbPatch {
+            decay_seconds: 1.5,
+            mix: 0.8,
+            ..ReverbPatch::default()
+        }),
+    }];
+    score.mixer.channel_mut(2).unwrap().inserts = vec![EffectDevice {
+        id: 901,
+        name: "Delay".into(),
+        bypassed: false,
+        kind: EffectKind::Delay(DelayPatch {
+            mode: DelayMode::Stereo,
+            steps: 0.25, // ~1500 frames @ 48 kHz, 120 BPM
+            feedback: 0.6,
+            mix: 1.0,
+        }),
+    }];
+
+    let mut mix = MixerEngine::new(&score, RATE);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.snap_smoothers();
+
+    // Excite Reverb (Ch1) and Delay (Ch2) so both carry active tails.
+    let mut burst = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    burst[0].fill([0.8, -0.8]);
+    burst[1].fill([0.8, -0.8]);
+    let silent = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    let mut out = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+    for _ in 0..4 {
+        mix.process_block(&burst, 0b11, &[], &[], &mut out);
+    }
+
+    // Supply a freshly prepared replacement ONLY for Reverb (902) with `boundary = false`
+    // (as produced by coalesced remove+re-add or sample-rate rebuilds).
+    let mut prepared = vec![PreparedEffect::new(902, EffectKindTag::Reverb, RATE)];
+    let mut retired = Vec::with_capacity(MAX_EFFECT_DEVICES);
+    assert_no_heap_operations(|| {
+        mix.adopt_prepared(&score, false, &mut prepared, &mut retired);
+    });
+    assert!(
+        prepared[0].effect.is_none(),
+        "fresh non-boundary PreparedEffect must be consumed by adopt_prepared"
+    );
+    assert_eq!(
+        retired.len(),
+        1,
+        "replaced live effect must be moved into pre-sized retired sink"
+    );
+
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.clear_meters(None);
+
+    let rev_slot = mix
+        .effects
+        .iter()
+        .find(|s| s.id == Some(902))
+        .expect("reverb slot");
+    assert!(
+        rev_slot.is_quiet(),
+        "freshly replaced Reverb slot must be quiet immediately after non-boundary swap"
+    );
+    let delay_slot = mix
+        .effects
+        .iter()
+        .find(|s| s.id == Some(901))
+        .expect("delay slot");
+    assert!(
+        !delay_slot.is_quiet(),
+        "unchanged Delay slot must preserve live tail across non-boundary swap"
+    );
+
+    // Feed silence: replaced Reverb (Ch1) must emit zero stale tail while untouched Delay (Ch2)
+    // continues emitting its scheduled echoes cleanly.
+    let mut echo_peak = 0.0_f32;
+    for _ in 0..64 {
+        mix.process_block(&silent, 0, &[], &[], &mut out);
+        for &[l, r] in &out {
+            echo_peak = echo_peak.max(l.abs()).max(r.abs());
+        }
+    }
+    let ch1_meter = meter(&mix, ChannelRef::Channel(1));
+    assert!(
+        ch1_meter.output_peak_hold[0] == 0.0 && ch1_meter.output_peak_hold[1] == 0.0,
+        "replaced Reverb channel must emit zero stale tail, got {ch1_meter:?}"
+    );
+    assert!(
+        echo_peak > 0.05,
+        "untouched Delay must still emit echoes after sibling replacement (peak={echo_peak})"
     );
 }

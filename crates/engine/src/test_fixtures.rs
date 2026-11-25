@@ -714,24 +714,27 @@ pub(crate) fn kitchen_sink_fixture(sample_rate: u32) -> KitchenSinkFixture {
     ];
 
     // Patterns:
-    // 1: Drum kit pattern (Kick + OpenHat choked by ClosedHat) using exact MIDI degrees via root 48.
+    // 1: Drum kit pattern (Kick + OpenHat choked by ClosedHat) mapped via `Project::midi_to_degree`.
+    let (bd_deg, bd_acc) = p.midi_to_degree(drum_midi::BD);
+    let (oh_deg, oh_acc) = p.midi_to_degree(drum_midi::OH);
+    let (ch_deg, ch_acc) = p.midi_to_degree(drum_midi::CH);
     let mut kit_steps = vec![Step::default(); 16];
     // Kick hits on 0, 4, 8, 12; OpenHat on 2, 10; ClosedHat choking OpenHat on 3, 11.
     for &s in &[0usize, 4, 8, 12] {
         kit_steps[s] = Step {
             active: true,
-            degree: -7, // 48 - 12 = 36 (BD) in major scale: -7 steps = -12 semitones
+            degree: bd_deg,
+            accidental: bd_acc,
             velocity: 0.95,
             gate: 0.5,
             ..Step::default()
         };
     }
     for &s in &[2usize, 10] {
-        // 48 - 2 = 46 (OH): degree -1 with accidental 0 or -1 -> use chromatic ChordTone / degree
         kit_steps[s] = Step {
             active: true,
-            degree: 0,
-            accidental: 0,
+            degree: oh_deg,
+            accidental: oh_acc,
             velocity: 0.8,
             gate: 0.5,
             ..Step::default()
@@ -740,8 +743,8 @@ pub(crate) fn kitchen_sink_fixture(sample_rate: u32) -> KitchenSinkFixture {
     for &s in &[3usize, 11] {
         kit_steps[s] = Step {
             active: true,
-            degree: -3,
-            accidental: -1,
+            degree: ch_deg,
+            accidental: ch_acc,
             velocity: 0.85,
             gate: 0.25,
             ..Step::default()
@@ -989,6 +992,15 @@ pub(crate) fn kitchen_sink_fixture(sample_rate: u32) -> KitchenSinkFixture {
     let score = p
         .compile_with_flags(&flags)
         .expect("synthetic kitchen_sink_fixture must compile");
+    for required_midi in [drum_midi::BD, drum_midi::OH, drum_midi::CH] {
+        assert!(
+            score
+                .events
+                .iter()
+                .any(|ev| ev.inst_idx == 0 && ev.part_id == Some(1) && ev.midi == required_midi),
+            "kitchen_sink_fixture drum kit must emit MIDI {required_midi} events"
+        );
+    }
     let samples = vec![(module_sample_key(4, 1, 1), sample)];
     KitchenSinkFixture {
         project: p,

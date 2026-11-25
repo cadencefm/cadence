@@ -448,7 +448,11 @@ impl AudioTapHandle {
                 .tap_read
                 .store(read.wrapping_add(available as u64), Ordering::Release);
         }
-        self.shared.tap_dropped.swap(0, Ordering::Relaxed)
+        if self.shared.tap_dropped.load(Ordering::Relaxed) != 0 {
+            self.shared.tap_dropped.swap(0, Ordering::Relaxed)
+        } else {
+            0
+        }
     }
 
     /// Disarm the lock-free tap ring so the audio callback does zero tap work.
@@ -1553,7 +1557,11 @@ impl AudioRuntime {
                 .capture_read
                 .store(read.wrapping_add(available as u64), Ordering::Release);
         }
-        let dropped = self.shared.capture_dropped.swap(0, Ordering::Relaxed);
+        let dropped = if self.shared.capture_dropped.load(Ordering::Relaxed) != 0 {
+            self.shared.capture_dropped.swap(0, Ordering::Relaxed)
+        } else {
+            0
+        };
         (available, dropped)
     }
 

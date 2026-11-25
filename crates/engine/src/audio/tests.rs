@@ -4244,16 +4244,7 @@ fn kitchen_sink_sleeping_matches_always_awake_across_audio_meters_and_gr() {
                 engine.publish_score_update(hotswap_score.clone());
                 swapped = true;
             }
-            if !disable_sleep && swapped {
-                // Steady-state blocks after hot-swap adoption must perform zero RT heap ops.
-                if guard_blocks > 2 {
-                    crate::mix_engine::tests::assert_no_heap_operations(|| {
-                        engine.render_block(&mut chunk);
-                    });
-                } else {
-                    engine.render_block(&mut chunk);
-                }
-            } else if !disable_sleep {
+            if !disable_sleep {
                 crate::mix_engine::tests::assert_no_heap_operations(|| {
                     engine.render_block(&mut chunk);
                 });
@@ -4276,12 +4267,10 @@ fn kitchen_sink_sleeping_matches_always_awake_across_audio_meters_and_gr() {
     let (awake_audio, awake_ch, awake_fx) = run_engine(true);
 
     assert_eq!(sleep_audio.len(), awake_audio.len());
-    let mut max_err = 0.0_f32;
     let mut peak = 0.0_f32;
     for (i, (&s, &a)) in sleep_audio.iter().zip(awake_audio.iter()).enumerate() {
         assert!(s[0].is_finite() && s[1].is_finite());
         let err = (s[0] - a[0]).abs().max((s[1] - a[1]).abs());
-        max_err = max_err.max(err);
         peak = peak.max(s[0].abs()).max(s[1].abs());
         assert!(
             err < 1e-5,
@@ -4343,7 +4332,6 @@ fn kitchen_sink_sleeping_matches_always_awake_across_audio_meters_and_gr() {
             a.avg_gr_db
         );
     }
-    let _ = max_err;
 }
 
 #[test]

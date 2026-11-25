@@ -28,31 +28,28 @@ enum ContractEffect {
     Limiter(Box<Limiter>),
 }
 
+macro_rules! dispatch_effect {
+    ($self:expr, $fx:ident => $body:expr) => {
+        match $self {
+            Self::Delay($fx) => $body,
+            Self::Reverb($fx) => $body,
+            Self::Eq($fx) => $body,
+            Self::Chorus($fx) => $body,
+            Self::Drive($fx) => $body,
+            Self::Filter($fx) => $body,
+            Self::Compressor($fx) => $body,
+            Self::Limiter($fx) => $body,
+        }
+    };
+}
+
 impl StereoEffect for ContractEffect {
     fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
-        match self {
-            Self::Delay(fx) => fx.process(input, bypassed),
-            Self::Reverb(fx) => fx.process(input, bypassed),
-            Self::Eq(fx) => fx.process(input, bypassed),
-            Self::Chorus(fx) => fx.process(input, bypassed),
-            Self::Drive(fx) => fx.process(input, bypassed),
-            Self::Filter(fx) => fx.process(input, bypassed),
-            Self::Compressor(fx) => fx.process(input, bypassed),
-            Self::Limiter(fx) => fx.process(input, bypassed),
-        }
+        dispatch_effect!(self, fx => fx.process(input, bypassed))
     }
 
     fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
-        match self {
-            Self::Delay(fx) => fx.process_block(buf, bypassed),
-            Self::Reverb(fx) => fx.process_block(buf, bypassed),
-            Self::Eq(fx) => fx.process_block(buf, bypassed),
-            Self::Chorus(fx) => fx.process_block(buf, bypassed),
-            Self::Drive(fx) => fx.process_block(buf, bypassed),
-            Self::Filter(fx) => fx.process_block(buf, bypassed),
-            Self::Compressor(fx) => fx.process_block(buf, bypassed),
-            Self::Limiter(fx) => fx.process_block(buf, bypassed),
-        }
+        dispatch_effect!(self, fx => fx.process_block(buf, bypassed))
     }
 
     fn process_block_with_gr(
@@ -61,81 +58,27 @@ impl StereoEffect for ContractEffect {
         bypassed: bool,
         gr_out: &mut [f32],
     ) -> bool {
-        match self {
-            Self::Delay(fx) => fx.process_block_with_gr(buf, bypassed, gr_out),
-            Self::Reverb(fx) => fx.process_block_with_gr(buf, bypassed, gr_out),
-            Self::Eq(fx) => fx.process_block_with_gr(buf, bypassed, gr_out),
-            Self::Chorus(fx) => fx.process_block_with_gr(buf, bypassed, gr_out),
-            Self::Drive(fx) => fx.process_block_with_gr(buf, bypassed, gr_out),
-            Self::Filter(fx) => fx.process_block_with_gr(buf, bypassed, gr_out),
-            Self::Compressor(fx) => fx.process_block_with_gr(buf, bypassed, gr_out),
-            Self::Limiter(fx) => fx.process_block_with_gr(buf, bypassed, gr_out),
-        }
+        dispatch_effect!(self, fx => fx.process_block_with_gr(buf, bypassed, gr_out))
     }
 
     fn reset(&mut self) {
-        match self {
-            Self::Delay(fx) => fx.reset(),
-            Self::Reverb(fx) => fx.reset(),
-            Self::Eq(fx) => fx.reset(),
-            Self::Chorus(fx) => fx.reset(),
-            Self::Drive(fx) => fx.reset(),
-            Self::Filter(fx) => fx.reset(),
-            Self::Compressor(fx) => fx.reset(),
-            Self::Limiter(fx) => fx.reset(),
-        }
+        dispatch_effect!(self, fx => fx.reset())
     }
 
     fn latency_frames(&self) -> usize {
-        match self {
-            Self::Delay(fx) => fx.latency_frames(),
-            Self::Reverb(fx) => fx.latency_frames(),
-            Self::Eq(fx) => fx.latency_frames(),
-            Self::Chorus(fx) => fx.latency_frames(),
-            Self::Drive(fx) => fx.latency_frames(),
-            Self::Filter(fx) => fx.latency_frames(),
-            Self::Compressor(fx) => fx.latency_frames(),
-            Self::Limiter(fx) => fx.latency_frames(),
-        }
+        dispatch_effect!(self, fx => fx.latency_frames())
     }
 
     fn gain_reduction_db(&self) -> Option<f32> {
-        match self {
-            Self::Delay(fx) => StereoEffect::gain_reduction_db(fx.as_ref()),
-            Self::Reverb(fx) => StereoEffect::gain_reduction_db(fx.as_ref()),
-            Self::Eq(fx) => StereoEffect::gain_reduction_db(fx.as_ref()),
-            Self::Chorus(fx) => StereoEffect::gain_reduction_db(fx.as_ref()),
-            Self::Drive(fx) => StereoEffect::gain_reduction_db(fx.as_ref()),
-            Self::Filter(fx) => StereoEffect::gain_reduction_db(fx.as_ref()),
-            Self::Compressor(fx) => StereoEffect::gain_reduction_db(fx.as_ref()),
-            Self::Limiter(fx) => StereoEffect::gain_reduction_db(fx.as_ref()),
-        }
+        dispatch_effect!(self, fx => StereoEffect::gain_reduction_db(fx.as_ref()))
     }
 
     fn is_quiet(&self, bypassed: bool) -> bool {
-        match self {
-            Self::Delay(fx) => fx.is_quiet(bypassed),
-            Self::Reverb(fx) => fx.is_quiet(bypassed),
-            Self::Eq(fx) => fx.is_quiet(bypassed),
-            Self::Chorus(fx) => fx.is_quiet(bypassed),
-            Self::Drive(fx) => fx.is_quiet(bypassed),
-            Self::Filter(fx) => fx.is_quiet(bypassed),
-            Self::Compressor(fx) => fx.is_quiet(bypassed),
-            Self::Limiter(fx) => fx.is_quiet(bypassed),
-        }
+        dispatch_effect!(self, fx => fx.is_quiet(bypassed))
     }
 
     fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
-        match self {
-            Self::Delay(fx) => fx.advance_silent_frames(frames, bypassed),
-            Self::Reverb(fx) => fx.advance_silent_frames(frames, bypassed),
-            Self::Eq(fx) => fx.advance_silent_frames(frames, bypassed),
-            Self::Chorus(fx) => fx.advance_silent_frames(frames, bypassed),
-            Self::Drive(fx) => fx.advance_silent_frames(frames, bypassed),
-            Self::Filter(fx) => fx.advance_silent_frames(frames, bypassed),
-            Self::Compressor(fx) => fx.advance_silent_frames(frames, bypassed),
-            Self::Limiter(fx) => fx.advance_silent_frames(frames, bypassed),
-        }
+        dispatch_effect!(self, fx => fx.advance_silent_frames(frames, bypassed))
     }
 }
 
