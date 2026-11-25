@@ -1,8 +1,8 @@
-# Chapter 6 · Audio Devices, Live Recording & Hardware MIDI
+# Chapter 6 · Audio Devices, Recording & Hardware MIDI
 
 > Previous: [Project Macros & Modulation](05-macros-and-modulation.md) · **Chapter 6** · Next: [Live Performance & Armed Takes](07-performing-and-takes.md)
 
-Cadence puts your audio interface, live 24-bit audio recording, hardware MIDI controllers, and global studio settings inside two dedicated, zero-friction surfaces: the unified **`Devices` (`Audio | MIDI`)** deck (`gd` / `Ctrl+d`) and **Global Settings** (`g,` / `Ctrl+,`), both persisted cleanly to your user `config.json`.
+Cadence puts your audio interface, 24-bit audio recording, hardware MIDI controllers, and global studio settings inside two dedicated, zero-friction surfaces: the unified **`Devices` (`Audio | MIDI`)** deck (`gd` / `Ctrl+d`) and **Global Settings** (`g,` / `Ctrl+,`), both persisted cleanly to your user `config.json`.
 
 ---
 
@@ -10,13 +10,13 @@ Cadence puts your audio interface, live 24-bit audio recording, hardware MIDI co
 
 Press **`gd`** or **`Ctrl+d`** (or run **`:audio`** to open directly on the `Audio` tab) to configure hardware audio output, input capture, latency, and engine health without restarting Cadence. Switch between the **`Audio`** and **`MIDI`** tabs anytime with **`H`/`L`**.
 
-![Afterglow Devices Audio tab showing audio interface, live stereo input meters, CPU load, and engine recovery controls](../screenshots/12-devices-audio.png)
+![Afterglow Devices Audio tab showing audio interface, stereo input meters, CPU load, and engine recovery controls](../screenshots/12-devices-audio.png)
 
-### Live Engine Health & Active Stream Panel
+### Engine Health & Active Stream Panel
 The right-hand health panel monitors your real-time audio callback continuously:
-- **`ENGINE HEALTH`:** Live callback **`AUDIO CPU`** load and peak CPU marker, stream status (`RUNNING`, `SILENT`, `OVERLOADED`, `FAILED`), and **`XRUNS`** buffer overrun counter.
+- **`ENGINE HEALTH`:** Callback **`AUDIO CPU`** load and peak CPU marker, stream status (`RUNNING`, `SILENT`, `OVERLOADED`, `FAILED`), and **`XRUNS`** buffer overrun counter.
 - **`ACTIVE STREAM`:** Active hardware device, sample rate, callback buffer size + exact buffer latency (`ms`), sample format (`32-bit float`), and channel count.
-- **`AUDIO INPUT`:** Live stereo L/R input peak and peak-hold meters (`dBFS`), `MON` / `ACTIVE` / `CLIP` / `SILENCE` indicators, active routing mode, and estimated round-trip latency (`ms`).
+- **`AUDIO INPUT`:** Stereo L/R input peak and peak-hold meters (`dBFS`), `MON` / `ACTIVE` / `CLIP` / `SILENCE` indicators, active routing mode, and estimated round-trip latency (`ms`).
 
 ### Audio Configuration Rows (`j`/`k` navigate · `w`/`b` jump groups)
 
@@ -28,7 +28,7 @@ The right-hand health panel monitors your real-time audio callback continuously:
 | | **`Cue Out`** | Reserved device selector for a future independent cue bus (`Off` by default). |
 | **`AUDIO INPUT & RECORDING`** | **`Input`** | `None` (no OS microphone/input stream opened) or any detected hardware audio input. Changing input settings never interrupts active output playback. |
 | | **`Input Mode`** | Channel routing before metering and capture: **`Stereo (1+2)`**, **`Mono (Ch 1)`**, or **`Mono (Ch 2)`**. |
-| | **`Input Monitor`** | Software live monitoring policy: **`Off`** *(default — prevents speaker/mic feedback loops)*, **`Auto (Armed)`**, or **`On`** (also cycled globally anytime with **`ti`**; lights the top Chrome `● IN MON` badge when active). |
+| | **`Input Monitor`** | Software monitoring policy: **`Off`** *(default — prevents speaker/mic feedback loops)*, **`Auto (Armed)`**, or **`On`** (also cycled globally anytime with **`ti`**; lights the top Chrome `● IN MON` badge when active). |
 | | **`Latency Trim`** | Manual recording alignment offset (`-250.0..=+250.0 ms`, `Alt+h`/`l` fine `±1 ms`, `Enter` exact `ValueInput`, `Alt+Backspace` resets to `0.0 ms`) applied on top of measured hardware round-trip buffer latency. |
 | **`ENGINE & RECOVERY`** | **`Audio Panic`** | Immediately silences all ringing voices, synths, and FX tails and clears any overload latch (`Enter` or `:panic` / `:audio panic`). |
 | | **`Restart Audio`** | Reopens the active hardware audio stream with your current device settings (`Enter` or `:audio restart`). |
@@ -50,12 +50,12 @@ cargo run --release -- --project examples/demo/project.json --silent
 
 ---
 
-## 2. Live 24-Bit WAV Audio Recording (`ta` / `tA` / `ti` / `:rec`)
+## 2. 24-Bit WAV Audio Recording (`ta` / `tA` / `ti` / `:rec`)
 
 Record vocals, hardware synths, guitars, drum machines, or external percussion straight into Cadence as **24-bit stereo WAV** files wired automatically into a portable `Sampler` Rack instrument, Part, and Arrangement placement:
 
-1. **Select & check your input in `Devices · Audio` (`Ctrl+d` / `:audio`):** Pick your `Input` device and `Input Mode` (`Stereo (1+2)` / `Mono (Ch 1)` / `Mono (Ch 2)`), watch the live stereo input meters to set clean preamp gain without clipping, and adjust `Latency Trim` if needed. If your hardware input and output run at different sample rates, Cadence converts the stream automatically.
-2. **Monitor safely (`ti`):** Press **`ti`** from any deck (or run **`:rec monitor off|auto|on`**) to cycle live input monitoring (`Off` by default to prevent acoustic feedback).
+1. **Select & check your input in `Devices · Audio` (`Ctrl+d` / `:audio`):** Pick your `Input` device and `Input Mode` (`Stereo (1+2)` / `Mono (Ch 1)` / `Mono (Ch 2)`), watch the stereo input meters to set clean preamp gain without clipping, and adjust `Latency Trim` if needed. If your hardware input and output run at different sample rates, Cadence converts the stream automatically.
+2. **Monitor safely (`ti`):** Press **`ti`** from any deck (or run **`:rec monitor off|auto|on`**) to cycle input monitoring (`Off` by default to prevent acoustic feedback).
 3. **Record immediately (`ta`) or open the Record Audio dialog (`tA`):**
    - **`ta`** starts/stops capture immediately using your current recording settings (**`:rec`**, **`:rec start [NAME]`**, **`:rec stop`**, **`:rec cancel`**).
    - **`tA`** (or **`:rec dialog`**) opens the **Record Audio** workflow dialog to choose:
@@ -68,7 +68,7 @@ Record vocals, hardware synths, guitars, drum machines, or external percussion s
 
 ## 3. `Devices · MIDI` Tab (`H`/`L`, `M`, `R`)
 
-Cadence treats hardware MIDI controllers as first-class instruments—with hot-plugging, 1-key MIDI Learn, live Note+CC recording, soft-pickup takeover, Focused Smart Macros, and bi-directional LED/OLED feedback.
+Cadence treats hardware MIDI controllers as first-class instruments—with hot-plugging, 1-key MIDI Learn, real-time Note+CC recording, soft-pickup takeover, Focused Smart Macros, and bi-directional LED/OLED feedback.
 
 ```sh
 cargo run --release -- --list-midi
@@ -76,9 +76,9 @@ cargo run --release -- --project examples/demo/project.json \
   --midi-in "MiniLab" --midi-out "MiniLab"
 ```
 
-![Afterglow Devices MIDI tab showing Arturia MiniLab 3 DAW profile, RGB performance pads, Focused Smart Macros, live MIDI monitor, and mappings](../screenshots/13-devices-midi.png)
+![Afterglow Devices MIDI tab showing Arturia MiniLab 3 DAW profile, RGB performance pads, Focused Smart Macros, MIDI monitor, and mappings](../screenshots/13-devices-midi.png)
 
-The **`MIDI`** tab presents **Performance Pads** (live RGB mirrors), **Project + Smart Macros (`Knobs 1–8`)**, vertical **`DEVICE & PROFILE`** rows (`IN`, `OUT`, `Profile`, `Pads`, `Pickup`) above **`MAPPINGS`**, and a **`LIVE MIDI MONITOR`** log on the right:
+The **`MIDI`** tab presents **Performance Pads** (RGB mirrors), **Project + Smart Macros (`Knobs 1–8`)**, vertical **`DEVICE & PROFILE`** rows (`IN`, `OUT`, `Profile`, `Pads`, `Pickup`) above **`MAPPINGS`**, and a **`LIVE MIDI MONITOR`** log on the right:
 
 | Keys in `Devices · MIDI` | Ex Command | Action |
 |---|---|---|
@@ -88,7 +88,7 @@ The **`MIDI`** tab presents **Performance Pads** (live RGB mirrors), **Project +
 | `Enter` / `M` | `:midi learn` | Open port/profile picker, toggle Pickup, or arm/re-learn selected mapping |
 | `a` · `v` · `r` | `:midi rescan` | Add mapping (`a`) · toggle invert (`v`) · rescan OS MIDI ports (`r`) |
 | `x` / `X` | `:midi unlearn` / `:midi clear` | Delete focused user mapping (`x`) · clear all user mappings (`X`, confirm-guarded) |
-| `R` | `:midi rec` | Arm/disarm live MIDI Note, Chord & CC automation recording |
+| `R` | `:midi rec` | Arm/disarm MIDI Note, Chord & CC automation recording |
 | `Ctrl+s` | — | Persist Audio & MIDI ports, profile, pad mode, pickup, and learned mappings to `config.json` |
 
 ### 1-Key MIDI Learn (`M`) & Unlearn (`M` then `x`)
@@ -100,7 +100,7 @@ From anywhere in Cadence, focus a target and press **`M`**:
 
 Cadence arms Learn (and displays `MIDI LEARN` on hardware OLEDs). Move any CC knob, fader, Pitch Bend, or Note pad to bind it immediately and save it globally. Press **`M` then `x`** to unlearn the focused target, or **`Esc`** to cancel.
 
-### Live MIDI Note, Chord & CC Automation Recording (`R`)
+### MIDI Note, Chord & CC Automation Recording (`R`)
 Press **`R`** (or `:midi rec`, or your hardware **Record** MMC button) to arm recording:
 - **While Stopped (Step Entry):** Play single notes or polyphonic chords (up to 6 tones) on your MIDI keyboard to write directly into the selected literal `Notes` pattern and advance step-by-step.
 - **While Playing (`REC · NOTE+CC`):**
@@ -113,7 +113,7 @@ Press **`R`** (or `:midi rec`, or your hardware **Record** MMC button) to arm re
 - **3 Built-In Profiles** (export/customize any profile with `:midi profile-save my-ctrl.json` and `:midi profile-load my-ctrl.json`):
   1. **`Generic MIDI` (`generic`):** Clean MIDI Learn canvas + MMC + `StandardCcNote` feedback.
   2. **`Standard CC` (`standard_cc`):** Knobs CC 74/71/72/93/73/75/79/78 → Focused Macros 1–8; Faders CC 22–25 → Lanes 1–3 + Master; CCs 105–109 → Loop/Stop/Play/Rec/Tap.
-  3. **`Arturia MiniLab 3 (DAW)` (`minilab3_daw`):** Switch the MiniLab 3 to DAW mode (`Shift+Pad 3`) for instant 8-knob Focused Macros, 4 channel/master faders, endless main-encoder scroll/click, Shift+Pads 4–8 transport, **2-line OLED feedback** (live parameter names, native units, value bars, Learn/Rec banners), and **RGB pad & transport LED feedback** via `ArturiaDaw` SysEx.
+  3. **`Arturia MiniLab 3 (DAW)` (`minilab3_daw`):** Switch the MiniLab 3 to DAW mode (`Shift+Pad 3`) for instant 8-knob Focused Macros, 4 channel/master faders, endless main-encoder scroll/click, Shift+Pads 4–8 transport, **2-line OLED feedback** (parameter names, native units, value bars, Learn/Rec banners), and **RGB pad & transport LED feedback** via `ArturiaDaw` SysEx.
 
 ---
 
@@ -124,9 +124,9 @@ Press **`g,`** (or **`Ctrl+,`**, or run **`:settings`**) to open **Settings & Li
 ![Afterglow Settings overlay rendered in the Midnight Neon GPU theme](../screenshots/17-settings-neon.png)
 
 ### Built-In Semantic GPU Themes
-Switch **`GPU Theme`** live with zero restart—every deck, Bezier cable, 32-bit float meter, oscilloscope, visualizer, and HUD updates on the very next frame (zero hardcoded colors exist outside the theme palette):
+Switch **`GPU Theme`** instantly with zero restart—every deck, Bezier cable, 32-bit float meter, oscilloscope, visualizer, and HUD updates on the very next frame (zero hardcoded colors exist outside the theme palette):
 - **`Cadence Dark`** *(default)* — balanced charcoal studio canvas with high-contrast cyan, amber, and violet accents for extended sessions.
-- **`Midnight Neon`** *(shown above)* — deep obsidian background with luminous neon-cyan, electric-magenta, and acid-green highlights tailored for dark stages and live clubs.
+- **`Midnight Neon`** *(shown above)* — deep obsidian background with luminous neon-cyan, electric-magenta, and acid-green highlights tailored for dark stages and clubs.
 - **`Studio Light`** *(see [Chapter 1](01-quick-tour.md))* — crisp daylight workstation theme engineered for sunlit studios and projectors.
 
 ### Complete Settings Reference
@@ -135,7 +135,7 @@ Switch **`GPU Theme`** live with zero restart—every deck, Bezier cable, 32-bit
 |---|---|---|
 | **`APPEARANCE`** | **`GPU Theme`** | `Cadence Dark` · `Midnight Neon` · `Studio Light` |
 | **`WORKSPACE`** | **`Startup Layout`** · **`Output Monitor`** · **`Contextual Key Hints`** | Default launch layout (`z1–z4`), visibility of the 32-bit float Output strip (`go`), and footer key-hint bar |
-| **`TRANSPORT`** | **`Viewport Follow`** · **`Auto-Record Takes`** | Default follow mode (`tf`); opt-in automatic take arming on `Space` (default **Off** so everyday playback stays lean; **`tr`** toggles live) |
+| **`TRANSPORT`** | **`Viewport Follow`** · **`Auto-Record Takes`** | Default follow mode (`tf`); opt-in automatic take arming on `Space` (default **Off** so everyday playback stays lean; **`tr`** toggles anytime) |
 | **`NEW PROJECT`** | **`Default Tempo`** · **`Default Key`** · **`Default Scale`** | Starting BPM (`20–300`), root note (`C1–C6`), and scale (all 13 named scales) for new blank projects |
 | **`LIVE TIMING (PROJECT)`** | **`Launch Quantize`** · **`Live Edit Timing`** · **`Late Tolerance`** | Project-level launch boundary (`c` picks a `Cycle` pattern), immediate vs. quantized live edits (`tE`), and `0–4` step late-hit grace window |
 | **`ASSET DIRECTORIES`** | **`Sample Directories (sample_dirs)`** · **`Preset Directories (preset_dirs)`** | Persistent library roots across sessions: **`a`/`Enter`** types a path, **`F`** opens a native OS folder picker, **`x`** removes a directory, and saving automatically rescans the Sample Browser and Preset Catalog |

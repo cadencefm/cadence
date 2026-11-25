@@ -6,7 +6,7 @@
 
 ![Iron Circuit Interactive 5-Column Signal Graph](../../docs/screenshots/02-signal-graph.png)
 
-## Play & Perform It Live
+## Play & Perform
 
 ```sh
 # Open Iron Circuit in Cadence's GPU instrument
@@ -21,10 +21,10 @@ cargo run --release --example build-iron-circuit -- --analyze
 ```
 
 Once open:
-- Press **`Space`** to play from Bar 1, or jump live on bar boundaries with **`⌥1`** (`Boot`) through **`⌥6`** (`Surge & Out`).
-- Press **`gG`** then **`zz`** to inspect the live nested `Group → Group` Signal Graph (`808 Kit` + `909 Kit` → `Percussion` → `Rhythm` ← `Fold Bass`, `Synths` sidechained off `808 Kick`, and 3 dub/room returns).
-- Press **`gb`** then **`zz`** for the 7-lane **Launchpad Matrix**, or **`gk`** to perform with all 8 **Project Macros (`M1..M8`)** live!
-- Select the `TR-808` (16 zones) or `TR-909` (11 zones) lane and press **`gi`** to open the **Instrument Deck** (`Rack` Panel, Patchbay & Zones Inspector with live P-locks and modulation curves), or press **`gm`** for the Mixer Console & `Pad Gate` rhythmic `Filter`.
+- Press **`Space`** to play from Bar 1, or jump on bar boundaries with **`⌥1`** (`Boot`) through **`⌥6`** (`Surge & Out`).
+- Press **`gG`** then **`zz`** to inspect the nested `Group → Group` Signal Graph (`808 Kit` + `909 Kit` → `Percussion` → `Rhythm` ← `Fold Bass`, `Synths` sidechained off `808 Kick`, and 3 dub/room returns).
+- Press **`gb`** then **`zz`** for the 7-lane **Launchpad Matrix**, or **`gk`** to perform with all 8 **Project Macros (`M1..M8`)**!
+- Select the `TR-808` (16 zones) or `TR-909` (11 zones) lane and press **`gi`** to open the **Instrument Deck** (`Rack` Panel, Patchbay & Zones Inspector with P-locks and modulation curves), or press **`gm`** for the Mixer Console & `Pad Gate` rhythmic `Filter`.
 
 ## Musical Structure (6 Sections × 8 Bars)
 

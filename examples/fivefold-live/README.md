@@ -1,22 +1,22 @@
 # Fivefold Live
 
-**60-bar arrangement (62-bar live take) · 136 BPM · D natural minor · ~1:49**
+**60-bar arrangement (62-bar recorded take) · 136 BPM · D natural minor · ~1:49**
 
-*Fivefold Current* played live over its own arrangement from the computer keyboard. The song loops one section at a time. The number row moves it to the next section, and each move lands cleanly at the end of the current pass. Lane keys launch clap builds and a noise riser over the arrangement and release them again. In the breakdown, a live edit to the shared 64-step harmony lands on the next bar and shifts the acid lead, stereo air layer, and rolling bass together — and its `:undo` lands on a bar too.
+*Fivefold Current* played live over its own arrangement from the computer keyboard. The song loops one section at a time. The number row moves it to the next section, and each move lands cleanly at the end of the current pass. Lane keys launch clap builds and a noise riser over the arrangement and release them again. In the breakdown, an edit to the shared 64-step harmony lands on the next bar and shifts the acid lead, stereo air layer, and rolling bass together — and its `:undo` lands on a bar too.
 
 [The project](project.json) · [The recorded take](takes/set.take.jsonl) · [Setup keys](setup.keys.jsonl) · [Performance keys](perform.keys.jsonl) · [Compose script](compose.py)
 
-## Play & Perform It Live
+## Play & Perform
 
 ```sh
 # Open Fivefold Live in Cadence
 cargo run --release -- --project examples/fivefold-live/project.json --sample-roots-only
 
-# Replay the scripted live performance and regenerate takes/set.take.jsonl
+# Replay the scripted performance and regenerate takes/set.take.jsonl
 cargo build --release --locked
 python3 examples/fivefold-live/compose.py
 
-# Render the recorded live take (62 bars, 17 live changes) to 48 kHz stereo WAV
+# Render the recorded take (62 bars, 17 performance changes) to 48 kHz stereo WAV
 target/release/cadence --project examples/fivefold-live/project.json --sample-roots-only \
   --take examples/fivefold-live/takes/set.take.jsonl \
   --render fivefold-live-take.wav --render-report fivefold-live-take.report.json
@@ -28,7 +28,7 @@ target/release/cadence --project examples/fivefold-live/project.json --sample-ro
 
 ## The project
 
-Fivefold Current's arrangement spans nine sections over 60 bars. [setup.keys.jsonl](setup.keys.jsonl) sets the `Lift / Noise` part to `restart` phase on the `Lift` lane (`i1`) and sets `:quantize edits launch` so live song edits land on the next bar boundary.
+Fivefold Current's arrangement spans nine sections over 60 bars. [setup.keys.jsonl](setup.keys.jsonl) sets the `Lift / Noise` part to `restart` phase on the `Lift` lane (`i1`) and sets `:quantize edits launch` so song edits during playback land on the next bar boundary.
 
 The number row addresses the sections:
 
@@ -59,7 +59,7 @@ Each lane holds its arrangement parts in song order (plus any configured phase o
 
 ## The performance
 
-`tf` makes the view follow playback, `tl` loops `Seed` (the section under the cursor), and `tr` arms take recording. `gj` (or `Ctrl+Shift+j`) turns the keyboard into Jam mode, and the armed take recorder captures every gesture into a take. Every gesture happens mid-bar: a section key lands at the end of the current pass; lane launches, releases, mutes, and live edits land on the next downbeat.
+`tf` makes the view follow playback, `tl` loops `Seed` (the section under the cursor), and `tr` arms take recording. `gj` (or `Ctrl+Shift+j`) turns the keyboard into Jam mode, and the armed take recorder captures every gesture into a take. Every gesture happens mid-bar: a section key lands at the end of the current pass; lane launches, releases, mutes, and edits land on the next downbeat.
 
 | Bar | Keys | What happens |
 | --- | --- | --- |
@@ -78,11 +78,11 @@ Each lane holds its arrangement parts in song order (plus any configured phase o
 | 49 | `8` | Landing: withdraws to acid cell, kick, and bass |
 | 57 | `9` | Afterglow: one pass of delay and reverb tails, then `:take save` writes [takes/set.take.jsonl](takes/set.take.jsonl) |
 
-## Live Performance Macros (`M1`–`M4`)
+## Performance Macros (`M1`–`M4`)
 
 Four performance macros are pre-mapped for real-time shaping in the **Macros Deck (`gk`)** or Jam mode without colliding with the arrangement's 60-bar cutoff and bass modulations:
 
-| Macro | Name | Rest | What it shapes live |
+| Macro | Name | Rest | What it shapes |
 | --- | --- | --- | --- |
 | `M1` | **Acid Bite** | `35%` | 4-pole Acid Ladder resonance & filter envelope depth on *Five-step Cell* + `Acid Bite` hard-clip drive, mix, and tone |
 | `M2` | **Air Bloom** | `35%` | `Air Chorus` depth & mix, `Music → Prism Space` reverb send, `Reverb` size, and `Air Shimmer EQ` high shelf |
@@ -92,7 +92,7 @@ Four performance macros are pre-mapped for real-time shaping in the **Macros Dec
 ## Sound Design, Mixing & Mastering
 
 - **Instruments:** *Five-step Cell* runs through Cadence's nonlinear 4-pole `acid_low_pass` ladder filter with velocity-sensitive bite; *Pulse Source* is tuned to a tight 55 Hz (`A1`, fifth of D minor) club kick sitting cleanly beneath *Harmonic Weight*'s dual-saw + sine-fundamental D2 bass; *Refracted Air* stacks 4-voice wide stereo unison; *Closed/Open Spark* pan symmetrically (`+12%` / `-12%`); *Handclap* plays the bundled [samples/clap.wav](samples/clap.wav); *Current Lift* builds stereo-spread filtered noise.
-- **Studio Mix & Mastering Chain (18 native DSP devices):** Per-channel sculpting (`Acid Bite` drive + `Cell Sculpt EQ`, `Kick Weight EQ` + `Kick Punch` tape, `Air Chorus` + `Air Shimmer EQ`, `Bass Tape` + `Bass Pocket EQ`, `Clap Snap EQ`), `Drums` bus `Drum Glue` compressor, `Music` bus `Music Clear EQ`, three stereo returns (`Dotted Echo` 3/16 ping-pong, `Long Echo` 5/16 ping-pong, `Prism Space` reverb + `Space Clean EQ` HPF), five kick-triggered sidechain ducks, and a 3-stage master bus (`Master Glue` compressor → `Master Tape` drive → `Master Limiter` at `-1.0 dBFS` ceiling). Pass `--render-report` to inspect live loudness and bus metering for either the 62-bar recorded take or the 60-bar arrangement.
+- **Studio Mix & Mastering Chain (18 native DSP devices):** Per-channel sculpting (`Acid Bite` drive + `Cell Sculpt EQ`, `Kick Weight EQ` + `Kick Punch` tape, `Air Chorus` + `Air Shimmer EQ`, `Bass Tape` + `Bass Pocket EQ`, `Clap Snap EQ`), `Drums` bus `Drum Glue` compressor, `Music` bus `Music Clear EQ`, three stereo returns (`Dotted Echo` 3/16 ping-pong, `Long Echo` 5/16 ping-pong, `Prism Space` reverb + `Space Clean EQ` HPF), five kick-triggered sidechain ducks, and a 3-stage master bus (`Master Glue` compressor → `Master Tape` drive → `Master Limiter` at `-1.0 dBFS` ceiling). Pass `--render-report` to inspect loudness and bus metering for either the 62-bar recorded take or the 60-bar arrangement.
 
 **Screenshots & User Guide:** [Take Deck & Visual Range](../../docs/screenshots/15-take-deck.png) · [Live Performance & Armed Takes](../../docs/guide/07-performing-and-takes.md) · [Macros & Modulation](../../docs/guide/05-macros-and-modulation.md)
 

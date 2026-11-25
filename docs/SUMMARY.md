@@ -12,7 +12,7 @@
   - [Project Macros & Modulation](guide/05-macros-and-modulation.md)
   - [Audio Devices, Recording & MIDI](guide/06-devices-audio-and-midi.md)
   - [Live Performance & Armed Takes](guide/07-performing-and-takes.md)
-  - [CLI, Scripting & Live Control](guide/08-cli-scripting-and-live-ctl.md)
+  - [CLI, Scripting & Remote Control](guide/08-cli-scripting-and-live-ctl.md)
 
 # Specifications
 

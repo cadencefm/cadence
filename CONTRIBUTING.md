@@ -16,19 +16,19 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full 6-crate map. Changes must re
 
 - **`crates/core` (`cadence-core`):** Pure domain model (`Project` v1, unified Eurorack Modular `RackPatch`, `InstrumentPreset` v1, `Take` v1), material algebra, sample/RIFF codecs, AND **all pure composable DSP (`crates/core/src/dsp/`)**. Zero audio I/O, MIDI I/O, GUI, or third-party song-format importer dependencies.
 - **`crates/formats` (`cadence-formats`):** Feature-gated third-party song format importers and exporters (including clean-room ReBirth `.rbs` import behind `feature = "rbs"`). Constructs strictly public `cadence_core::material::Project` values with zero runtime hooks into `cadence-core` or `cadence-engine`.
-- **`crates/engine` (`cadence-engine`):** Real-time audio orchestration (`AudioEngine`, `ModularVoice`, `MixerEngine`), CPAL input/output + MIDI I/O, live 24-bit WAV capture, and offline WAV/stem rendering.
+- **`crates/engine` (`cadence-engine`):** Real-time audio orchestration (`AudioEngine`, `ModularVoice`, `MixerEngine`), CPAL input/output + MIDI I/O, 24-bit WAV capture, and offline WAV/stem rendering.
   - Always compose `cadence_core::dsp::*` — never duplicate DSP math inside `cadence-engine`.
   - **Real-time safety:** Zero heap allocations, zero locks (`Mutex`/`RwLock`), zero unbounded channels, and zero `.unwrap()` / `.expect()` / `panic!` on audio-thread paths.
   - **Unclipped 32-bit float signal chain:** Preserve internal float headroom (`hot` when `> 1.0`), fire `clipped` strictly on Master post-fader `> 1.0` or non-finite samples, and clamp `[-1.0, 1.0]` exclusively at the final DAC/WAV output boundary.
   - **Debug stack safety:** Heap-box large engine structs (`MixerEngine`, `MixerBlockScratch`, `VoiceBlockOut`, `Engine`, `Shared`, `Box<ModularVoice>` slots, and `Box<ActiveEffect>` instances) so debug builds never overflow test stacks.
-- **`crates/app` (`cadence-app`):** Pure zero-I/O modeless session controller.
+- **`crates/app` (`cadence-app`):** Pure zero-I/O session controller.
   - `Cargo.toml` depends **only** on `anyhow`, `cadence-core`, `cadence-formats` (feature-gated `rbs`), `serde`, and `serde_json` (plus dev-deps). Route all external I/O through `HostIo` (`crates/app/src/host_io.rs`).
-  - Route `ParamAddress` resolution, parsing, formatting, and nudging through `crates/app/src/param_ops.rs` and live modulation/Macro resolution through `crates/app/src/view/live_params.rs`.
+  - Route `ParamAddress` resolution, parsing, formatting, and nudging through `crates/app/src/param_ops.rs` and effective modulation/Macro resolution through `crates/app/src/view/live_params.rs`.
   - Use bounded reads (`store::read_bounded`), bounded directory scans, and dirty-state confirmation guards (`Mode::Confirm`) on destructive load/import flows.
 - **`crates/gui` (`cadence-gui`):** Pure `wgpu`/`winit`/`glyphon` renderer consuming `FrameView`.
   - **Zero hardcoded RGBA outside `crates/gui/src/theme.rs`:** Every visual element queries semantic `&Theme` tokens.
   - Emit quads and curves in painter's order into `DisplayList` (`crates/gui/src/display.rs`) with balanced `push_clip`/`pop_clip`.
-- **`src/` (`cadence` host binary):** CLI, unified `Outcome` dispatcher (`src/host/mod.rs`), native file dialogs, CPAL input/output + midir host threads, `--render-kit`, `--import-rbs`, and live `--ctl` Unix socket.
+- **`src/` (`cadence` host binary):** CLI, unified `Outcome` dispatcher (`src/host/mod.rs`), native file dialogs, CPAL input/output + midir host threads, `--render-kit`, `--import-rbs`, and `--ctl` remote-control Unix socket.
 
 ## Verification Gates
 

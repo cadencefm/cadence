@@ -19,9 +19,9 @@ cargo run --release --example build-glass-cathedral -- --analyze
 
 Once open:
 - Press **`Space`** to play from Bar 1, or jump directly to **`⌥1` Nave**, **`⌥2` Refraction**, **`⌥3` Resonance**, or **`⌥4` Stillness** on the next bar boundary.
-- Press **`gk`** to open the **Macros Deck** and perform **`M2 Glass Shimmer`**, **`M3 Echo Orbit`**, and **`M4 Cello Depth`** live while **`M1 Vault Bloom`** glides across its automated 32-bar arc.
-- Press **`gG`** to inspect the living Signal Graph, including the dedicated `Glass` / `Chimes` silk EQs, `Tap` 5/16 delay, `Cathedral` 5.8s reverb, and 4-stage `Master` chain.
-- Press **`:open "Cathedral Bells"`** then **`gp`** to edit the inline `:mini` chimes live.
+- Press **`gk`** to open the **Macros Deck** and perform **`M2 Glass Shimmer`**, **`M3 Echo Orbit`**, and **`M4 Cello Depth`** in real time while **`M1 Vault Bloom`** glides across its automated 32-bar arc.
+- Press **`gG`** to inspect the Signal Graph, including the dedicated `Glass` / `Chimes` silk EQs, `Tap` 5/16 delay, `Cathedral` 5.8s reverb, and 4-stage `Master` chain.
+- Press **`:open "Cathedral Bells"`** then **`gp`** to edit the inline `:mini` chimes.
 
 ## Musical Structure (4 Sections × 8 Bars)
 
@@ -37,9 +37,9 @@ Once open:
 | Control | Automation | Targets |
 | --- | --- | --- |
 | **`M1 Vault Bloom`** | Automated 32-bar ramp (`0.24 → 0.86 → 0.10`) | `Cathedral Pad` cutoff (`340–3200 Hz`), `Chimes -> Cathedral` (`0.36–0.78`), `Glass -> Cathedral` (`0.32–0.68`), `Vault Verb` damping (`2100–3900 Hz`) |
-| **`M2 Glass Shimmer`** | Live performance macro (rests at `0.50`) | `Glass Marimba` cutoff (`1150–4600 Hz`), `Crystal Chime` cutoff (`1050–4200 Hz`), `Glass Silk` & `Chime Silk` high shelves |
-| **`M3 Echo Orbit`** | Live performance macro (rests at `0.50`) | `Tap 5/16` feedback (`0.22–0.72`), `Tap` return gain trim, `Tap HPF` high shelf (`-4.0..0.0 dB`) |
-| **`M4 Cello Depth`** | Live performance macro (rests at `0.50`) | `Warm Cello` cutoff (`240–1400 Hz`), `SubLevel` (`0.18–0.66`), `Cello Warm` low shelf (`-1.0..+4.0 dB`) |
+| **`M2 Glass Shimmer`** | Performance macro (rests at `0.50`) | `Glass Marimba` cutoff (`1150–4600 Hz`), `Crystal Chime` cutoff (`1050–4200 Hz`), `Glass Silk` & `Chime Silk` high shelves |
+| **`M3 Echo Orbit`** | Performance macro (rests at `0.50`) | `Tap 5/16` feedback (`0.22–0.72`), `Tap` return gain trim, `Tap HPF` high shelf (`-4.0..0.0 dB`) |
+| **`M4 Cello Depth`** | Performance macro (rests at `0.50`) | `Warm Cello` cutoff (`240–1400 Hz`), `SubLevel` (`0.18–0.66`), `Cello Warm` low shelf (`-1.0..+4.0 dB`) |
 | **`Glass Tap Swell`** | Automated 8-bar `Send` ramp (`0.34–0.66`) | `Glass -> Tap` 5/16 delay send blooms organically at 4-bar and 8-bar harmonic cadences |
 | **`Pad Vault Swell`** | Automated 32-bar `Send` ramp (`0.50–0.74`) | `Pad -> Cathedral` reverb send opens gently across the song and floats the final Bar 31 chord into Bar 32 stillness |
 
@@ -53,7 +53,7 @@ Once open:
 ## Studio Mix & Mastering Chain
 
 - **Spatial Returns:** `Tap` (`5/16` ping-pong `Delay` + `260 Hz` HPF / gentle `3.2 kHz` & high-shelf taming) and `Cathedral` (`5.8s` `Vault Verb`, `3200 Hz` damping + `190 Hz` HPF).
-- **Master Bus (4 Inserts):** `Tape Warmth` (`Drive(Tape)` whisper saturation) → `Cathedral Glue` (`Compressor`) → `Master Tone` (`Eq`, `26 Hz` HPF, gentle low warmth & `3.2 kHz` silk dip) → `Master Limiter` (`-1.5 dBFS` ceiling). Run `--render-report` or `build-glass-cathedral -- --analyze` to inspect live section dynamics and gain reduction.
+- **Master Bus (4 Inserts):** `Tape Warmth` (`Drive(Tape)` whisper saturation) → `Cathedral Glue` (`Compressor`) → `Master Tone` (`Eq`, `26 Hz` HPF, gentle low warmth & `3.2 kHz` silk dip) → `Master Limiter` (`-1.5 dBFS` ceiling). Run `--render-report` or `build-glass-cathedral -- --analyze` to inspect section dynamics and gain reduction.
 
 ## Explore Further
 

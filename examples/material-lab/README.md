@@ -6,7 +6,7 @@ A compact, original construction lesson built entirely through Cadence's normal 
 
 [Project](project.json) · [Build script](build.keys.jsonl) · [User Guide](../../docs/guide/README.md) · [Patterns & Algebra](../../docs/guide/02-patterns-and-algebra.md) · [CLI & Scripting](../../docs/guide/08-cli-scripting-and-live-ctl.md)
 
-The project holds eleven pattern definitions — including a live fork (`MovingCopy`) that keeps its dependency links and a deliberately frozen 32-step snapshot (`EightBeats`). Four parts and five placements schedule four native Synth instruments; `Lead` uses a warm three-voice stereo unison patch.
+The project holds eleven pattern definitions — including a linked fork (`MovingCopy`) that keeps its dependency links and a deliberately frozen 32-step snapshot (`EightBeats`). Four parts and five placements schedule four native Synth instruments; `Lead` uses a warm three-voice stereo unison patch.
 
 ## Open, rebuild & render
 
@@ -29,7 +29,7 @@ cargo run --release --locked -- --project examples/material-lab/project.json --s
 ## What to try
 
 - Open `Harmony` and edit its point at step 25: `Lead` and `Bass` update together while the placement-local ending at bar 8 stays as written.
-- Open `MovingCopy` and inspect its sources: a fork keeps its live links to `Motif` and `Harmony`.
+- Open `MovingCopy` and inspect its sources: a fork keeps its retained links to `Motif` and `Harmony`.
 - Open `EightBeats`: freeze captured literal material independent of future edits.
 - Open the Mixer (`gm`): adjust `Music` trim while the kick-triggered `Breath` duck envelope and `Contour` gain modulation stay active.
 
