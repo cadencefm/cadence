@@ -192,7 +192,7 @@ pub const HELP_ENTRIES: &[HelpEntry] = &[
         tab: HelpTab::Navigate,
         category: "DIRECT EDIT",
         keys: "hjkl nav · H/L tabs/bars · Alt+hjkl/Arrows & ,/. fine · Alt+HJKL & </> coarse · Alt+Bksp reset · Enter exact",
-        summary: "4-tier modeless editing: hjkl/HJKL strictly navigate (h/l no-op on 1-axis inspectors) · Alt+hjkl & ,/. sculpt with coalesced undo",
+        summary: "4-tier direct editing: hjkl/HJKL strictly navigate (h/l no-op on 1-axis inspectors) · Alt+hjkl & ,/. sculpt with coalesced undo",
     },
     // Compose & Edit
     HelpEntry {
