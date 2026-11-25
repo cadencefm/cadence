@@ -340,12 +340,8 @@ impl PresetCatalog {
                     if !is_json {
                         continue;
                     }
-                    // Skip the external rhythmic filter groove bank JSON (loaded by `filter_patterns`).
-                    if child
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .is_some_and(|n| n.eq_ignore_ascii_case("filter_grooves.json"))
-                    {
+                    // Skip external rhythmic filter groove bank JSONs (loaded by `filter_patterns`).
+                    if crate::filter_patterns::is_filter_groove_bank_path(&child) {
                         continue;
                     }
                     if self.entries.len() >= max_files {
@@ -604,10 +600,15 @@ mod tests {
             .save(&global_presets.join("kits/tr-808.json"))
             .unwrap();
 
-        // Malformed JSON and filter_grooves.json live alongside valid presets:
-        // filter_grooves.json must be silently skipped; bad JSON must produce a non-fatal warning.
+        // Malformed JSON and filter groove bank JSONs live alongside valid presets:
+        // filter groove banks must be silently skipped; bad JSON must produce a non-fatal warning.
         fs::write(
             global_presets.join("filter_grooves.json"),
+            b"{\"version\":1,\"grooves\":[]}",
+        )
+        .unwrap();
+        fs::write(
+            global_presets.join("acid_custom.grooves.json"),
             b"{\"version\":1,\"grooves\":[]}",
         )
         .unwrap();

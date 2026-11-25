@@ -20,7 +20,7 @@ mod zones;
 #[cfg(test)]
 mod tests;
 
-use crate::chrome::{draw_deck_frame, DeckFrameSpec};
+use crate::chrome::{draw_deck_frame, draw_deck_tab_bar, DeckFrameSpec, DeckTabBarSpec};
 use crate::decks::object::draw_control_list;
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
@@ -97,110 +97,26 @@ fn draw_rack_deck(
 }
 
 fn draw_rack_mode_bar(dl: &mut DisplayList, bar: Rect, rack: &RackDeckView, theme: &Theme) {
-    if bar.is_empty() {
-        return;
-    }
-    dl.push_clip(bar);
-    let font = theme.font.small;
-    let cw = theme.char_width(font);
-    let pill_h = (bar.h - 6.0).clamp(16.0, 20.0);
-    let pill_y = bar.y + 1.0;
-
-    let mut tx = bar.x;
-    for &(label, active) in &rack.tabs {
-        let tw = label.chars().count() as f32 * cw + 18.0;
-        let tr = Rect::new(tx, pill_y, tw, pill_h);
-        dl.panel(
-            tr,
-            if active {
-                theme.accent.focus.with_alpha(0.22)
-            } else {
-                theme.surface.recessed
-            },
-            if active {
-                theme.accent.focus
-            } else {
-                theme.border.subtle
-            },
-            theme.radii.badge,
-            if active { 1.2 } else { 1.0 },
-            if active { 0.16 } else { 0.0 },
-        );
-        dl.text(
-            tr,
-            label,
-            font,
-            active,
-            if active {
-                theme.accent.focus
-            } else {
-                theme.text.secondary
-            },
-            TextAlign::Center,
-        );
-        tx += tw + 5.0;
-    }
-
-    // Active zone badge on Panel & Patchbay whenever the Rack has multiple zones
-    // (Zones tab already renders the full horizontal Zone pill strip right below this bar).
-    if rack.active_tab != RackTab::Zones && rack.zone_count > 1 && !rack.active_zone_name.is_empty()
-    {
-        let ztext = format!("ZONE: {} ({}z)", rack.active_zone_name, rack.zone_count);
-        let zfont = theme.font.small - 1.0;
-        let zcw = theme.char_width(zfont);
-        let avail = (bar.right() - tx - 8.0).max(0.0);
-        let zw = (ztext.chars().count() as f32 * zcw + 16.0).min(avail.min(220.0));
-        if zw >= 56.0 {
-            tx += 4.0;
-            let zr = Rect::new(tx, pill_y, zw, pill_h);
-            dl.panel(
-                zr,
-                theme.accent.modulation.with_alpha(0.16),
-                theme.accent.modulation.with_alpha(0.75),
-                theme.radii.badge,
-                1.0,
-                0.0,
-            );
-            let max_c = ((zr.w - 10.0) / zcw).floor().max(4.0) as usize;
-            dl.text(
-                zr.inset(5.0, 0.0),
-                trim_label(&ztext, max_c),
-                zfont,
-                true,
-                theme.accent.modulation,
-                TextAlign::Center,
-            );
-            tx += zw + 6.0;
-        }
-    }
-
-    // Crisp right-aligned contextual shortcut hint strip when horizontal space allows.
+    let zone_badge = (rack.active_tab != RackTab::Zones
+        && rack.zone_count > 1
+        && !rack.active_zone_name.is_empty())
+    .then(|| format!("ZONE: {} ({}z)", rack.active_zone_name, rack.zone_count));
     let hint = match rack.active_tab {
         RackTab::Panel => "H/L tab · h/l mod · Alt+h/l ,/. adjust · a add · x del · p pin",
         RackTab::Patchbay => "H/L tab · hjkl move · w/b cable · Alt+h/l ,/. amt · c patch · x cut",
         RackTab::Zones => "H/L tab · h/l zone · j/k ctrl · Alt+h/l ,/. adjust · a/d/x zone",
     };
-    let rem_w = (bar.right() - tx - 8.0).max(0.0);
-    if rem_w >= 110.0 {
-        let hfont = theme.font.small - 1.0;
-        let hcw = theme.char_width(hfont);
-        let max_c = (rem_w / hcw).floor().max(6.0) as usize;
-        dl.text(
-            Rect::new(tx + 6.0, pill_y, rem_w - 6.0, pill_h),
-            trim_label(hint, max_c),
-            hfont,
-            false,
-            theme.text.muted,
-            TextAlign::Right,
-        );
-    }
-
-    // Subtle hairline separating top mode bar from tab content.
-    dl.fill(
-        Rect::new(bar.x, bar.bottom() - 2.0, bar.w, 1.0),
-        theme.border.subtle.with_alpha(0.7),
+    draw_deck_tab_bar(
+        dl,
+        bar,
+        &DeckTabBarSpec {
+            tabs: &rack.tabs,
+            active_accent: theme.accent.focus,
+            badge: zone_badge.as_deref().map(|b| (b, theme.accent.modulation)),
+            right_hint: Some(hint),
+        },
+        theme,
     );
-    dl.pop_clip();
 }
 
 // -----------------------------------------------------------------------------

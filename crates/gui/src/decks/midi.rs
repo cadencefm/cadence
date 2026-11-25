@@ -5,7 +5,7 @@
 //!   stream summary, and wrapped diagnostic/recovery guidance).
 //! - `MIDI` tab: 8 RGB performance pad tiles + 8 Focused/Project Smart Macros, unified
 //!   `DEVICE & PROFILE` + `MAPPINGS` inspector (with MIDI OUT error alert), and `LIVE MIDI MONITOR`.
-use crate::chrome::{draw_deck_frame, DeckFrameSpec};
+use crate::chrome::{draw_deck_frame, draw_deck_tab_bar, DeckFrameSpec, DeckTabBarSpec};
 use crate::decks::output::{db_norm, db_to_meter_norm, dsp_cpu_color, fmt_db_fixed};
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
@@ -89,52 +89,6 @@ fn draw_devices_mode_bar(
     active_accent: Color,
     theme: &Theme,
 ) {
-    if bar.is_empty() {
-        return;
-    }
-    dl.push_clip(bar);
-    let font = theme.font.small;
-    let cw = theme.char_width(font);
-    let pill_h = (bar.h - 6.0).clamp(16.0, 20.0);
-    let pill_y = bar.y + 1.0;
-
-    let mut tx = bar.x;
-    for &(label, active) in &view.tabs {
-        let tw = label.chars().count() as f32 * cw + 18.0;
-        let tr = Rect::new(tx, pill_y, tw, pill_h);
-        dl.panel(
-            tr,
-            if active {
-                active_accent.with_alpha(0.22)
-            } else {
-                theme.surface.recessed
-            },
-            if active {
-                active_accent
-            } else {
-                theme.border.subtle
-            },
-            theme.radii.badge,
-            if active { 1.2 } else { 1.0 },
-            if active { 0.16 } else { 0.0 },
-        );
-        dl.text(
-            tr,
-            label,
-            font,
-            active,
-            if active {
-                active_accent
-            } else {
-                theme.text.secondary
-            },
-            TextAlign::Center,
-        );
-        tx += tw + 5.0;
-    }
-
-    // Compact alert indicator on the Audio tab pill area when MIDI tab is active and audio is alerted,
-    // or right-aligned contextual shortcut hints when horizontal space allows.
     let hint = match view.active_tab {
         DevicesTab::Audio => {
             "H/L tab · j/k row · w/b group · Alt+h/l ,/. cycle · Enter pick/run · r rescan"
@@ -143,26 +97,17 @@ fn draw_devices_mode_bar(
             "H/L tab · j/k row · w/b group · Alt+h/l ,/. cycle · Enter pick/learn · a add · r rescan"
         }
     };
-    let rem_w = (bar.right() - tx - 8.0).max(0.0);
-    if rem_w >= 110.0 {
-        let hfont = theme.font.small - 1.0;
-        let hcw = theme.char_width(hfont);
-        let max_c = (rem_w / hcw).floor().max(6.0) as usize;
-        dl.text(
-            Rect::new(tx + 6.0, pill_y, rem_w - 6.0, pill_h),
-            trim_label(hint, max_c),
-            hfont,
-            false,
-            theme.text.muted,
-            TextAlign::Right,
-        );
-    }
-
-    dl.fill(
-        Rect::new(bar.x, bar.bottom() - 2.0, bar.w, 1.0),
-        theme.border.subtle.with_alpha(0.7),
+    draw_deck_tab_bar(
+        dl,
+        bar,
+        &DeckTabBarSpec {
+            tabs: &view.tabs,
+            active_accent,
+            badge: None,
+            right_hint: Some(hint),
+        },
+        theme,
     );
-    dl.pop_clip();
 }
 
 fn draw_audio_tab(dl: &mut DisplayList, area: Rect, audio: &AudioDeckView, theme: &Theme) {

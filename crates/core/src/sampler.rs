@@ -551,17 +551,16 @@ pub fn update_wav_riff_metadata_bytes(
     Ok(out)
 }
 
-/// Write a mono (`right: None`) or stereo (`right: Some(..)`) 16-bit PCM RIFF WAVE file
-/// atomically with embedded RIFF `inst` (root, fine tune, key & velocity range),
-/// `smpl` (MIDI unity note, pitch fraction, optional loop points), and `cue ` / `LIST(adtl)`
+/// Encode a mono (`right: None`) or stereo (`right: Some(..)`) 16-bit PCM RIFF WAVE payload
+/// in memory with embedded RIFF `inst` (root, fine tune, key & velocity range), `smpl`
+/// (MIDI unity note, pitch fraction, optional loop points), and `cue ` / `LIST(adtl)`
 /// slice marker chunks.
-pub fn write_wav_with_metadata(
-    path: &Path,
+pub fn encode_wav_with_metadata_bytes(
     left: &[f32],
     right: Option<&[f32]>,
     sample_rate: u32,
     meta: &SampleMetadata,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     ensure!(
         (8_000..=192_000).contains(&sample_rate),
         "WAV sample rate {sample_rate} must be within 8000..=192000 Hz"
@@ -588,47 +587,59 @@ pub fn write_wav_with_metadata(
         "WAV exceeds maximum sample size"
     );
 
-    crate::store::write_atomic(path, MAX_SAMPLE_FILE_BYTES, |buf| {
-        buf.reserve(total_len);
+    let mut buf = Vec::with_capacity(total_len);
 
-        // RIFF WAVE header
-        buf.extend_from_slice(b"RIFF");
-        buf.extend_from_slice(&((total_len - 8) as u32).to_le_bytes());
-        buf.extend_from_slice(b"WAVE");
+    // RIFF WAVE header
+    buf.extend_from_slice(b"RIFF");
+    buf.extend_from_slice(&((total_len - 8) as u32).to_le_bytes());
+    buf.extend_from_slice(b"WAVE");
 
-        // `fmt ` chunk (16-bit PCM)
-        let block_align = channels * 2;
-        let byte_rate = sample_rate * u32::from(block_align);
-        buf.extend_from_slice(b"fmt ");
-        buf.extend_from_slice(&16u32.to_le_bytes());
-        buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
-        buf.extend_from_slice(&channels.to_le_bytes());
-        buf.extend_from_slice(&sample_rate.to_le_bytes());
-        buf.extend_from_slice(&byte_rate.to_le_bytes());
-        buf.extend_from_slice(&block_align.to_le_bytes());
-        buf.extend_from_slice(&16u16.to_le_bytes());
+    // `fmt ` chunk (16-bit PCM)
+    let block_align = channels * 2;
+    let byte_rate = sample_rate * u32::from(block_align);
+    buf.extend_from_slice(b"fmt ");
+    buf.extend_from_slice(&16u32.to_le_bytes());
+    buf.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    buf.extend_from_slice(&channels.to_le_bytes());
+    buf.extend_from_slice(&sample_rate.to_le_bytes());
+    buf.extend_from_slice(&byte_rate.to_le_bytes());
+    buf.extend_from_slice(&block_align.to_le_bytes());
+    buf.extend_from_slice(&16u16.to_le_bytes());
 
-        // `data` chunk
-        buf.extend_from_slice(b"data");
-        buf.extend_from_slice(&(data_bytes as u32).to_le_bytes());
-        let to_i16 = |s: f32| -> i16 {
-            (crate::dsp::math::sanitize_sample(s).clamp(-1.0, 1.0) * f32::from(i16::MAX)).round()
-                as i16
-        };
-        if let Some(r) = right {
-            for i in 0..frames {
-                buf.extend_from_slice(&to_i16(left[i]).to_le_bytes());
-                buf.extend_from_slice(&to_i16(r[i]).to_le_bytes());
-            }
-        } else {
-            for &s in left {
-                buf.extend_from_slice(&to_i16(s).to_le_bytes());
-            }
+    // `data` chunk
+    buf.extend_from_slice(b"data");
+    buf.extend_from_slice(&(data_bytes as u32).to_le_bytes());
+    let to_i16 = |s: f32| -> i16 {
+        (crate::dsp::math::sanitize_sample(s).clamp(-1.0, 1.0) * f32::from(i16::MAX)).round() as i16
+    };
+    if let Some(r) = right {
+        for i in 0..frames {
+            buf.extend_from_slice(&to_i16(left[i]).to_le_bytes());
+            buf.extend_from_slice(&to_i16(r[i]).to_le_bytes());
         }
+    } else {
+        for &s in left {
+            buf.extend_from_slice(&to_i16(s).to_le_bytes());
+        }
+    }
 
-        buf.extend_from_slice(&meta_chunks);
-        Ok(())
-    })
+    buf.extend_from_slice(&meta_chunks);
+    Ok(buf)
+}
+
+/// Write a mono (`right: None`) or stereo (`right: Some(..)`) 16-bit PCM RIFF WAVE file
+/// atomically with embedded RIFF `inst` (root, fine tune, key & velocity range),
+/// `smpl` (MIDI unity note, pitch fraction, optional loop points), and `cue ` / `LIST(adtl)`
+/// slice marker chunks.
+pub fn write_wav_with_metadata(
+    path: &Path,
+    left: &[f32],
+    right: Option<&[f32]>,
+    sample_rate: u32,
+    meta: &SampleMetadata,
+) -> Result<()> {
+    let bytes = encode_wav_with_metadata_bytes(left, right, sample_rate, meta)?;
+    crate::store::write_atomic_bytes(path, MAX_SAMPLE_FILE_BYTES, &bytes)
 }
 
 /// Decode a sample file from disk into an immutable `Arc<SampleData>`.
@@ -1140,6 +1151,24 @@ impl SampleLibrary {
             roots.iter().cloned().map(|r| (None, r)).collect();
         Self::from_prefixed_roots(&prefixed, project_path, false)
     }
+
+    /// Purely in-memory library anchored to `project_dir` with zero OS filesystem probes.
+    /// Intended for `HostIo`-backed virtual sessions (e.g. `MemoryHostIo` or WASM).
+    pub fn empty_virtual(project_dir: PathBuf) -> Self {
+        Self {
+            roots: Vec::new(),
+            global_roots: Vec::new(),
+            project_dir: Some(project_dir),
+            entries: Vec::new(),
+            filtered: Vec::new(),
+            query: String::new(),
+            cursor: 0,
+            cache: HashMap::new(),
+            cache_order: VecDeque::new(),
+            index_truncated: false,
+            include_project_assets: false,
+        }
+    }
     pub fn index_truncated(&self) -> bool {
         self.index_truncated
     }
@@ -1155,6 +1184,11 @@ impl SampleLibrary {
         if sample.resolved_path.canonicalize().ok().as_ref() != Some(&path) {
             return;
         }
+        self.cache_prepared_canonical(path, sample);
+    }
+
+    /// Cache an already-canonicalized decoded sample buffer without touching the OS filesystem.
+    pub fn cache_prepared_canonical(&mut self, path: PathBuf, sample: Arc<SampleData>) {
         self.cache.remove(&path);
         self.cache_order.retain(|p| p != &path);
         let bytes = sample_cache_bytes(&sample);
@@ -1455,28 +1489,60 @@ impl SampleLibrary {
     /// Resolve either a library-relative label (`Drums/Kicks/...`) or a direct path,
     /// caching up to 64 decoded `Arc<SampleData>` buffers in memory.
     pub fn load(&mut self, label_or_path: &str) -> Result<Arc<SampleData>> {
-        let resolved = self
-            .resolve_path(label_or_path)
-            .with_context(|| format!("Sample not found: {label_or_path}"))?
-            .canonicalize()?;
+        self.load_with(
+            label_or_path,
+            |p| p.is_file(),
+            |p| Ok(p.canonicalize()?),
+            |p, lbl| load_sample_file(p, lbl),
+        )
+    }
+
+    /// Host-I/O-injectable variant of [`Self::load`] performing zero direct OS filesystem reads.
+    pub fn load_with(
+        &mut self,
+        label_or_path: &str,
+        is_file: impl Fn(&Path) -> bool,
+        canonicalize: impl Fn(&Path) -> Result<PathBuf>,
+        load_file: impl Fn(&Path, Option<String>) -> Result<Arc<SampleData>>,
+    ) -> Result<Arc<SampleData>> {
+        let resolved_raw = self
+            .resolve_path_with(label_or_path, is_file)
+            .with_context(|| format!("Sample not found: {label_or_path}"))?;
+        let resolved = canonicalize(&resolved_raw)?;
         if let Some(sample) = self.cache.get(&resolved).cloned() {
             self.cache_order.retain(|p| p != &resolved);
             self.cache_order.push_back(resolved);
             return Ok(sample);
         }
-        let sample = load_sample_file(&resolved, Some(label_or_path.to_string()))?;
-        self.cache_prepared(&resolved, Arc::clone(&sample));
+        let sample = load_file(&resolved, Some(label_or_path.to_string()))?;
+        self.cache_prepared_canonical(resolved, Arc::clone(&sample));
         Ok(sample)
     }
 
     /// Explicit user load: bypass a previous decoded buffer for this file.
     pub fn reload(&mut self, label_or_path: &str) -> Result<Arc<SampleData>> {
-        if let Some(resolved) = self.resolve_path(label_or_path) {
-            let resolved = resolved.canonicalize().unwrap_or(resolved);
+        self.reload_with(
+            label_or_path,
+            |p| p.is_file(),
+            |p| Ok(p.canonicalize()?),
+            |p, lbl| load_sample_file(p, lbl),
+        )
+    }
+
+    /// Host-I/O-injectable variant of [`Self::reload`] performing zero direct OS filesystem reads.
+    pub fn reload_with(
+        &mut self,
+        label_or_path: &str,
+        is_file: impl Fn(&Path) -> bool,
+        canonicalize: impl Fn(&Path) -> Result<PathBuf>,
+        load_file: impl Fn(&Path, Option<String>) -> Result<Arc<SampleData>>,
+    ) -> Result<Arc<SampleData>> {
+        if let Some(resolved) = self.resolve_path_with(label_or_path, &is_file) {
+            let resolved = canonicalize(&resolved).unwrap_or(resolved);
             self.cache.remove(&resolved);
             self.cache_order.retain(|p| p != &resolved);
         }
-        self.load(label_or_path)
+        self.load_with(label_or_path, is_file, canonicalize, load_file)
     }
 
     /// Returns the catalog label for a canonicalized file inside a configured
@@ -1505,13 +1571,22 @@ impl SampleLibrary {
     }
 
     pub fn resolve_path(&self, label_or_path: &str) -> Option<PathBuf> {
+        self.resolve_path_with(label_or_path, |p| p.is_file())
+    }
+
+    /// Host-I/O-injectable path resolver performing zero direct OS `stat` calls.
+    pub fn resolve_path_with(
+        &self,
+        label_or_path: &str,
+        is_file: impl Fn(&Path) -> bool,
+    ) -> Option<PathBuf> {
         let candidate = Path::new(label_or_path);
         if candidate.is_absolute() {
             return None;
         }
         if let Some(project_dir) = &self.project_dir {
             let project_relative = project_dir.join(candidate);
-            if project_relative.is_file() {
+            if is_file(&project_relative) {
                 return Some(project_relative);
             }
             // An explicit relative pathname is not a portable library alias.
@@ -1525,7 +1600,7 @@ impl SampleLibrary {
         if let Some(entry) = self
             .entries
             .iter()
-            .find(|e| e.label == label_or_path && e.path.is_file())
+            .find(|e| e.label == label_or_path && is_file(&e.path))
         {
             return Some(entry.path.clone());
         }
@@ -1533,13 +1608,13 @@ impl SampleLibrary {
             if let Some(p) = prefix {
                 if let Some(stripped) = label_or_path.strip_prefix(&format!("{p}/")) {
                     let joined = root.join(stripped);
-                    if joined.is_file() {
+                    if is_file(&joined) {
                         return Some(joined);
                     }
                 }
             }
             let joined = root.join(label_or_path);
-            if joined.is_file() {
+            if is_file(&joined) {
                 return Some(joined);
             }
         }

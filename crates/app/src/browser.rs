@@ -277,12 +277,12 @@ impl App {
                         _ => None,
                     }
                 })
-                .and_then(|p| self.assets.library.resolve_path(p)),
+                .and_then(|p| self.resolve_library_sample_path(p)),
             BrowserTarget::Workflow => self
                 .modal
                 .workflow()
                 .and_then(|d| d.selected_sample())
-                .and_then(|(p, _)| self.assets.library.resolve_path(p)),
+                .and_then(|(p, _)| self.resolve_library_sample_path(p)),
             BrowserTarget::AddZone { .. } | BrowserTarget::NewSampler => None,
         };
         if let Some(path) = preferred {

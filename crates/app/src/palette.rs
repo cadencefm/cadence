@@ -52,6 +52,7 @@ enum PaletteAction {
     BrowseFilterGrooves,
     ForkFilterGroove,
     SaveFilterGroove,
+    LoadFilterGrooveBank,
     RenameInstrument,
     DeleteInstrument,
     RenameChannel,
@@ -802,6 +803,15 @@ impl App {
             "save export filter groove bank json custom share",
             "Palette",
             PaletteAction::SaveFilterGroove,
+        );
+        push(
+            &mut entries,
+            "FX",
+            "Load Filter Groove Bank",
+            "Pick any filter_grooves.json or *.grooves.json bank file (File Hub / Finder)",
+            "load import open filter groove bank json file picker custom",
+            "P: o",
+            PaletteAction::LoadFilterGrooveBank,
         );
         push(
             &mut entries,
@@ -1741,6 +1751,10 @@ impl App {
             PaletteAction::BrowseFilterGrooves => self.open_groove_browser(),
             PaletteAction::ForkFilterGroove => self.fork_active_filter_groove(),
             PaletteAction::SaveFilterGroove => self.begin_save_active_filter_groove(),
+            PaletteAction::LoadFilterGrooveBank => {
+                self.open_file_hub_for_groove_bank_load();
+                Ok(Outcome::default())
+            }
             PaletteAction::RenameInstrument => {
                 let id = self
                     .active_instrument()

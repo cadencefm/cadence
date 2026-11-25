@@ -475,7 +475,7 @@ fn run_native_file_dialog(req: &FileDialogRequest) -> Option<PathBuf> {
             .add_filter("Cadence Live Take", &["jsonl"])
             .save_file(),
         FileDialogRequest::ImportAsset => rfd::FileDialog::new()
-            .set_title("Import ReBirth .rbs, Instrument Preset, MIDI Profile, or Take")
+            .set_title("Import ReBirth .rbs, Preset, Groove Bank, MIDI Profile, or Take")
             .add_filter(
                 "Supported Imports (.rbs, .json, .jsonl)",
                 &["rbs", "json", "jsonl"],

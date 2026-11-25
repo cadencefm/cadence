@@ -2,7 +2,7 @@
 //! Musical edits pass through one validated transaction; key input is an adapter.
 use crate::drafts::{Draft, DraftOutcome, DraftView, WorkflowDraft, WorkflowKind};
 use anyhow::{bail, ensure, Context, Result};
-use cadence_core::assets::{load_project_samples, SampleIssue};
+use cadence_core::assets::{load_project_samples_with, SampleIssue};
 use cadence_core::filter_patterns::FilterGrooveCatalog;
 use cadence_core::follow::FollowState;
 use cadence_core::material::{
@@ -606,7 +606,8 @@ impl App {
         save_path: PathBuf,
         io: Arc<dyn HostIo>,
     ) -> Result<Self> {
-        let library = SampleLibrary::from_roots_only(&[], None);
+        let project_dir = absolute_parent_with_io(io.as_ref(), &save_path)?;
+        let library = SampleLibrary::empty_virtual(project_dir);
         Self::with_host_io(project, LiveFlags::default(), save_path, library, io)
     }
 
@@ -784,9 +785,42 @@ impl App {
             .or(self.selected_instrument)
     }
     pub fn sync_loaded_samples(&mut self) {
-        let report = load_project_samples(self.doc.compiled(), &mut self.assets.library);
+        let io = Arc::clone(&self.io);
+        let report = load_project_samples_with(
+            self.doc.compiled(),
+            &mut self.assets.library,
+            |p| io.is_file(p),
+            |p| io.canonicalize(p),
+            |p, lbl| io.load_sample_file(p, lbl),
+        );
         self.assets.samples = report.bank.into_iter().collect();
         self.assets.issues = report.issues;
+    }
+
+    pub(crate) fn load_library_sample(&mut self, locator: &str) -> Result<Arc<SampleData>> {
+        let io = Arc::clone(&self.io);
+        self.assets.library.load_with(
+            locator,
+            |p| io.is_file(p),
+            |p| io.canonicalize(p),
+            |p, lbl| io.load_sample_file(p, lbl),
+        )
+    }
+
+    pub(crate) fn reload_library_sample(&mut self, locator: &str) -> Result<Arc<SampleData>> {
+        let io = Arc::clone(&self.io);
+        self.assets.library.reload_with(
+            locator,
+            |p| io.is_file(p),
+            |p| io.canonicalize(p),
+            |p, lbl| io.load_sample_file(p, lbl),
+        )
+    }
+
+    pub(crate) fn resolve_library_sample_path(&self, locator: &str) -> Option<PathBuf> {
+        self.assets
+            .library
+            .resolve_path_with(locator, |p| self.io.is_file(p))
     }
     pub fn sample_bank(&self) -> SampleBank {
         self.assets
