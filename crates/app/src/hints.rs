@@ -220,6 +220,7 @@ impl App {
                         ("/", "filter"),
                         ("f", "fork pattern"),
                         ("s", "save groove"),
+                        ("o", "load bank"),
                         ("Space", "play/pause"),
                         ("Enter", "load groove"),
                         (

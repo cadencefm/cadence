@@ -164,6 +164,15 @@ impl App {
         Ok(out)
     }
 
+    /// Load a Filter Groove Bank JSON file through FileHub (Browse tab, Import tab, or
+    /// native Finder dialog), closing FileHub on success while preserving FileHub state on error.
+    pub(super) fn load_file_hub_groove_bank(&mut self, path: &Path) -> Result<Outcome> {
+        let out = self.load_filter_groove_bank_from_path(path)?;
+        self.modal = ActiveModal::None;
+        self.input.mode = Mode::Normal;
+        Ok(out)
+    }
+
     /// Route an arbitrary `.json` file opened from the Open tab or Finder dialog:
     /// detects `InstrumentPreset` and `MidiProfile` JSON cleanly instead of sending them
     /// to the Cadence project loader, and surfaces parse errors directly for explicit
@@ -326,12 +335,16 @@ impl App {
         if cadence_formats::find_import_format_for_path(path).is_some() {
             return self.load_or_confirm_project(path.to_path_buf(), true);
         }
-        // Explicit `.midi.json` and `.preset.json` (or files inside `presets/`) must never
-        // swallow parse errors and fall through to `load_or_confirm_project` (which would
-        // close FileHub and trigger `ConfirmAction::Open` when `dirty()`).
+        // Explicit `.midi.json`, groove bank JSONs (`filter_grooves.json` / `*.grooves.json`),
+        // and `.preset.json` (or files inside `presets/`) must never swallow parse errors and
+        // fall through to `load_or_confirm_project` (which would close FileHub and trigger
+        // `ConfirmAction::Open` when `dirty()`).
         match classify_json(path) {
             FileEntryKind::MidiProfile => {
                 return self.load_file_hub_midi_profile(path);
+            }
+            FileEntryKind::FilterGrooveBank => {
+                return self.load_file_hub_groove_bank(path);
             }
             FileEntryKind::InstrumentPreset => {
                 let preset = self.load_preset_from_io(path)?;
@@ -339,8 +352,11 @@ impl App {
             }
             _ => {}
         }
-        // Ambiguously named `.json`: try MIDI Profile, then InstrumentPreset.
+        // Ambiguously named `.json`: try MIDI Profile, then Filter Groove Bank, then InstrumentPreset.
         if let Ok(out) = self.load_file_hub_midi_profile(path) {
+            return Ok(out);
+        }
+        if let Ok(out) = self.load_file_hub_groove_bank(path) {
             return Ok(out);
         }
         match self.load_preset_from_io(path) {

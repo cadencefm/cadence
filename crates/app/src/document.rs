@@ -613,7 +613,7 @@ impl App {
             .samples
             .get(&sample_key)
             .map(|s| s.resolved_path.clone())
-            .or_else(|| self.assets.library.resolve_path(locator))
+            .or_else(|| self.resolve_library_sample_path(locator))
             .or_else(|| {
                 if locator.starts_with("./") || locator.starts_with("../") {
                     Some(self.doc.asset_base().join(candidate))

@@ -153,6 +153,7 @@ pub enum FileEntryKind {
     Take,
     Rbs,
     InstrumentPreset,
+    FilterGrooveBank,
     MidiProfile,
 }
 
@@ -167,6 +168,7 @@ impl FileEntryKind {
             Self::Take => "TAKE",
             Self::Rbs => "RBS",
             Self::InstrumentPreset => "PRESET",
+            Self::FilterGrooveBank => "GROOVE",
             Self::MidiProfile => "MIDI",
         }
     }
@@ -346,6 +348,25 @@ impl App {
             hub.cursor = 5;
         }
         self.status = "File Hub · Save Take As · e edit path · F Finder · Enter write".into();
+    }
+
+    /// Open File Hub on the Import tab focused on discovered Filter Groove Banks when present.
+    pub fn open_file_hub_for_groove_bank_load(&mut self) {
+        self.open_file_hub(FileHubTab::Import);
+        if let Some(mut hub) = self.modal.take_file_hub() {
+            if let Some(idx) = hub
+                .entries
+                .iter()
+                .position(|e| e.kind == FileEntryKind::FilterGrooveBank)
+            {
+                hub.cursor = idx;
+                self.warm_file_hub_preview(&mut hub);
+            }
+            self.modal = ActiveModal::FileHub(hub);
+        }
+        self.status =
+            "File Hub · Load Filter Groove Bank (.json) · Enter loads · F native Finder · Esc close"
+                .into();
     }
 
     /// Open File Hub on the Import tab focused on `.midi.json` custom profiles when present.
@@ -1038,5 +1059,155 @@ mod tests {
         assert_eq!(app.modal.file_hub().unwrap().tab, FileHubTab::Export);
         app.press_keys("1").unwrap();
         assert_eq!(app.modal.file_hub().unwrap().tab, FileHubTab::Quick);
+    }
+
+    #[test]
+    fn filter_groove_bank_picker_file_hub_and_command_loader() {
+        use cadence_core::filter_patterns::{FilterEnvPreset, FilterGrooveCatalog};
+
+        let make_bank = |grooves: Vec<FilterEnvPreset>| -> Vec<u8> {
+            FilterGrooveCatalog::serialize_grooves(&grooves).unwrap()
+        };
+        let preset = |id: u8, name: &str| -> FilterEnvPreset {
+            FilterEnvPreset {
+                id,
+                name: name.into(),
+                category: "Acid".into(),
+                resolution: 16,
+                length: 4,
+                smooth_attack: false,
+                steps: vec![127, 0, 96, 0],
+            }
+        };
+
+        let io = Arc::new(MemoryHostIo::new("/virtual/studio"));
+        io.insert_file(
+            "/virtual/studio/presets/filter_grooves.json",
+            make_bank(vec![preset(0, "00 Default Pulse")]),
+        );
+        io.insert_file(
+            "/virtual/studio/banks/acid_house.grooves.json",
+            make_bank(vec![preset(0, "00 Acid Surge"), preset(1, "01 Acid Gate")]),
+        );
+        io.insert_file(
+            "/virtual/studio/custom_grooves.json",
+            make_bank(vec![preset(5, "05 Weird Polyrhythm")]),
+        );
+        io.insert_file("/virtual/studio/broken.grooves.json", b"{ broken bank");
+
+        let mut app = App::new_with_host_io(
+            Project::demo(),
+            PathBuf::from("/virtual/studio/session.json"),
+            Arc::clone(&io) as Arc<dyn HostIo>,
+        )
+        .unwrap();
+
+        // Add a Filter effect so Groove Browser can open cleanly.
+        let ch_name = app.project().mixer.channels[0].name.clone();
+        app.execute_command(&format!("fx add filter {ch_name}"))
+            .unwrap();
+        assert_eq!(app.assets.filter_grooves.len(), 1);
+        assert_eq!(app.assets.filter_grooves.preset(0).name, "00 Default Pulse");
+
+        // 1. `:groove-bank <relative-path>` loads custom bank, updates RT bank & GrooveBrowser source label.
+        let out = app
+            .execute_command("groove-bank banks/acid_house.grooves.json")
+            .unwrap();
+        assert!(out.changed);
+        assert_eq!(app.assets.filter_grooves.len(), 2);
+        assert_eq!(app.assets.filter_grooves.preset(1).name, "01 Acid Gate");
+        assert_eq!(app.audio_score.mixer.filter_grooves.len(), 2);
+
+        app.open_groove_browser().unwrap();
+        let gb = app.groove_browser_view().expect("GrooveBrowser open");
+        assert_eq!(gb.bank_source, "acid_house.grooves.json");
+        assert_eq!(gb.total_count, 2);
+
+        // 2. Pressing `o` inside GrooveBrowser closes it cleanly and opens File Hub Import focused on GROOVE bank.
+        app.press_keys("o").unwrap();
+        assert_eq!(app.input.mode, Mode::FileHub);
+        {
+            let hub = app.modal.file_hub().expect("FileHub open after o");
+            assert_eq!(hub.tab, FileHubTab::Import);
+            let cur = &hub.entries[hub.cursor];
+            assert_eq!(cur.kind, FileEntryKind::FilterGrooveBank);
+            assert_eq!(cur.kind.badge(), "GROOVE");
+            let preview = hub
+                .preview_cache
+                .get(&cur.path)
+                .map(String::as_str)
+                .unwrap_or("");
+            assert!(
+                preview.starts_with("Filter Groove Bank · "),
+                "expected groove bank preview, got '{preview}'"
+            );
+        }
+        app.press_keys("<Esc>").unwrap();
+
+        // 3. `:groove-bank reload` restores the search-root `presets/filter_grooves.json` bank.
+        app.execute_command("groove-bank reload").unwrap();
+        assert_eq!(app.assets.filter_grooves.len(), 1);
+        assert_eq!(app.assets.filter_grooves.preset(0).name, "00 Default Pulse");
+
+        // 4. Bare `:groove-bank` opens File Hub picker; navigating Browse -> banks/acid_house.grooves.json auto-closes.
+        app.execute_command("groove-bank").unwrap();
+        assert_eq!(app.input.mode, Mode::FileHub);
+        app.press_keys("2").unwrap(); // Browse tab
+        let banks_idx = app
+            .modal
+            .file_hub()
+            .unwrap()
+            .entries
+            .iter()
+            .position(|e| e.label == "banks/")
+            .expect("banks/ folder listed");
+        app.modal.file_hub_mut().unwrap().cursor = banks_idx;
+        app.press_keys("<Enter>").unwrap(); // enters banks/, lands on acid_house.grooves.json
+        assert_eq!(
+            app.modal.file_hub().unwrap().entries[app.modal.file_hub().unwrap().cursor].kind,
+            FileEntryKind::FilterGrooveBank
+        );
+        app.press_keys("<Enter>").unwrap(); // loads & auto-closes
+        assert_eq!(app.input.mode, Mode::Normal);
+        assert!(app.modal.file_hub().is_none());
+        assert_eq!(app.assets.filter_grooves.len(), 2);
+
+        // 5. Ambiguously named `.json` groove bank via Finder (`OpenProject` & `ImportAsset`) loads & closes cleanly.
+        app.open_file_hub(FileHubTab::Import);
+        app.apply_file_dialog_result(
+            FileDialogRequest::ImportAsset,
+            PathBuf::from("/virtual/studio/custom_grooves.json"),
+        )
+        .unwrap();
+        assert_eq!(app.input.mode, Mode::Normal);
+        assert!(app.modal.file_hub().is_none());
+        assert_eq!(
+            app.assets.filter_grooves.preset(5).name,
+            "05 Weird Polyrhythm"
+        );
+
+        // 6. Corrupt explicit `*.grooves.json` while project is dirty returns Err, stays in FileHub (never ConfirmAction::Open),
+        //    and preserves the active bank.
+        app.execute_command("bpm 131").unwrap();
+        assert!(app.dirty());
+        app.open_file_hub(FileHubTab::Browse);
+        let bad_idx = app
+            .modal
+            .file_hub()
+            .unwrap()
+            .entries
+            .iter()
+            .position(|e| e.label == "broken.grooves.json")
+            .expect("broken.grooves.json listed");
+        app.modal.file_hub_mut().unwrap().cursor = bad_idx;
+        let err = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(err.is_err());
+        assert_eq!(app.input.mode, Mode::FileHub);
+        assert!(app.modal.file_hub().is_some());
+        assert_eq!(
+            app.assets.filter_grooves.preset(5).name,
+            "05 Weird Polyrhythm",
+            "failed groove bank load must preserve previous bank"
+        );
     }
 }

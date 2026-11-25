@@ -73,6 +73,7 @@ pub(crate) enum InstrumentVerb {
     Tab,
     ReloadSamples,
     ReloadPresets,
+    GrooveBank,
     Samples,
     Sample,
     Slice,
@@ -261,6 +262,10 @@ pub(crate) const EX_VERBS: &[(&str, ExVerb)] = &[
         "reload-presets",
         ExVerb::Instrument(InstrumentVerb::ReloadPresets),
     ),
+    (
+        "groove-bank",
+        ExVerb::Instrument(InstrumentVerb::GrooveBank),
+    ),
     ("samples", ExVerb::Instrument(InstrumentVerb::Samples)),
     ("browser", ExVerb::Instrument(InstrumentVerb::Samples)),
     ("sample", ExVerb::Instrument(InstrumentVerb::Sample)),
@@ -383,6 +388,7 @@ impl ExVerb {
             Self::Instrument(v) => match v {
                 InstrumentVerb::ReloadSamples
                 | InstrumentVerb::ReloadPresets
+                | InstrumentVerb::GrooveBank
                 | InstrumentVerb::Samples
                 | InstrumentVerb::Wave => true,
                 InstrumentVerb::Instrument

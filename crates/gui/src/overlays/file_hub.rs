@@ -316,7 +316,7 @@ pub(super) fn draw_file_hub(
                     "RBS" => theme.accent.override_bar,
                     "BUNDLE" | "SAVE" => theme.accent.focus,
                     "TAKE" => theme.accent.audition,
-                    "PRESET" | "MIDI" => theme.accent.modulation,
+                    "PRESET" | "GROOVE" | "MIDI" => theme.accent.modulation,
                     "DIR" => theme.accent.warning_key,
                     _ => theme.accent.routing,
                 };

@@ -29,6 +29,18 @@ pub const FILTER_ENV_PATTERN_COUNT: usize = 128;
 pub const MAX_FILTER_ENV_STEPS: usize = 64;
 pub const MAX_FILTER_GROOVES_BYTES: u64 = 512 * 1024;
 
+/// Whether a JSON path follows a recognizable Filter Groove Bank naming convention
+/// (`filter_grooves.json`, `*.grooves.json`, or `*filter_groove*.json`).
+pub fn is_filter_groove_bank_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    let lower = name.to_ascii_lowercase();
+    lower == "filter_grooves.json"
+        || lower.ends_with(".grooves.json")
+        || (lower.ends_with(".json") && lower.contains("filter_groove"))
+}
+
 mod serde_steps {
     use super::MAX_FILTER_ENV_STEPS;
     use serde::{de, Deserializer, Serialize, Serializer};

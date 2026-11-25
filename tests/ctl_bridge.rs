@@ -327,6 +327,116 @@ fn app_runs_100_percent_in_memory_via_memory_host_io() {
 }
 
 #[test]
+fn sample_bank_and_riff_writeback_run_100_percent_in_memory_via_memory_host_io() {
+    use cadence_core::rack::{ModuleKind, SampleLoopMode};
+    use cadence_core::sampler::{
+        decode_sample_bytes, encode_wav_with_metadata_bytes, SampleMetadata, SampleSlice,
+    };
+    use std::path::PathBuf;
+
+    let io = Arc::new(MemoryHostIo::new("/virtual/sampler-lab"));
+    let sr = 44_100u32;
+    let frames = sr as usize; // 1.0s mono sine
+    let pcm: Vec<f32> = (0..frames)
+        .map(|i| (std::f32::consts::TAU * 220.0 * (i as f32 / sr as f32)).sin() * 0.6)
+        .collect();
+    let initial_meta = SampleMetadata {
+        root_midi: 60,
+        has_root: true,
+        loop_mode: SampleLoopMode::Off,
+        slices: vec![SampleSlice::new(0, Some("Start".into()))],
+        ..SampleMetadata::default()
+    };
+    let wav_bytes = encode_wav_with_metadata_bytes(&pcm, None, sr, &initial_meta).unwrap();
+    let wav_path = Path::new("/virtual/sampler-lab/samples/break.wav");
+    io.insert_file(wav_path, wav_bytes);
+
+    let mut app = App::new_with_host_io(
+        Project::demo(),
+        PathBuf::from("/virtual/sampler-lab/session.json"),
+        Arc::clone(&io) as Arc<dyn HostIo>,
+    )
+    .unwrap();
+    app.execute_command("sampler VirtSampler samples/break.wav")
+        .unwrap();
+
+    // Sample decoded purely through MemoryHostIo with zero OS filesystem reads.
+    assert!(
+        app.sample_issues().is_empty(),
+        "virtual sample must resolve cleanly via HostIo; got issues: {:?}",
+        app.sample_issues()
+    );
+    assert!(app.ready());
+    let inst_id = app
+        .project()
+        .instruments
+        .iter()
+        .find(|i| i.name == "VirtSampler")
+        .expect("VirtSampler created")
+        .id;
+    let loaded = app
+        .sample_bank()
+        .into_iter()
+        .next()
+        .map(|(_, s)| s)
+        .expect("virtual sample data must be cached in memory");
+    assert_eq!(loaded.frames, frames);
+    assert_eq!(loaded.meta.slices.len(), 1);
+    assert_eq!(loaded.meta.slices[0].label.as_deref(), Some("Start"));
+
+    // Split into 4 grid slices on the Sample Deck and write RIFF cue/labl metadata purely in memory.
+    app.execute_command("wave VirtSampler").unwrap();
+    app.execute_command("slice grid 4").unwrap();
+    app.execute_command("sample write-meta").unwrap();
+
+    // Verify MemoryHostIo holds updated RIFF cue/labl chunks AND cached SampleData refreshed.
+    let updated_bytes = io
+        .read_file(wav_path)
+        .expect("updated WAV bytes must exist in MemoryHostIo");
+    let decoded = decode_sample_bytes(
+        &updated_bytes,
+        "samples/break.wav".into(),
+        "Break".into(),
+        wav_path.to_path_buf(),
+    )
+    .unwrap();
+    assert_eq!(
+        decoded.meta.slices.len(),
+        4,
+        "RIFF write-back must persist 4 grid slices in MemoryHostIo"
+    );
+
+    // Reload the virtual project in a brand-new App over the same MemoryHostIo:
+    // the fresh instance must read back all 4 persisted RIFF slice markers purely from memory!
+    let mut project2 = app.project().clone();
+    if let Some(inst2) = project2.instruments.iter_mut().find(|i| i.id == inst_id) {
+        if let Some(ModuleKind::Sampler(s)) = inst2.rack.zones[0]
+            .modules
+            .iter_mut()
+            .map(|m| &mut m.kind)
+            .find(|k| matches!(k, ModuleKind::Sampler(_)))
+        {
+            s.slices.clear();
+        }
+    }
+    let app2 = App::new_with_host_io(
+        project2,
+        PathBuf::from("/virtual/sampler-lab/session.json"),
+        Arc::clone(&io) as Arc<dyn HostIo>,
+    )
+    .unwrap();
+    assert!(app2.sample_issues().is_empty());
+    let reloaded = app2
+        .sample_bank()
+        .into_iter()
+        .next()
+        .map(|(_, s)| s)
+        .expect("reloaded virtual sample must be decoded from updated MemoryHostIo bytes");
+    assert_eq!(reloaded.meta.slices.len(), 4);
+    assert!(!wav_path.exists());
+}
+
+#[test]
 fn outcome_merge_preserves_every_field_including_bounce_export_and_dialog() {
     let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
     let bounce_out = app

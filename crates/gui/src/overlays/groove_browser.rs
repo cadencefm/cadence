@@ -284,9 +284,9 @@ pub(super) fn draw_groove_browser(
     let footer_text = if view.searching {
         "type filter  ·  ↑/↓ preview  ·  Enter apply filter  ·  Ctrl+u clear  ·  Esc cancel search"
     } else if !view.query.is_empty() {
-        "j/k live preview  ·  f fork pattern  ·  Space play/pause  ·  / edit filter  ·  Enter load  ·  Esc clear"
+        "j/k preview  ·  f fork  ·  s save  ·  o bank  ·  Space play  ·  / filter  ·  Enter load  ·  Esc clear"
     } else {
-        "j/k live preview  ·  f fork pattern  ·  Space play/pause  ·  / filter  ·  Enter load (1 undo)  ·  Esc restore"
+        "j/k preview  ·  f fork  ·  s save  ·  o bank  ·  Space play  ·  / filter  ·  Enter load (1 undo)  ·  Esc restore"
     };
     dl.text(
         footer,

@@ -261,9 +261,9 @@ impl App {
         );
         let sampler_id = Self::ensure_zone_sampler_module(zone, module_id)?;
         let load_result = if force_reload {
-            self.assets.library.reload(trimmed)
+            self.reload_library_sample(trimmed)
         } else {
-            self.assets.library.load(trimmed)
+            self.load_library_sample(trimmed)
         };
         match load_result {
             Ok(sample) => {
@@ -335,11 +335,12 @@ impl App {
         let mut entries = Vec::with_capacity(files.len());
         for (stem, path) in files {
             let locator = self.portable_sample_locator(&path)?;
-            let sample = self.assets.library.load(&locator).or_else(|_| {
+            let sample = self.load_library_sample(&locator).or_else(|_| {
                 let loaded = self.io.load_sample_file(&path, Some(locator.clone()))?;
+                let canon = self.io.canonicalize(&path).unwrap_or_else(|_| path.clone());
                 self.assets
                     .library
-                    .cache_prepared(&path, Arc::clone(&loaded));
+                    .cache_prepared_canonical(canon, Arc::clone(&loaded));
                 Ok::<_, anyhow::Error>(loaded)
             })?;
             entries.push((stem, locator, sample.meta.clone(), sample.frames));

@@ -284,7 +284,7 @@ impl App {
         self.input.mode = Mode::GrooveBrowser;
         let out = self.apply_groove_browser_preview()?;
         self.status = format!(
-            "Filter Grooves · {device_name} · j/k live preview · / filter · f fork · Enter load · Esc restore"
+            "Filter Grooves · {device_name} · j/k live preview · / filter · f fork · s save · o bank · Enter load · Esc restore"
         );
         Ok(out)
     }
@@ -343,7 +343,7 @@ impl App {
                 }
                 if let Some((_, name)) = chosen {
                     self.status = format!(
-                        "Previewing groove '{name}' · Space play/pause · f fork · s save · Enter load · Esc restore"
+                        "Previewing groove '{name}' · Space play/pause · f fork · s save · o bank · Enter load · Esc restore"
                     );
                 }
                 Ok(Outcome {
@@ -584,6 +584,11 @@ impl App {
                 out.merge(save_out);
                 Ok(out)
             }
+            KeyCode::Char('o') if !repeat => {
+                let out = self.cancel_groove_browser()?;
+                self.open_file_hub_for_groove_bank_load();
+                Ok(out)
+            }
             KeyCode::Char(' ') if !repeat => self.apply(Action::Play {
                 playing: !self.transport.playing,
             }),
@@ -656,7 +661,7 @@ impl App {
             .filter_grooves
             .source_path()
             .and_then(|p| p.file_name().and_then(|n| n.to_str()))
-            .map(|_| "filter_grooves.json".to_string())
+            .map(str::to_string)
             .unwrap_or_else(|| {
                 if self.assets.filter_grooves.is_empty() {
                     "No bank loaded".into()
@@ -954,5 +959,81 @@ impl App {
             preset.name
         );
         Ok(out)
+    }
+
+    // ─── Load / Reload External Filter Groove Bank ──────────────────────────
+
+    fn resolve_groove_bank_path(&self, raw: &Path) -> PathBuf {
+        if self.io.is_file(raw) {
+            return raw.to_path_buf();
+        }
+        if raw.is_relative() {
+            let rel_project = self.doc.asset_base().join(raw);
+            if self.io.is_file(&rel_project) {
+                return rel_project;
+            }
+            for root in self.filter_groove_search_roots() {
+                let candidate = root.join(raw);
+                if self.io.is_file(&candidate) {
+                    return candidate;
+                }
+            }
+        }
+        raw.to_path_buf()
+    }
+
+    /// Load an arbitrary Filter Groove Bank JSON file via `self.io` (shared by File Hub,
+    /// Finder Import, and `:groove-bank <path>`) and immediately refresh the live RT bank.
+    pub(crate) fn load_filter_groove_bank_from_path(&mut self, path: &Path) -> Result<Outcome> {
+        let resolved = self.resolve_groove_bank_path(path);
+        let bytes = self
+            .io
+            .read_bounded(&resolved, MAX_FILTER_GROOVES_BYTES)
+            .with_context(|| format!("Reading Filter Groove Bank {}", resolved.display()))?;
+        let catalog = FilterGrooveCatalog::parse_bytes(&bytes)
+            .with_context(|| format!("Parsing Filter Groove Bank {}", resolved.display()))?
+            .with_source_path(resolved.clone());
+        let count = catalog.len();
+        let label = resolved
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("filter_grooves.json")
+            .to_string();
+        self.set_filter_grooves(catalog);
+        self.refresh_audio()?;
+        self.status = format!(
+            "Loaded Filter Groove Bank '{label}' ({count} groove{})",
+            if count == 1 { "" } else { "s" }
+        );
+        Ok(Outcome {
+            changed: true,
+            ..Outcome::default()
+        })
+    }
+
+    /// Reload the active Filter Groove Bank from standard preset search roots (`:groove-bank reload`).
+    pub(crate) fn reload_filter_groove_bank(&mut self) -> Result<Outcome> {
+        let roots = self.filter_groove_search_roots();
+        let reloaded = self.io.load_filter_grooves(&roots);
+        let count = reloaded.len();
+        let label = reloaded
+            .source_path()
+            .and_then(|p| p.file_name().and_then(|n| n.to_str()))
+            .unwrap_or("presets/filter_grooves.json")
+            .to_string();
+        self.set_filter_grooves(reloaded);
+        self.refresh_audio()?;
+        self.status = if count == 0 {
+            "Reloaded Filter Groove Bank (no bank found in preset roots)".into()
+        } else {
+            format!(
+                "Reloaded Filter Groove Bank '{label}' ({count} groove{})",
+                if count == 1 { "" } else { "s" }
+            )
+        };
+        Ok(Outcome {
+            changed: true,
+            ..Outcome::default()
+        })
     }
 }

@@ -5,10 +5,12 @@
 
 use crate::rack::module_sample_key;
 use crate::runtime::SampleBank;
-use crate::sampler::SampleLibrary;
+use crate::sampler::{load_sample_file, SampleData, SampleLibrary};
 use crate::score::ScoreWindow;
 use anyhow::{bail, Result};
 use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SampleIssue {
@@ -41,6 +43,23 @@ fn issue_label(inst_name: &str, zone_count: usize, zone_name: &str) -> String {
 /// Prepare all available sampler assets, retaining precise failures for repair.
 /// An unloaded sampler module is a valid editable device, but is not render-ready.
 pub fn load_project_samples(score: &ScoreWindow, library: &mut SampleLibrary) -> SampleLoadReport {
+    load_project_samples_with(
+        score,
+        library,
+        |p| p.is_file(),
+        |p| Ok(p.canonicalize()?),
+        |p, lbl| load_sample_file(p, lbl),
+    )
+}
+
+/// Host-I/O-injectable variant of [`load_project_samples`] performing zero direct OS filesystem reads.
+pub fn load_project_samples_with(
+    score: &ScoreWindow,
+    library: &mut SampleLibrary,
+    is_file: impl Fn(&Path) -> bool,
+    canonicalize: impl Fn(&Path) -> Result<PathBuf>,
+    load_file: impl Fn(&Path, Option<String>) -> Result<Arc<SampleData>>,
+) -> SampleLoadReport {
     let mut report = SampleLoadReport {
         bank: Vec::new(),
         issues: Vec::new(),
@@ -50,7 +69,7 @@ pub fn load_project_samples(score: &ScoreWindow, library: &mut SampleLibrary) ->
         for (zone_id, zone, mod_id, smp) in inst.rack.sampler_modules() {
             let path = smp.path.as_deref();
             let message = match path {
-                Some(path) => match library.load(path) {
+                Some(path) => match library.load_with(path, &is_file, &canonicalize, &load_file) {
                     Ok(sample) => {
                         report
                             .bank

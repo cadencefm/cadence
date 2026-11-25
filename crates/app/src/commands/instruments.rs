@@ -124,7 +124,21 @@ impl App {
             InstrumentVerb::ReloadPresets => {
                 require_args(args, 0, ":reload-presets")?;
                 self.reload_presets_with_status();
-                Ok(Outcome::default())
+                Ok(Outcome {
+                    changed: true,
+                    ..Outcome::default()
+                })
+            }
+            InstrumentVerb::GrooveBank => {
+                if args.is_empty() {
+                    self.open_file_hub_for_groove_bank_load();
+                    return Ok(Outcome::default());
+                }
+                if args.len() == 1 && args[0].eq_ignore_ascii_case("reload") {
+                    return self.reload_filter_groove_bank();
+                }
+                require_args(args, 1, ":groove-bank [PATH | reload]")?;
+                self.load_filter_groove_bank_from_path(Path::new(&args[0]))
             }
             InstrumentVerb::Samples => {
                 require_args(args, 0, ":samples")?;

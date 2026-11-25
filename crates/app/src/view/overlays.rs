@@ -308,8 +308,8 @@ pub const HELP_ENTRIES: &[HelpEntry] = &[
     HelpEntry {
         tab: HelpTab::SoundFx,
         category: "FILTER GROOVES",
-        keys: "P/Enter (Filter) · / filter · j/k live preview · f fork pattern · s save to bank",
-        summary: "Browse extensible filter_grooves.json banks (up to 128 slots) with live non-destructive preview · f forks groove · s saves to bank",
+        keys: "P/Enter (Filter) · / filter · j/k live preview · f fork pattern · s save · o load bank",
+        summary: "Browse or load any filter_grooves.json / *.grooves.json bank (up to 128 slots) with live non-destructive preview · f forks · s saves · o picks bank",
     },
     HelpEntry {
         tab: HelpTab::SoundFx,
@@ -394,8 +394,8 @@ pub const HELP_ENTRIES: &[HelpEntry] = &[
     HelpEntry {
         tab: HelpTab::FilesCli,
         category: "FILE HUB",
-        keys: "gf · Ctrl+Shift+f/o/s/e · Ctrl+s save · H/L Tab · Alt+h/l ,/. export opt · / · e path · F · R",
-        summary: "4-tab Hub: Open (Recent, Examples, Bundles, Takes) · Save (+ Bundle/Preset/MIDI/Take) · Import (.rbs/Presets/MIDI) · Export WAV/Stems",
+        keys: "gf · Ctrl+Shift+f/o/s/e · Ctrl+s save · H/L Tab 1–5 · Alt+h/l ,/. export opt · / · e path · F · R",
+        summary: "5-tab Hub: Quick Open · Browse · Save (+ Bundle/Preset/MIDI/Take) · Import (.rbs/Presets/Grooves/MIDI) · Export WAV/Stems",
     },
     HelpEntry {
         tab: HelpTab::FilesCli,

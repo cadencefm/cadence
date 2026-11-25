@@ -874,6 +874,122 @@ pub fn draw_deck_frame(
     body.inset(6.0, 5.0)
 }
 
+/// Semantic specification for a shared top deck mode tab bar (`Rack`, `Devices`).
+pub struct DeckTabBarSpec<'a> {
+    pub tabs: &'a [(&'static str, bool)],
+    pub active_accent: Color,
+    /// Optional trailing context badge rendered immediately after the tab pills (e.g. Rack zone badge).
+    pub badge: Option<(&'a str, Color)>,
+    /// Optional right-aligned contextual shortcut hint rendered when horizontal space allows.
+    pub right_hint: Option<&'a str>,
+}
+
+/// Shared deck mode tab bar painter used by tabbed decks (`Instrument Rack`, `Devices`).
+pub fn draw_deck_tab_bar(
+    dl: &mut DisplayList,
+    bar: Rect,
+    spec: &DeckTabBarSpec<'_>,
+    theme: &Theme,
+) {
+    if bar.is_empty() {
+        return;
+    }
+    dl.push_clip(bar);
+    let font = theme.font.small;
+    let cw = theme.char_width(font);
+    let pill_h = (bar.h - 6.0).clamp(16.0, 20.0);
+    let pill_y = bar.y + 1.0;
+
+    let mut tx = bar.x;
+    for &(label, active) in spec.tabs {
+        let tw = label.chars().count() as f32 * cw + 18.0;
+        let tr = Rect::new(tx, pill_y, tw, pill_h);
+        dl.panel(
+            tr,
+            if active {
+                spec.active_accent.with_alpha(0.22)
+            } else {
+                theme.surface.recessed
+            },
+            if active {
+                spec.active_accent
+            } else {
+                theme.border.subtle
+            },
+            theme.radii.badge,
+            if active { 1.2 } else { 1.0 },
+            if active { 0.16 } else { 0.0 },
+        );
+        dl.text(
+            tr,
+            label,
+            font,
+            active,
+            if active {
+                spec.active_accent
+            } else {
+                theme.text.secondary
+            },
+            TextAlign::Center,
+        );
+        tx += tw + 5.0;
+    }
+
+    if let Some((badge_text, badge_accent)) = spec.badge {
+        if !badge_text.is_empty() {
+            let zfont = theme.font.small - 1.0;
+            let zcw = theme.char_width(zfont);
+            let avail = (bar.right() - tx - 8.0).max(0.0);
+            let zw = (badge_text.chars().count() as f32 * zcw + 16.0).min(avail.min(220.0));
+            if zw >= 56.0 {
+                tx += 4.0;
+                let zr = Rect::new(tx, pill_y, zw, pill_h);
+                dl.panel(
+                    zr,
+                    badge_accent.with_alpha(0.16),
+                    badge_accent.with_alpha(0.75),
+                    theme.radii.badge,
+                    1.0,
+                    0.0,
+                );
+                let max_c = ((zr.w - 10.0) / zcw).floor().max(4.0) as usize;
+                dl.text(
+                    zr.inset(5.0, 0.0),
+                    crate::display::trim_label(badge_text, max_c),
+                    zfont,
+                    true,
+                    badge_accent,
+                    TextAlign::Center,
+                );
+                tx += zw + 6.0;
+            }
+        }
+    }
+
+    if let Some(hint) = spec.right_hint {
+        let rem_w = (bar.right() - tx - 8.0).max(0.0);
+        if rem_w >= 110.0 {
+            let hfont = theme.font.small - 1.0;
+            let hcw = theme.char_width(hfont);
+            let max_c = (rem_w / hcw).floor().max(6.0) as usize;
+            dl.text(
+                Rect::new(tx + 6.0, pill_y, rem_w - 6.0, pill_h),
+                crate::display::trim_label(hint, max_c),
+                hfont,
+                false,
+                theme.text.muted,
+                TextAlign::Right,
+            );
+        }
+    }
+
+    dl.fill(
+        Rect::new(bar.x, bar.bottom() - 2.0, bar.w, 1.0),
+        theme.border.subtle.with_alpha(0.7),
+    );
+    dl.pop_clip();
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -934,5 +1050,71 @@ mod tests {
         );
         assert_eq!(wide_dl.base.texts.len(), 2);
         assert_eq!(wide_dl.base.texts[1].text, long_badge);
+    }
+
+    #[test]
+    fn deck_tab_bar_renders_tabs_optional_badge_and_right_hint_with_balanced_clips() {
+        let theme = Theme::cadence_dark();
+
+        // Empty bar returns early without emitting any draw commands.
+        let mut empty_dl = DisplayList::new(640.0, 200.0, 1.0);
+        draw_deck_tab_bar(
+            &mut empty_dl,
+            Rect::new(0.0, 0.0, 0.0, 24.0),
+            &DeckTabBarSpec {
+                tabs: &[("Audio", true), ("MIDI", false)],
+                active_accent: theme.accent.focus,
+                badge: None,
+                right_hint: Some("H/L tab"),
+            },
+            &theme,
+        );
+        assert!(empty_dl.base.texts.is_empty());
+        assert!(empty_dl.base.commands.is_empty());
+
+        // Wide 3-tab bar with trailing zone badge + right hint renders all items strictly left-to-right.
+        let mut rack_dl = DisplayList::new(900.0, 200.0, 1.0);
+        draw_deck_tab_bar(
+            &mut rack_dl,
+            Rect::new(10.0, 10.0, 860.0, 24.0),
+            &DeckTabBarSpec {
+                tabs: &[("Panel", true), ("Patchbay", false), ("Zones", false)],
+                active_accent: theme.accent.focus,
+                badge: Some(("Z1/4 Kick · C1–C2", theme.accent.routing)),
+                right_hint: Some("H/L tab · h/l mod · j/k param"),
+            },
+            &theme,
+        );
+        assert_eq!(rack_dl.base.texts.len(), 5);
+        assert_eq!(rack_dl.base.texts[0].text, "Panel");
+        assert_eq!(rack_dl.base.texts[1].text, "Patchbay");
+        assert_eq!(rack_dl.base.texts[2].text, "Zones");
+        assert!(rack_dl.base.texts[3].text.contains("Z1/4"));
+        assert!(rack_dl.base.texts[4].text.contains("H/L tab"));
+        for pair in rack_dl.base.texts.windows(2) {
+            assert!(
+                pair[0].rect.right() <= pair[1].rect.x + 1.0,
+                "tab bar items must not overlap: {:?} vs {:?}",
+                pair[0].rect,
+                pair[1].rect
+            );
+        }
+
+        // Narrow 2-tab bar omits right hint cleanly when remaining width < 110px.
+        let mut narrow_dl = DisplayList::new(260.0, 200.0, 1.0);
+        draw_deck_tab_bar(
+            &mut narrow_dl,
+            Rect::new(0.0, 0.0, 220.0, 24.0),
+            &DeckTabBarSpec {
+                tabs: &[("Audio", false), ("MIDI", true)],
+                active_accent: theme.accent.modulation,
+                badge: None,
+                right_hint: Some("H/L switch tab · r rescan"),
+            },
+            &theme,
+        );
+        assert_eq!(narrow_dl.base.texts.len(), 2);
+        assert_eq!(narrow_dl.base.texts[0].text, "Audio");
+        assert_eq!(narrow_dl.base.texts[1].text, "MIDI");
     }
 }

@@ -227,6 +227,7 @@ impl MemoryHostIo {
         if let Some(parent) = norm.parent() {
             insert_ancestors(&mut fs.dirs, parent);
         }
+        fs.samples.remove(&norm);
         fs.files.insert(norm, bytes.into());
     }
 
@@ -387,6 +388,7 @@ impl HostIo for MemoryHostIo {
         if let Some(parent) = norm.parent() {
             insert_ancestors(&mut fs.dirs, parent);
         }
+        fs.samples.remove(&norm);
         fs.files.insert(norm, payload.to_vec());
         Ok(())
     }
@@ -535,11 +537,19 @@ impl HostIo for MemoryHostIo {
         Ok(remove_count)
     }
 
-    fn load_sample_file(&self, path: &Path, _label: Option<String>) -> Result<Arc<SampleData>> {
+    fn load_sample_file(&self, path: &Path, label: Option<String>) -> Result<Arc<SampleData>> {
         let fs = self.state.read().expect("MemoryHostIo lock");
         let norm = normalize_path(&fs.cwd, path);
         if let Some(sample) = fs.samples.get(&norm) {
             return Ok(Arc::clone(sample));
+        }
+        if let Some(bytes) = fs.files.get(&norm) {
+            let name = norm
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Sample".into());
+            let path_label = label.unwrap_or_else(|| norm.to_string_lossy().into_owned());
+            return cadence_core::sampler::decode_sample_bytes(bytes, name, path_label, norm);
         }
         bail!("Virtual sample not found: {}", path.display())
     }

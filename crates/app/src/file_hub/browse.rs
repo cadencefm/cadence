@@ -8,7 +8,7 @@ use std::collections::HashSet;
 const MAX_QUICK_RECENT: usize = 8;
 
 const SECTION_FILES: &str = "FILES";
-const SECTION_IMPORT_FILES: &str = "IMPORTABLE (.RBS / PRESETS / MIDI / TAKES)";
+const SECTION_IMPORT_FILES: &str = "IMPORTABLE (.RBS / PRESETS / GROOVES / MIDI / TAKES)";
 
 /// Cursor position for landing cleanly inside a directory browser: selects the first actual
 /// child entry (bundle, folder, or file) rather than `..`, falling back to `..` if the folder
@@ -162,12 +162,14 @@ pub(super) fn classify_json(path: &Path) -> FileEntryKind {
     if name.ends_with(".midi.json") || name.contains("midi_profile") {
         return FileEntryKind::MidiProfile;
     }
+    if cadence_core::filter_patterns::is_filter_groove_bank_path(path) {
+        return FileEntryKind::FilterGrooveBank;
+    }
     if name.ends_with(".preset.json")
-        || (name != "filter_grooves.json"
-            && path.ancestors().any(|a| {
-                a.file_name()
-                    .is_some_and(|n| n.eq_ignore_ascii_case("presets"))
-            }))
+        || path.ancestors().any(|a| {
+            a.file_name()
+                .is_some_and(|n| n.eq_ignore_ascii_case("presets"))
+        })
     {
         return FileEntryKind::InstrumentPreset;
     }
@@ -228,6 +230,7 @@ pub(super) fn peek_file_preview(io: &dyn HostIo, path: &Path, kind: FileEntryKin
         FileEntryKind::Project
         | FileEntryKind::Example
         | FileEntryKind::InstrumentPreset
+        | FileEntryKind::FilterGrooveBank
         | FileEntryKind::MidiProfile => {
             const MAX_PREVIEW_BYTES: u64 = 8 * 1024 * 1024;
             if let Ok(len) = io.file_len(path) {
@@ -273,6 +276,13 @@ pub(super) fn peek_file_preview(io: &dyn HostIo, path: &Path, kind: FileEntryKin
                     .and_then(|v| v.as_array())
                     .map_or(0, Vec::len);
                 return format!("MIDI Profile · \"{name}\" · {n} mappings");
+            }
+            if let Some(grooves) = val.get("grooves").and_then(|v| v.as_array()) {
+                let n = grooves.len();
+                return format!(
+                    "Filter Groove Bank · {n} groove{}",
+                    if n == 1 { "" } else { "s" }
+                );
             }
             if let Some(patch) = val.get("patch") {
                 if let Some(name) = val.get("name").and_then(|v| v.as_str()) {
@@ -487,8 +497,63 @@ impl App {
             }
         }
 
-        // Discovered external PresetCatalog library on Import tab.
+        // Discovered Filter Groove Banks and external PresetCatalog library on Import tab.
         if hub.tab == FileHubTab::Import {
+            let mut seen_banks = HashSet::new();
+            let mut push_bank = |path: PathBuf, active: bool| {
+                if !io.is_file(&path) {
+                    return;
+                }
+                let canon = io.canonicalize(&path).unwrap_or_else(|_| path.clone());
+                if !seen_banks.insert(canon) {
+                    return;
+                }
+                let label = path
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("filter_grooves.json")
+                    .to_string();
+                let parent = path
+                    .parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                let detail = if active {
+                    format!(
+                        "Active bank ({} grooves) · {parent}",
+                        self.assets.filter_grooves.len()
+                    )
+                } else {
+                    parent
+                };
+                if matches(&label, &detail) || matches("groove bank", &detail) {
+                    entries.push(FileHubEntry {
+                        section: "FILTER GROOVE BANKS",
+                        kind: FileEntryKind::FilterGrooveBank,
+                        label,
+                        detail,
+                        path,
+                        preset_id: None,
+                    });
+                }
+            };
+            if let Some(active_src) = self.assets.filter_grooves.source_path() {
+                push_bank(active_src.to_path_buf(), true);
+            }
+            for root in self.filter_groove_search_roots() {
+                if let Ok(mut found) = io.read_dir(&root) {
+                    found.sort_by(|a, b| a.file_name.cmp(&b.file_name));
+                    for entry in found {
+                        if entry.is_file
+                            && cadence_core::filter_patterns::is_filter_groove_bank_path(
+                                &entry.path,
+                            )
+                        {
+                            push_bank(entry.path, false);
+                        }
+                    }
+                }
+            }
+
             for preset in self.assets.presets.entries() {
                 let cat = preset.category.as_deref().unwrap_or(&preset.id);
                 let detail = format!("Rack ({}z) · {cat}", preset.patch.zones.len());
@@ -691,7 +756,7 @@ impl App {
                             }
                             return self.import_file_hub_asset(&entry.path, false);
                         }
-                        FileEntryKind::MidiProfile => {
+                        FileEntryKind::FilterGrooveBank | FileEntryKind::MidiProfile => {
                             return self.import_file_hub_asset(&entry.path, false);
                         }
                         _ if hub.tab == FileHubTab::Import => {
