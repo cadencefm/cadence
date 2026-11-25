@@ -211,7 +211,7 @@ impl App {
                         return self.apply(Action::Redo);
                     }
                     KeyCode::Char('f' | 'o') if self.input.mode == Mode::Normal => {
-                        self.open_file_hub(FileHubTab::Open);
+                        self.open_file_hub(FileHubTab::Quick);
                         return Ok(Outcome::default());
                     }
                     KeyCode::Char('s') if self.input.mode == Mode::Normal => {

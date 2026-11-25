@@ -363,7 +363,7 @@ impl App {
                 Ok(Outcome::default())
             }
             SessionVerb::Files => {
-                self.open_file_hub(FileHubTab::Open);
+                self.open_file_hub(FileHubTab::Quick);
                 Ok(Outcome::default())
             }
             SessionVerb::SaveAs => {

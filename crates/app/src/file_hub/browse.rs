@@ -1,6 +1,147 @@
-//! File Hub directory listing, bounded header peek/preview, row builders, and Open/Import navigation.
+//! File Hub directory listing, bounded header peek/preview, row builders, and Quick/Browse/Import navigation.
 use super::{FileEntryKind, FileHubEntry, FileHubState, FileHubTab};
 use crate::*;
+use std::collections::HashSet;
+
+/// Maximum recent projects listed on the unfiltered Quick Open tab so Bundled Examples and
+/// Live Takes stay immediately visible without scrolling; `/` search matches the full list.
+const MAX_QUICK_RECENT: usize = 8;
+
+const SECTION_FILES: &str = "FILES";
+const SECTION_IMPORT_FILES: &str = "IMPORTABLE (.RBS / PRESETS / MIDI / TAKES)";
+
+/// Cursor position for landing cleanly inside a directory browser: selects the first actual
+/// child entry (bundle, folder, or file) rather than `..`, falling back to `..` if the folder
+/// is empty or `0` if no directory section is present.
+pub(super) fn first_dir_entry_cursor(entries: &[FileHubEntry]) -> usize {
+    let is_dir_section = |sec: &str| sec == SECTION_FILES || sec == SECTION_IMPORT_FILES;
+    entries
+        .iter()
+        .position(|e| is_dir_section(e.section) && e.kind != FileEntryKind::ParentDir)
+        .or_else(|| {
+            entries
+                .iter()
+                .position(|e| is_dir_section(e.section) && e.kind == FileEntryKind::ParentDir)
+        })
+        .unwrap_or(0)
+}
+
+struct ScannedDir {
+    bundles: Vec<(String, PathBuf)>,
+    dirs: Vec<(String, PathBuf)>,
+    files: Vec<(String, FileEntryKind, PathBuf)>,
+}
+
+fn scan_dir_entries(
+    io: &dyn HostIo,
+    dir: &Path,
+    detect_bundles: bool,
+    matches: &impl Fn(&str, &str) -> bool,
+) -> ScannedDir {
+    let mut bundles = Vec::new();
+    let mut dirs = Vec::new();
+    let mut files = Vec::new();
+    if let Ok(read) = io.read_dir(dir) {
+        for entry in read {
+            let name = entry.file_name;
+            let path = entry.path;
+            if name.starts_with('.') {
+                continue;
+            }
+            if entry.is_dir {
+                if detect_bundles && is_portable_bundle_dir(io, &path) {
+                    if matches(&name, "bundle") {
+                        bundles.push((name, path));
+                    }
+                } else if matches(&name, "") {
+                    dirs.push((name, path));
+                }
+            } else if entry.is_file {
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let kind = if is_take_jsonl_path(&path) {
+                    Some(FileEntryKind::Take)
+                } else if cadence_formats::find_import_format_by_ext(&ext).is_some() {
+                    Some(FileEntryKind::Rbs)
+                } else if ext == "json" {
+                    Some(classify_json(&path))
+                } else {
+                    None
+                };
+                if let Some(kind) = kind {
+                    if matches(&name, kind.badge()) {
+                        files.push((name, kind, path));
+                    }
+                }
+            }
+        }
+    }
+    bundles.sort_by_key(|a| a.0.to_ascii_lowercase());
+    dirs.sort_by_key(|a| a.0.to_ascii_lowercase());
+    files.sort_by_key(|a| a.0.to_ascii_lowercase());
+    ScannedDir {
+        bundles,
+        dirs,
+        files,
+    }
+}
+
+fn push_scanned_entries(
+    entries: &mut Vec<FileHubEntry>,
+    section: &'static str,
+    scanned: ScannedDir,
+    io: &dyn HostIo,
+    skip_seen: Option<&mut HashSet<PathBuf>>,
+) {
+    let mut skip_seen = skip_seen;
+    let mut allow = |path: &Path| {
+        if let Some(seen) = skip_seen.as_deref_mut() {
+            let canon = io.canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            seen.insert(canon)
+        } else {
+            true
+        }
+    };
+    for (name, path) in scanned.bundles {
+        if allow(&path) {
+            entries.push(FileHubEntry {
+                section,
+                kind: FileEntryKind::Bundle,
+                label: name,
+                detail: "portable bundle · project.json + samples/".into(),
+                path,
+                preset_id: None,
+            });
+        }
+    }
+    for (name, path) in scanned.dirs {
+        if allow(&path) {
+            entries.push(FileHubEntry {
+                section,
+                kind: FileEntryKind::Dir,
+                label: format!("{name}/"),
+                detail: "folder".into(),
+                path,
+                preset_id: None,
+            });
+        }
+    }
+    for (name, kind, path) in scanned.files {
+        if allow(&path) {
+            entries.push(FileHubEntry {
+                section,
+                kind,
+                label: name,
+                detail: kind.badge().into(),
+                path,
+                preset_id: None,
+            });
+        }
+    }
+}
 
 pub(super) fn is_take_jsonl_path(path: &Path) -> bool {
     path.file_name()
@@ -224,7 +365,8 @@ impl App {
                 || detail.to_ascii_lowercase().contains(&query)
         };
 
-        if hub.tab == FileHubTab::Open {
+        if hub.tab == FileHubTab::Quick {
+            let mut seen_quick = HashSet::new();
             if matches(
                 "New Blank Project",
                 "Start a blank project with Settings defaults",
@@ -238,7 +380,12 @@ impl App {
                     preset_id: None,
                 });
             }
+
+            let mut recent_added = 0usize;
             for recent in &self.config.recent_projects {
+                if query.is_empty() && recent_added >= MAX_QUICK_RECENT {
+                    break;
+                }
                 if !io.exists(recent) {
                     continue;
                 }
@@ -257,6 +404,8 @@ impl App {
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
                 if matches(&label, &detail) {
+                    let canon = io.canonicalize(recent).unwrap_or_else(|_| recent.clone());
+                    seen_quick.insert(canon);
                     entries.push(FileHubEntry {
                         section: "RECENT",
                         kind,
@@ -265,6 +414,7 @@ impl App {
                         path: recent.clone(),
                         preset_id: None,
                     });
+                    recent_added += 1;
                 }
             }
 
@@ -282,29 +432,58 @@ impl App {
             }
             for ex in discover_bundled_examples(io, &roots) {
                 if matches(&ex.label, &ex.detail) {
+                    let canon = io
+                        .canonicalize(&ex.path)
+                        .unwrap_or_else(|_| ex.path.clone());
+                    seen_quick.insert(canon);
                     entries.push(ex);
                 }
             }
 
-            // Surface `.take.jsonl` files from `<dir>/takes/` when present.
-            let takes_dir = hub.dir.join("takes");
-            if let Ok(mut take_entries) = io.read_dir(&takes_dir) {
-                take_entries.sort_by(|a, b| a.file_name.cmp(&b.file_name));
-                for entry in take_entries {
-                    if entry.is_file && is_take_jsonl_path(&entry.path) {
-                        let detail = "takes/ · .take.jsonl".to_string();
-                        if matches(&entry.file_name, &detail) {
-                            entries.push(FileHubEntry {
-                                section: "LIVE TAKES",
-                                kind: FileEntryKind::Take,
-                                label: entry.file_name,
-                                detail,
-                                path: entry.path,
-                                preset_id: None,
-                            });
+            // Surface `.take.jsonl` files from `<project_dir>/takes/` and `<project_dir>/`.
+            let project_dir = self.doc.asset_base();
+            let take_dirs = [
+                (project_dir.join("takes"), "takes/ · .take.jsonl"),
+                (project_dir.clone(), ".take.jsonl"),
+            ];
+            for (dir_path, detail_label) in take_dirs {
+                if let Ok(mut take_entries) = io.read_dir(&dir_path) {
+                    take_entries.sort_by(|a, b| a.file_name.cmp(&b.file_name));
+                    for entry in take_entries {
+                        if entry.is_file && is_take_jsonl_path(&entry.path) {
+                            let canon = io
+                                .canonicalize(&entry.path)
+                                .unwrap_or_else(|_| entry.path.clone());
+                            if !seen_quick.contains(&canon)
+                                && matches(&entry.file_name, detail_label)
+                            {
+                                seen_quick.insert(canon);
+                                entries.push(FileHubEntry {
+                                    section: "LIVE TAKES",
+                                    kind: FileEntryKind::Take,
+                                    label: entry.file_name,
+                                    detail: detail_label.into(),
+                                    path: entry.path,
+                                    preset_id: None,
+                                });
+                            }
                         }
                     }
                 }
+            }
+
+            // When actively filtering on Quick Open (`/`), also match items in the current folder
+            // so `gf /foo <Enter>` finds local projects, bundles, presets, or folders immediately
+            // without cluttering the default unfiltered Quick view.
+            if !query.is_empty() {
+                let scanned = scan_dir_entries(io, &hub.dir, true, &matches);
+                push_scanned_entries(
+                    &mut entries,
+                    "CURRENT FOLDER",
+                    scanned,
+                    io,
+                    Some(&mut seen_quick),
+                );
             }
         }
 
@@ -326,12 +505,17 @@ impl App {
             }
         }
 
-        // Directory listing for both Open and Import tabs.
-        if matches!(hub.tab, FileHubTab::Open | FileHubTab::Import) {
+        // Dedicated directory listing for Browse and Import tabs.
+        if hub.tab.has_dir_browser() {
+            let sec = if hub.tab == FileHubTab::Import {
+                SECTION_IMPORT_FILES
+            } else {
+                SECTION_FILES
+            };
             if let Some(parent) = hub.dir.parent() {
                 if query.is_empty() {
                     entries.push(FileHubEntry {
-                        section: "FILES",
+                        section: sec,
                         kind: FileEntryKind::ParentDir,
                         label: ".. (Parent Directory)".into(),
                         detail: parent.display().to_string(),
@@ -340,85 +524,9 @@ impl App {
                     });
                 }
             }
-            if let Ok(read) = io.read_dir(&hub.dir) {
-                let mut bundles = Vec::new();
-                let mut dirs = Vec::new();
-                let mut files = Vec::new();
-                for entry in read {
-                    let name = entry.file_name;
-                    let path = entry.path;
-                    if name.starts_with('.') {
-                        continue;
-                    }
-                    if entry.is_dir {
-                        if hub.tab == FileHubTab::Open && is_portable_bundle_dir(io, &path) {
-                            if matches(&name, "bundle") {
-                                bundles.push((name, path));
-                            }
-                        } else if matches(&name, "") {
-                            dirs.push((name, path));
-                        }
-                    } else if entry.is_file {
-                        let ext = path
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_ascii_lowercase();
-                        let kind = if is_take_jsonl_path(&path) {
-                            Some(FileEntryKind::Take)
-                        } else if cadence_formats::find_import_format_by_ext(&ext).is_some() {
-                            Some(FileEntryKind::Rbs)
-                        } else if ext == "json" {
-                            Some(classify_json(&path))
-                        } else {
-                            None
-                        };
-                        if let Some(kind) = kind {
-                            if matches(&name, kind.badge()) {
-                                files.push((name, kind, path));
-                            }
-                        }
-                    }
-                }
-                bundles.sort_by_key(|a| a.0.to_ascii_lowercase());
-                dirs.sort_by_key(|a| a.0.to_ascii_lowercase());
-                files.sort_by_key(|a| a.0.to_ascii_lowercase());
-                let sec = if hub.tab == FileHubTab::Import {
-                    "IMPORTABLE (.RBS / PRESETS / MIDI / TAKES)"
-                } else {
-                    "FILES"
-                };
-                for (name, path) in bundles {
-                    entries.push(FileHubEntry {
-                        section: sec,
-                        kind: FileEntryKind::Bundle,
-                        label: name,
-                        detail: "portable bundle · project.json + samples/".into(),
-                        path,
-                        preset_id: None,
-                    });
-                }
-                for (name, path) in dirs {
-                    entries.push(FileHubEntry {
-                        section: sec,
-                        kind: FileEntryKind::Dir,
-                        label: format!("{name}/"),
-                        detail: "folder".into(),
-                        path,
-                        preset_id: None,
-                    });
-                }
-                for (name, kind, path) in files {
-                    entries.push(FileHubEntry {
-                        section: sec,
-                        kind,
-                        label: name,
-                        detail: kind.badge().into(),
-                        path,
-                        preset_id: None,
-                    });
-                }
-            }
+            let detect_bundles = hub.tab == FileHubTab::Browse;
+            let scanned = scan_dir_entries(io, &hub.dir, detect_bundles, &matches);
+            push_scanned_entries(&mut entries, sec, scanned, io, None);
         }
 
         hub.entries = entries;
@@ -428,6 +536,43 @@ impl App {
             hub.cursor = hub.cursor.min(hub.entries.len() - 1);
         }
         // Warm preview cache for currently highlighted entry.
+        self.warm_file_hub_preview(hub);
+    }
+
+    /// Navigate into `target` directory, clearing any filter and landing the cursor on the
+    /// first real entry inside the directory section (or `..` if the folder is empty).
+    fn navigate_file_hub_dir(&self, hub: &mut FileHubState, target: PathBuf) {
+        hub.dir = target;
+        hub.query.clear();
+        hub.searching = false;
+        self.refresh_file_hub_entries(hub);
+        hub.cursor = first_dir_entry_cursor(&hub.entries);
+        self.warm_file_hub_preview(hub);
+    }
+
+    /// Navigate up to the parent directory and restore focus onto the subdirectory just exited.
+    fn navigate_file_hub_parent(&self, hub: &mut FileHubState) {
+        let Some(parent) = hub.dir.parent().map(Path::to_path_buf) else {
+            return;
+        };
+        let exited_dir = hub.dir.clone();
+        let exited_canon = self
+            .io
+            .canonicalize(&exited_dir)
+            .unwrap_or_else(|_| exited_dir.clone());
+        hub.dir = parent;
+        hub.query.clear();
+        hub.searching = false;
+        self.refresh_file_hub_entries(hub);
+        let restored = hub.entries.iter().position(|e| {
+            matches!(e.kind, FileEntryKind::Dir | FileEntryKind::Bundle)
+                && (e.path == exited_dir
+                    || self
+                        .io
+                        .canonicalize(&e.path)
+                        .is_ok_and(|c| c == exited_canon))
+        });
+        hub.cursor = restored.unwrap_or_else(|| first_dir_entry_cursor(&hub.entries));
         self.warm_file_hub_preview(hub);
     }
 
@@ -463,16 +608,12 @@ impl App {
     ) -> Result<Outcome> {
         match key.code {
             KeyCode::Char('h') | KeyCode::Left => {
-                hub.tab = hub.tab.cycle(-1);
-                hub.cursor = 0;
-                hub.query.clear();
-                self.refresh_file_hub_entries(hub);
+                let prev = hub.tab.cycle(-1);
+                self.switch_file_hub_tab(hub, prev);
             }
             KeyCode::Char('l') | KeyCode::Right => {
-                hub.tab = hub.tab.cycle(1);
-                hub.cursor = 0;
-                hub.query.clear();
-                self.refresh_file_hub_entries(hub);
+                let next = hub.tab.cycle(1);
+                self.switch_file_hub_tab(hub, next);
             }
             KeyCode::Char('R') if hub.tab == FileHubTab::Import => {
                 self.reload_presets_with_status();
@@ -481,6 +622,19 @@ impl App {
             }
             KeyCode::Char('/') => {
                 hub.searching = true;
+            }
+            KeyCode::Char('~') if hub.tab.has_dir_browser() => {
+                if let Some(home) = self.io.home_dir().filter(|p| self.io.is_dir(p)) {
+                    self.status = format!("Browsing home · {}", home.display());
+                    self.navigate_file_hub_dir(hub, home);
+                } else {
+                    self.status = "Home directory unavailable".into();
+                }
+            }
+            KeyCode::Char('.') if hub.tab.has_dir_browser() => {
+                let root = self.doc.asset_base().clone();
+                self.status = format!("Browsing project folder · {}", root.display());
+                self.navigate_file_hub_dir(hub, root);
             }
             KeyCode::Char('j') | KeyCode::Down => {
                 if !hub.entries.is_empty() {
@@ -492,13 +646,8 @@ impl App {
                 hub.cursor = hub.cursor.saturating_sub(1);
                 self.warm_file_hub_preview(hub);
             }
-            KeyCode::Backspace => {
-                if let Some(parent) = hub.dir.parent().map(Path::to_path_buf) {
-                    hub.dir = parent;
-                    hub.cursor = 0;
-                    hub.query.clear();
-                    self.refresh_file_hub_entries(hub);
-                }
+            KeyCode::Backspace if hub.tab.has_dir_browser() => {
+                self.navigate_file_hub_parent(hub);
             }
             KeyCode::Enter => {
                 if let Some(entry) = hub.entries.get(hub.cursor).cloned() {
@@ -514,11 +663,14 @@ impl App {
                             }
                             return self.apply(Action::New { title: None });
                         }
-                        FileEntryKind::ParentDir | FileEntryKind::Dir => {
-                            hub.dir = entry.path;
-                            hub.cursor = 0;
-                            hub.query.clear();
-                            self.refresh_file_hub_entries(hub);
+                        FileEntryKind::ParentDir => {
+                            self.navigate_file_hub_parent(hub);
+                        }
+                        FileEntryKind::Dir => {
+                            if hub.tab == FileHubTab::Quick {
+                                hub.tab = FileHubTab::Browse;
+                            }
+                            self.navigate_file_hub_dir(hub, entry.path);
                         }
                         FileEntryKind::Bundle => {
                             return self

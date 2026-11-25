@@ -157,29 +157,41 @@ fn filehub_take_bundle_preset_library_open_json_routing_and_reload_presets() {
     );
     app.press_keys("<Esc>").unwrap();
 
-    // 3. Open tab lists both `.take.jsonl` and `MyBundle` Portable Bundle directory.
-    app.open_file_hub(FileHubTab::Open);
-    let fh_open = file_hub_view(&app);
-    let take_idx = fh_open
+    // 3. Quick Open lists `.take.jsonl` cleanly without `FILES` clutter; Browse tab lists
+    //    both `.take.jsonl`, `MyBundle` Portable Bundle directory, and local `.json` files.
+    app.open_file_hub(FileHubTab::Quick);
+    let fh_quick = file_hub_view(&app);
+    assert!(
+        fh_quick.rows.iter().all(|r| r.section != "FILES"),
+        "Quick Open must keep directory browsing separated into Browse"
+    );
+    assert!(
+        fh_quick.rows.iter().any(|r| r.badge == "TAKE"),
+        "Quick Open must surface local .take.jsonl live takes"
+    );
+
+    app.open_file_hub(FileHubTab::Browse);
+    let fh_browse = file_hub_view(&app);
+    let take_idx = fh_browse
         .rows
         .iter()
         .position(|r| r.badge == "TAKE")
-        .expect("Open tab must detect .take.jsonl files");
-    let bundle_idx = fh_open
+        .expect("Browse tab must detect .take.jsonl files");
+    let bundle_idx = fh_browse
         .rows
         .iter()
         .position(|r| r.badge == "BUNDLE" && r.label.contains("MyBundle"))
-        .expect("Open tab must detect portable Bundle directories");
-    let preset_json_idx = fh_open
+        .expect("Browse tab must detect portable Bundle directories");
+    let preset_json_idx = fh_browse
         .rows
         .iter()
         .position(|r| r.label.contains("neon-acid.json"))
-        .expect("Open tab lists .json files");
+        .expect("Browse tab lists .json files");
 
     move_file_hub_cursor(&mut app, bundle_idx);
     assert!(file_hub_view(&app).preview.contains("Portable Bundle"));
 
-    // Selecting a preset `.json` in Open tab loads it onto the active instrument.
+    // Selecting a preset `.json` in Browse tab loads it onto the active instrument.
     let orig_title = app.project().title.clone();
     move_file_hub_cursor(&mut app, preset_json_idx);
     app.press_keys("<Enter>").unwrap();
@@ -199,8 +211,8 @@ fn filehub_take_bundle_preset_library_open_json_routing_and_reload_presets() {
         .expect("Filter cutoff on loaded Rack preset");
     assert!((loaded_cutoff - 1234.0).abs() < 1.0);
 
-    // Selecting `.take.jsonl` in Open tab loads it into the Take deck (`gt`) via HostIo.
-    app.open_file_hub(FileHubTab::Open);
+    // Selecting `.take.jsonl` in Browse tab loads it into the Take deck (`gt`) via HostIo.
+    app.open_file_hub(FileHubTab::Browse);
     move_file_hub_cursor(&mut app, take_idx);
     app.press_keys("<Enter>").unwrap();
     assert!(
@@ -209,10 +221,10 @@ fn filehub_take_bundle_preset_library_open_json_routing_and_reload_presets() {
     );
     assert_eq!(app.current_take().unwrap().events.len(), 1);
 
-    // Selecting the Portable Bundle in Open tab loads `MyBundle/project.json`.
+    // Selecting the Portable Bundle in Browse tab loads `MyBundle/project.json`.
     app.apply(Action::Undo).unwrap();
     assert!(!app.dirty());
-    app.open_file_hub(FileHubTab::Open);
+    app.open_file_hub(FileHubTab::Browse);
     let bundle_idx = file_hub_view(&app)
         .rows
         .iter()
@@ -437,14 +449,14 @@ fn file_hub_auto_closes_on_preset_load_across_open_import_and_finder_and_keeps_o
     })
     .unwrap();
 
-    // 1. FileHub Open tab
-    app.open_file_hub(FileHubTab::Open);
+    // 1. FileHub Quick Open `/` search matches local `.preset.json` and auto-closes cleanly.
+    app.open_file_hub(FileHubTab::Quick);
     assert_eq!(app.mode_name(), "FILES");
     app.press_keys("/bright-lead.preset<Enter><Enter>").unwrap();
     assert_eq!(
         app.mode_name(),
         "NORMAL",
-        "Open tab preset load must auto-close FileHub"
+        "Quick Open search preset load must auto-close FileHub"
     );
     assert!(snap_view(&app).overlay.is_none());
     assert_eq!(app.detail, Detail::Instrument(synth_id));
@@ -495,7 +507,7 @@ fn file_hub_auto_closes_on_preset_load_across_open_import_and_finder_and_keeps_o
         format!("Loaded preset Bright Lead into {synth_name}")
     );
 
-    app.open_file_hub(FileHubTab::Open);
+    app.open_file_hub(FileHubTab::Quick);
     app.apply_file_dialog_result(FileDialogRequest::OpenProject, bright_path)
         .unwrap();
     assert_eq!(
@@ -519,7 +531,7 @@ fn file_hub_auto_closes_on_preset_load_across_open_import_and_finder_and_keeps_o
     // 4. Corrupt preset error keeps FileHub open.
     app.apply(Action::Save { path: proj_path }).unwrap();
     assert!(!app.dirty());
-    app.open_file_hub(FileHubTab::Open);
+    app.open_file_hub(FileHubTab::Quick);
     let err = app.apply_file_dialog_result(FileDialogRequest::ImportAsset, corrupt_path);
     assert!(err.is_err(), "corrupt preset JSON must fail cleanly");
     assert_eq!(
@@ -552,7 +564,7 @@ fn file_hub_preserves_state_on_error_bounds_preview_guards_dirty_and_ctrl_c_clos
 
     let mut app = App::new(Project::demo(), valid_proj.clone()).unwrap();
     // 1. Bounded preview handles oversized files safely.
-    app.open_file_hub(FileHubTab::Open);
+    app.open_file_hub(FileHubTab::Browse);
     app.press_keys("/huge.json<Enter>").unwrap();
     let fv = app.frame_view(&AudioSnapshot::default(), "silent");
     match fv.overlay {

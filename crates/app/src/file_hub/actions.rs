@@ -353,7 +353,7 @@ impl App {
     pub(super) fn request_file_hub_dialog(&mut self, hub: &FileHubState) -> Outcome {
         let slug = slugify(&self.doc.project().title);
         let req = match hub.tab {
-            FileHubTab::Open => FileDialogRequest::OpenProject,
+            FileHubTab::Quick | FileHubTab::Browse => FileDialogRequest::OpenProject,
             FileHubTab::Save => match hub.cursor {
                 2 => FileDialogRequest::SaveBundleDir,
                 3 => FileDialogRequest::SaveInstrumentPreset {

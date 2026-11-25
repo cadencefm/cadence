@@ -153,9 +153,10 @@ No individual deck may shadow any global prefix, performance key, or `Ctrl` shor
 | **Action Palette** | `:` | **`Ctrl+Shift+p`** *(works in Normal & Jam)* |
 | **Jam** *(modal floating overlay)* | `gj` | **`Ctrl+Shift+j`** *(toggles Jam ON and OFF even inside Jam)* |
 | **File Hub** | `gf` | **`Ctrl+Shift+f`** |
-| **File Hub: Open** | `gf` (tab 1) | **`Ctrl+Shift+o`** |
-| **File Hub: Save As / Bundle** | `gf` (tab 2) | **`Ctrl+Shift+s`** |
-| **File Hub: Export Audio** | `gf` (tab 4) | **`Ctrl+Shift+e`** |
+| **File Hub: Quick Open** | `gf` (tab 1) | **`Ctrl+Shift+o`** |
+| **File Hub: Browse Files** | `gf` (tab 2) | `:` → *Browse Files* |
+| **File Hub: Save As / Bundle** | `gf` (tab 3) | **`Ctrl+Shift+s`** |
+| **File Hub: Export Audio** | `gf` (tab 5) | **`Ctrl+Shift+e`** |
 | **Song Properties / Info** | `gP` | **`Ctrl+Shift+i`** |
 | **Settings** | `g,` | **`Ctrl+Shift+,`** *(plus `Ctrl+,` alias)* |
 | **Sample Browser** | `B` / `gS` | **`Ctrl+Shift+b`** |
@@ -299,7 +300,7 @@ Six deck layout alignments guarantee every `hjkl` and `Alt+hjkl` binding matches
   - *Devices (`Audio | MIDI`):* `H`/`L` switch `Audio ↔ MIDI` tab · `j`/`k` vertical rows (`w`/`b` group jump; bare `h`/`l` no-op) · `Alt+h`/`l` & `,`/`.` cycle values (`Alt+Backspace` reset) · `Enter` picker / run action / MIDI Learn · `r` rescan audio or MIDI ports · `Ctrl+s` save config. On `MIDI`: `a` add mapping · `v` toggle invert · `x`/`X` delete mapping / clear all user mappings (confirm).
 - **Settings (`g,` / `Ctrl+,`), Song Properties (`gP` / `Ctrl+Shift+i`), Modals & Browsers:**
   - *Settings & Song Properties:* `j`/`k` row · `w`/`b` group · bare `h`/`l` no-op · `Alt+h`/`l` & `,`/`.` fine (`Alt+H`/`L` & `<`/`>` coarse) · `Alt+Backspace` reset · `Enter` exact `ValueInput` / title edit · `a` add dir (`g,`) · `x` remove dir (`g,`) · `F` OS folder dialog (`g,`) · `Ctrl+s` save (`g,`) · `c` cycle boundary picker.
-  - *Browsers, File Hub & Help:* `h`/`l`, `H`/`L`, `Tab`/`BackTab` switch horizontal tabs/categories (`FileHub` Export rows adjust values with `Alt+h`/`l` and `,`/`.`, keeping `H`/`L`/`Tab`/`1–4` on tabs) · `j`/`k` list · `/` search · `A` audition · `Space` play/pause · `Enter` open/commit · `Esc` clear search → cancel/restore.
+  - *Browsers, File Hub & Help:* `h`/`l`, `H`/`L`, `Tab`/`BackTab` switch horizontal tabs/categories (`FileHub` Export rows adjust values with `Alt+h`/`l` and `,`/`.`, keeping `H`/`L`/`Tab`/`1–5` on tabs; `Browse`/`Import` add `Backspace` parent with cursor restoration plus `~` home and `.` project jumps) · `j`/`k` list · `/` search · `A` audition · `Space` play/pause · `Enter` open/commit · `Esc` clear search → cancel/restore.
 
 ### 4E. Workspace Presets & Window Keys (`z` / `Ctrl+w`)
 
@@ -321,7 +322,7 @@ Six deck layout alignments guarantee every `hjkl` and `Alt+hjkl` binding matches
 4. **`SongProperties` (`gP` / `Ctrl+Shift+i`):** Modal editor for Title, Tempo (BPM), Key Root, Scale (all **13** `NAMED_SCALES`), Length (Bars), End Rule, and Live Timing on the `u` undo stack.
 5. **`MiniEditor` (`Enter` on `Mini`):** Dedicated instant-validated Mini-Notation editor (`cadence_core::mini::parse_mini`) with real-time Cycle 1 event count and resolved note preview.
 6. **`ValueInput` (`Enter` on scalar controls):** Unified exact scalar entry modal with instant parse validation and formatted preview across Pattern Values, all `ParamAddress` controls, Rack zone structural fields, Macro dials, Placement offsets, and Song Properties.
-7. **`FileHub` (`gf`, `Ctrl+Shift+f/o/s/e`):** 4-tab Open/Recent (with `.rbs` import preview when `feature = "rbs"` is enabled), Save & Bundle, Import (auto-closes on preset/profile load), and Export (WAV/Stems), universal `/` search, `H`/`L`/`Tab`/`1–4` tabs, and `F` native OS dialogs.
+7. **`FileHub` (`gf`, `Ctrl+Shift+f/o/s/e`):** 5-tab Quick Open (New, Recent, Bundled Examples, Live Takes), Browse (pure directory manager with subdirectory cursor memory on `Backspace`/`..`, `~` home, `.` project, and `.rbs` import preview when `feature = "rbs"` is enabled), Save & Bundle, Import (auto-closes on preset/profile load), and Export (WAV/Stems), universal `/` search, `H`/`L`/`Tab`/`1–5` tabs, and `F` native OS dialogs.
 8. **`Browser` (`B` / `gS` / `Sample` rows):** Universal `/` sample browser with async off-thread preview decoding, instant auditioning, and automatic `Sampler -> Out.In` module insertion + RIFF `smpl`/`inst` metadata application on the active Rack zone.
 9. **`Authoring` (`n` / `d` / `r` / `tA` / workflow keys):** Typed modal draft forms for creating/editing patterns, derivations, instruments (`SoundChoice::{Template(RackTemplate), Preset(String), Sampler { path, label }, Folder { path, label }}`), channels, effects, sends, ducks, bounces, and 24-bit audio recording (`RecordDraft`).
 10. **`Settings` (`g,` / `Ctrl+,` / `:settings`):** Persisted `UserConfig` editor: theme, startup preset, output monitor, follow, `Auto-Record Takes`, default BPM/key, project Live Timing, and auto-refreshing `sample_dirs` / `preset_dirs`.

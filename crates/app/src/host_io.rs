@@ -23,6 +23,7 @@ pub use cadence_core::store::DirEntryInfo;
 /// Narrow host I/O trait injected into [`crate::App`].
 pub trait HostIo: Send + Sync {
     fn current_dir(&self) -> Result<PathBuf>;
+    fn home_dir(&self) -> Option<PathBuf>;
     fn exists(&self, path: &Path) -> bool;
     fn is_dir(&self, path: &Path) -> bool;
     fn is_file(&self, path: &Path) -> bool;
@@ -71,6 +72,10 @@ pub struct CoreHostIo;
 impl HostIo for CoreHostIo {
     fn current_dir(&self) -> Result<PathBuf> {
         store::current_dir()
+    }
+
+    fn home_dir(&self) -> Option<PathBuf> {
+        store::home_dir()
     }
 
     fn exists(&self, path: &Path) -> bool {
@@ -175,6 +180,7 @@ impl HostIo for CoreHostIo {
 #[derive(Default)]
 struct MemoryFs {
     cwd: PathBuf,
+    home_dir: Option<PathBuf>,
     dirs: BTreeSet<PathBuf>,
     files: BTreeMap<PathBuf, Vec<u8>>,
     samples: HashMap<PathBuf, Arc<SampleData>>,
@@ -203,6 +209,7 @@ impl MemoryHostIo {
         Self {
             state: Arc::new(RwLock::new(MemoryFs {
                 cwd,
+                home_dir: None,
                 dirs,
                 files: BTreeMap::new(),
                 samples: HashMap::new(),
@@ -227,6 +234,13 @@ impl MemoryHostIo {
         let mut fs = self.state.write().expect("MemoryHostIo lock");
         let norm = normalize_path(&fs.cwd, path.as_ref());
         insert_ancestors(&mut fs.dirs, &norm);
+    }
+
+    pub fn set_home_dir(&self, path: impl AsRef<Path>) {
+        let mut fs = self.state.write().expect("MemoryHostIo lock");
+        let norm = normalize_path(&fs.cwd, path.as_ref());
+        insert_ancestors(&mut fs.dirs, &norm);
+        fs.home_dir = Some(norm);
     }
 
     pub fn read_file(&self, path: impl AsRef<Path>) -> Option<Vec<u8>> {
@@ -270,6 +284,11 @@ impl HostIo for MemoryHostIo {
     fn current_dir(&self) -> Result<PathBuf> {
         let fs = self.state.read().expect("MemoryHostIo lock");
         Ok(fs.cwd.clone())
+    }
+
+    fn home_dir(&self) -> Option<PathBuf> {
+        let fs = self.state.read().expect("MemoryHostIo lock");
+        fs.home_dir.clone()
     }
 
     fn exists(&self, path: &Path) -> bool {

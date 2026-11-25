@@ -1,4 +1,4 @@
-//! 4-tab File Hub modal (`gf`) for Open, Save, Bundle, Import, and Export workflows.
+//! 5-tab File Hub modal (`gf`) for Quick Open, Browse, Save & Bundle, Import, and Export workflows.
 use super::{overlay_frame, scroll_window_centered};
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::Theme;
@@ -98,10 +98,7 @@ pub(super) fn draw_file_hub(
             theme.text.primary,
             TextAlign::Left,
         );
-    } else if matches!(
-        hub.active_tab,
-        cadence_app::FileHubTab::Open | cadence_app::FileHubTab::Import
-    ) {
+    } else if hub.active_tab.is_list_tab() {
         let search_w = 240.0_f32.min(ctx_row.w * 0.34);
         let dir_rect = Rect::new(
             ctx_row.x,
@@ -111,15 +108,54 @@ pub(super) fn draw_file_hub(
         );
         let search_rect = Rect::new(dir_rect.right() + 8.0, ctx_row.y, search_w, ctx_row.h);
         dl.rounded(dir_rect, theme.surface.recessed, theme.radii.badge);
-        let max_dir = ((dir_rect.w - 16.0) / cw) as usize;
-        dl.text(
-            dir_rect.inset(8.0, 0.0),
-            trim_label(&format!("DIR: {}", hub.current_dir), max_dir),
-            theme.font.small,
-            false,
-            theme.text.secondary,
-            TextAlign::Left,
-        );
+        if hub.active_tab == cadence_app::FileHubTab::Quick {
+            let max_info = ((dir_rect.w - 16.0) / cw) as usize;
+            dl.text(
+                dir_rect.inset(8.0, 0.0),
+                trim_label(
+                    "Quick Open  ·  New, Recent, Examples & Takes  ·  2 Browse folders",
+                    max_info,
+                ),
+                theme.font.small,
+                false,
+                theme.text.secondary,
+                TextAlign::Left,
+            );
+        } else {
+            let jump_hint = "~ home · . proj";
+            let jump_w =
+                jump_hint.chars().count() as f32 * theme.char_width(theme.font.small - 1.0) + 12.0;
+            let show_jump = dir_rect.w >= 460.0;
+            let path_w = if show_jump {
+                (dir_rect.w - jump_w - 16.0).max(80.0)
+            } else {
+                (dir_rect.w - 16.0).max(40.0)
+            };
+            let max_dir = (path_w / cw) as usize;
+            dl.text(
+                Rect::new(dir_rect.x + 8.0, dir_rect.y, path_w, dir_rect.h),
+                trim_label(&format!("DIR: {}", hub.current_dir), max_dir),
+                theme.font.small,
+                false,
+                theme.text.secondary,
+                TextAlign::Left,
+            );
+            if show_jump {
+                dl.text(
+                    Rect::new(
+                        dir_rect.right() - jump_w - 6.0,
+                        dir_rect.y,
+                        jump_w,
+                        dir_rect.h,
+                    ),
+                    jump_hint,
+                    theme.font.small - 1.0,
+                    false,
+                    theme.text.muted,
+                    TextAlign::Right,
+                );
+            }
+        }
         dl.panel(
             search_rect,
             theme.surface.recessed,
@@ -136,10 +172,12 @@ pub(super) fn draw_file_hub(
             format!("/{}▏", hub.query)
         } else if !hub.query.is_empty() {
             format!("/{}", hub.query)
-        } else if hub.active_tab == cadence_app::FileHubTab::Import {
-            "/ filter · R reload".into()
         } else {
-            "/ filter files…".into()
+            match hub.active_tab {
+                cadence_app::FileHubTab::Import => "/ filter · R reload".into(),
+                cadence_app::FileHubTab::Quick => "/ search all…".into(),
+                _ => "/ filter files…".into(),
+            }
         };
         dl.text(
             search_rect.inset(8.0, 0.0),
@@ -229,8 +267,13 @@ pub(super) fn draw_file_hub(
 
     if items.is_empty() {
         let empty_msg = if hub.query.is_empty() {
-            "No matching files in this directory · press Backspace for parent or F for Finder"
-                .into()
+            if hub.active_tab == cadence_app::FileHubTab::Quick {
+                "No recent projects or examples yet · press 2 to Browse folders or F for Finder"
+                    .into()
+            } else {
+                "No matching files in this directory · Backspace up · ~ home · . project · F Finder"
+                    .into()
+            }
         } else {
             format!(
                 "No files match '/{}' · press Esc to clear filter or F for Finder",
@@ -449,15 +492,35 @@ pub(super) fn draw_file_hub(
             );
         }
     } else {
+        let footer_text = if hub.searching {
+            "type filter  ·  ↑/↓ select  ·  Enter apply filter  ·  Ctrl+u clear  ·  Esc clear search"
+        } else if !hub.query.is_empty() {
+            "H/L Tab 1–5 tabs  ·  j/k select  ·  Enter open/run  ·  / filter  ·  F Finder  ·  Esc clear filter"
+        } else {
+            match hub.active_tab {
+                cadence_app::FileHubTab::Quick => {
+                    "H/L Tab 1–5 tabs  ·  j/k select  ·  Enter open  ·  / search all  ·  2 Browse  ·  F Finder  ·  Esc close"
+                }
+                cadence_app::FileHubTab::Browse => {
+                    "H/L Tab 1–5 tabs  ·  j/k select  ·  Enter open/dir  ·  Backspace up  ·  ~ home · . proj  ·  / filter  ·  F Finder"
+                }
+                cadence_app::FileHubTab::Import => {
+                    "H/L Tab 1–5 tabs  ·  j/k select  ·  Enter import/dir  ·  Backspace up  ·  ~ home · . proj  ·  R reload  ·  F Finder"
+                }
+                cadence_app::FileHubTab::Save => {
+                    "H/L Tab 1–5 tabs  ·  j/k select  ·  Enter run  ·  e edit path  ·  F Finder  ·  Esc close"
+                }
+                cadence_app::FileHubTab::Export => {
+                    "H/L Tab 1–5 tabs  ·  j/k row  ·  Alt+h/l ,/. adjust  ·  e edit path  ·  Enter render  ·  F Finder  ·  Esc close"
+                }
+            }
+        };
         dl.text(
             Rect::new(b_inner.x, b_inner.bottom() - 18.0, b_inner.w, 18.0),
-            if hub.searching {
-                "type filter  ·  ↑/↓ select  ·  Enter apply filter  ·  Ctrl+u clear  ·  Esc clear search"
-            } else if !hub.query.is_empty() {
-                "H/L Tab 1–4 tabs  ·  j/k select  ·  Enter open/run  ·  / filter  ·  F Finder  ·  Esc clear filter"
-            } else {
-                "H/L Tab 1–4 tabs  ·  j/k select  ·  Enter open/run  ·  / filter  ·  Backspace up  ·  F Finder  ·  Esc close"
-            },
+            trim_label(
+                footer_text,
+                (b_inner.w / theme.char_width(theme.font.small - 0.5)) as usize,
+            ),
             theme.font.small - 0.5,
             false,
             theme.text.muted,

@@ -167,7 +167,7 @@ impl App {
             KeyCode::Char('i') => return self.focus_docked_deck(layout::DeckKind::Instrument),
             KeyCode::Char('j') => return Ok(self.enter_jam()),
             KeyCode::Char('f') => {
-                self.open_file_hub(FileHubTab::Open);
+                self.open_file_hub(FileHubTab::Quick);
                 return Ok(Outcome::default());
             }
             KeyCode::Char('P') => {

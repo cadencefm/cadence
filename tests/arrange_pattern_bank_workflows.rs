@@ -599,21 +599,21 @@ fn take_deck_save_load_shortcuts_and_file_hub_new_project_and_export_copy() {
     }
     app.press_keys("<Esc>").unwrap();
 
-    // `o` on Take deck opens File Hub Open tab focused on Takes.
+    // `o` on Take deck opens File Hub Quick Open tab focused on Takes.
     app.press_keys("o").unwrap();
     assert_eq!(app.mode_name(), "FILES");
     match snap_view(&app).overlay {
         Some(OverlayView::FileHub(hub)) => {
-            assert_eq!(hub.active_tab, FileHubTab::Open);
+            assert_eq!(hub.active_tab, FileHubTab::Quick);
         }
-        other => panic!("expected FileHub Open overlay on Take `o`, got {other:?}"),
+        other => panic!("expected FileHub Quick overlay on Take `o`, got {other:?}"),
     }
 
-    // `"New Blank Project"` row sits at the top of File Hub Open tab and respects `dirty()` Confirm guard!
+    // `"New Blank Project"` row sits at the top of File Hub Quick Open tab and respects `dirty()` Confirm guard!
     app.press_keys("<Esc>gf").unwrap();
     let fh = match snap_view(&app).overlay {
         Some(OverlayView::FileHub(hub)) => hub,
-        other => panic!("expected FileHub Open overlay, got {other:?}"),
+        other => panic!("expected FileHub Quick overlay, got {other:?}"),
     };
     assert_eq!(fh.rows[0].label, "New Blank Project");
     assert_eq!(fh.rows[0].badge, "NEW");
