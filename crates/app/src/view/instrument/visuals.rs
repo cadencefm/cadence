@@ -880,6 +880,7 @@ fn build_mobius_visual(
             (x, ring_h, kerr_signed, delay_norm)
         })
         .collect();
+    let foldover = descs.iter().any(|d| d.active && d.fold_s.is_some());
     ModuleVisualView::Mobius {
         module_id: base_mod.id,
         name: base_mod.name.clone(),
@@ -891,7 +892,9 @@ fn build_mobius_visual(
         stiffness: m.stiffness,
         kerr_semitones: m.kerr_semitones,
         distance_ms: m.distance_ms,
+        sympathy: m.sympathy,
         feedback: m.feedback,
+        foldover,
         target_curve,
         atoms,
         live_waveform,

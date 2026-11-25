@@ -199,6 +199,7 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
                     brightness: 0.84,
                     shape: 0.68,
                     chirality: 0.22,
+                    texture: 0.30,
                     atoms: 4,
                     dispersion: MobiusDispersion::Formant,
                     structure: 0.50,
@@ -209,6 +210,7 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
                     topology: MobiusTopology::Star,
                     coupling: 0.84,
                     distance_ms: 24.0,
+                    sympathy: 0.55,
                     feedback: 0.0,
                     ..MobiusModule::default()
                 }),

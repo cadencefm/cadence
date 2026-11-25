@@ -4576,3 +4576,133 @@ fn reconfigure_preserves_transport_step_inside_live_window_and_resumes_audible_p
         "clamped start_step must also produce immediate audio, got peak={rewound_peak}"
     );
 }
+
+#[test]
+fn mobius_voice_pool_shared_bridge_excites_held_sympathetic_string_across_split_blocks() {
+    use crate::audio::voice_pool::{TriggerRequest, VoiceBlockOut, VoicePool, ZoneTriggerCtx};
+    use cadence_core::dsp::AUDIO_SUB_BLOCK_FRAMES;
+    use cadence_core::rack::{MobiusDispersion, MobiusExciter, MobiusModule, MobiusTopology};
+
+    let sr = 48_000.0_f64;
+    let build_project = |sympathy: f32| {
+        let m = MobiusModule {
+            exciter: MobiusExciter::Szego,
+            brightness: 0.85,
+            chirality: 0.2,
+            attack_ms: 3.0,
+            decay_ms: 520.0,
+            sustain: 0.0,
+            atoms: 4,
+            dispersion: MobiusDispersion::Harmonic,
+            structure: 0.0,
+            stiffness: 0.04,
+            kerr_semitones: 0.5,
+            topology: MobiusTopology::Cascade,
+            coupling: 1.0,
+            sympathy,
+            ..MobiusModule::default()
+        };
+        let mut rack = RackPatch::default_synth();
+        rack.zones[0].modules = vec![
+            RackModule::new(1, "Mobius", ModuleKind::Mobius(m)),
+            RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+        ];
+        rack.zones[0].cables = vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)];
+        rack.panel_pins.clear();
+        rack_project(vec![Step::default()], rack)
+    };
+
+    let run_post_choke_peak = |sympathy: f32, split_blocks: bool| -> f32 {
+        let proj = build_project(sympathy);
+        let score = proj.compile().unwrap();
+        let samples = SampleBank::new();
+        let mut pool = VoicePool::new(sr);
+        let ctx = ZoneTriggerCtx {
+            project: &score,
+            samples: &samples,
+            sample_rate: sr,
+            rendered_frames: 0,
+        };
+        // Hold silent C3 (MIDI 48, vel=0.0 -> damper raised!) + strike loud C2 (MIDI 36, vel=1.0).
+        pool.trigger_on_track(
+            &ctx,
+            &TriggerRequest {
+                inst_index: 0,
+                live_key: Some(48),
+                midi: 48,
+                velocity: 0.0,
+                gate_seconds: 2.0,
+                seed: 1,
+                mod_pos: None,
+                locks: &[],
+            },
+        );
+        pool.trigger_on_track(
+            &ctx,
+            &TriggerRequest {
+                inst_index: 0,
+                live_key: Some(36),
+                midi: 36,
+                velocity: 1.0,
+                gate_seconds: 2.0,
+                seed: 2,
+                mod_pos: None,
+                locks: &[],
+            },
+        );
+
+        let mut blk = VoiceBlockOut::new_boxed();
+        let render_n = |pool: &mut VoicePool, blk: &mut VoiceBlockOut, total: usize| -> f32 {
+            let mut rem = total;
+            let mut peak = 0.0_f32;
+            let mut toggle = false;
+            while rem > 0 {
+                let step = if split_blocks {
+                    toggle = !toggle;
+                    if toggle {
+                        17
+                    } else {
+                        47
+                    }
+                } else {
+                    AUDIO_SUB_BLOCK_FRAMES
+                }
+                .min(rem);
+                pool.render_block(&samples, None, step, blk);
+                if blk.source_active_mask & 1 != 0 {
+                    for &[l, r] in &blk.sources[0][..step] {
+                        assert!(l.is_finite() && r.is_finite());
+                        peak = peak.max(l.abs()).max(r.abs());
+                    }
+                }
+                rem -= step;
+            }
+            peak
+        };
+
+        // Let C2 ring and pump the 64-sample shared bridge for 0.50 s.
+        let _ = render_n(&mut pool, &mut blk, 24_000);
+        // Choke ONLY C2 (live_key 36 -> instant damper drop) while leaving held C3 untouched!
+        pool.choke_live_key_for_test(36, sr);
+        // Let C2's choke fade & DC blocker settle (50 ms), then measure held C3 sympathetic ring!
+        let _ = render_n(&mut pool, &mut blk, 2_400);
+        render_n(&mut pool, &mut blk, 12_000)
+    };
+
+    let uncoupled = run_post_choke_peak(0.0, false);
+    let coupled_64 = run_post_choke_peak(1.0, false);
+    let coupled_split = run_post_choke_peak(1.0, true);
+
+    assert!(
+        uncoupled < 1e-3,
+        "Uncoupled sympathy=0.0 must stay silent after C2 choke, got {uncoupled}"
+    );
+    assert!(
+        coupled_64 > 0.015,
+        "Shared bridge sympathy=1.0 must excite held C3 audibly, got {coupled_64}"
+    );
+    assert!(
+        (coupled_64 - coupled_split).abs() < 1e-4,
+        "64-sample ring bridge must stay invariant under event-split sub-blocks: {coupled_64} vs {coupled_split}"
+    );
+}

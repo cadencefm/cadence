@@ -566,7 +566,9 @@ fn draw_mobius_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualVie
         stiffness,
         kerr_semitones,
         distance_ms,
+        sympathy,
         feedback,
+        foldover,
         target_curve,
         atoms,
         live_waveform,
@@ -586,6 +588,7 @@ fn draw_mobius_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualVie
         };
         let kerr_txt = format!("K {kerr_semitones:+.1}st");
         let dist_txt = format!("{distance_ms:.0}ms");
+        let sym_txt = format!("SYM {:.0}%", sympathy * 100.0);
         let fb_txt = format!("FB {:.0}%", feedback * 100.0);
 
         let mut badges: Vec<(&str, Color)> = vec![
@@ -595,8 +598,13 @@ fn draw_mobius_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualVie
             (bank_txt.as_str(), theme.accent.playhead),
             (xi_txt.as_str(), theme.accent.warning_key),
         ];
+        if *foldover {
+            badges.push(("FOLD", theme.accent.modulation));
+        }
         if *feedback > 0.01 {
             badges.push((fb_txt.as_str(), theme.accent.alert));
+        } else if *sympathy > 0.01 {
+            badges.push((sym_txt.as_str(), theme.accent.playhead));
         } else if *distance_ms > 0.5 {
             badges.push((dist_txt.as_str(), theme.text.secondary));
         } else if kerr_semitones.abs() > 0.05 {

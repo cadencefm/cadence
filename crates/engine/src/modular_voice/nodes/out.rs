@@ -147,7 +147,11 @@ impl VoiceModule for OutNode {
             self.cached_gain_db_bits = gain_db_bits;
             self.cached_gain_lin = db_to_lin_f64(f64::from(gain_db));
         }
-        let gain = self.cached_gain_lin * ctx.velocity;
+        let gain = if ctx.out_velocity_bypass {
+            self.cached_gain_lin
+        } else {
+            self.cached_gain_lin * ctx.velocity
+        };
         let eff_pan = sanitize_clamp_f64(
             f64::from(out_p.pan) + f64::from(ctx.zone_pan),
             -1.0,

@@ -15,7 +15,8 @@
 
 use crate::dsp::math::{
     decay_coeff_60db_ms, flush_denormal_f64, mix_stereo_f64, sanitize_clamp_f64,
-    sanitize_sample_f64, sanitize_sample_rate, NYQUIST_SAFE_RATIO, TAIL_SILENCE_FLOOR_F64,
+    sanitize_sample_f64, sanitize_sample_rate, AUDIO_SUB_BLOCK_FRAMES, NYQUIST_SAFE_RATIO,
+    TAIL_SILENCE_FLOOR_F64,
 };
 use crate::rack::{MobiusDispersion, MobiusExciter, MobiusTopology};
 use std::f64::consts::{FRAC_PI_2, PI, TAU};
@@ -298,6 +299,20 @@ impl AtomParams {
     }
 }
 
+/// Exact dimensionless foldover boundary: an interior Duffing-like fold exists iff
+/// `|beta| > 2 * xi`, returning its velocity-independent normalized amplitude
+/// `s_fold = sqrt(xi / (|beta| - xi)) in (0, 1)`.
+#[inline]
+pub fn mobius_foldover_amplitude(xi: f64, beta: f64) -> Option<f64> {
+    let x = xi.max(0.0);
+    let b = beta.abs();
+    if x > 0.0 && b > 2.0 * x {
+        Some((x / (b - x)).sqrt())
+    } else {
+        None
+    }
+}
+
 /// Single pure unlifted State-Kerr complex cubic oscillator (`z in C`).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CubicAtom {
@@ -315,28 +330,64 @@ impl CubicAtom {
     }
 
     /// Exact closed-form parabolic cubic potential sub-flow (`P_{h/2} o P_{h/2} == P_h`):
-    /// returns `(w_abs, flux)` where `w_abs = (z - v) / (1 + u)` and
-    /// `flux = w_res / (g * h) = |w| * w / (1 + u)` is the exact step-averaged cubic flux
-    /// with zero `0/0` singularity as `g -> 0`.
+    /// returns `(w_abs, flux, p_diss)` where `w_abs = (z - v) / (1 + u)`,
+    /// `flux = w_res / (g * h) = |w| * w / (1 + u)`, and
+    /// `p_diss = g * |w|^3 * (1 + u / 2) / (1 + u)^2 >= 0` is the exact discrete dissipated
+    /// power satisfying `(E(z^+) - E(z)) / h == Re(conj(v) * j_disc) - p_diss`.
     #[inline]
-    pub fn cubic_pot(&mut self, v: C64, g: f64, h: f64) -> (C64, C64) {
+    pub fn cubic_pot_full(&mut self, v: C64, g: f64, h: f64) -> (C64, C64, f64) {
         let w = self.z.sub(v);
         let w_mag = w.abs();
         let u = g * h * w_mag;
         let inv = 1.0 / (1.0 + u);
         let w_abs = w.scale(inv);
         let flux = w.scale(w_mag * inv);
+        let p_diss = g * w_mag * w_mag * w_mag * (1.0 + 0.5 * u) * inv * inv;
         self.z = v.add(w_abs);
+        (w_abs, flux, p_diss)
+    }
+
+    /// Exact closed-form parabolic cubic potential sub-flow returning `(w_abs, flux)`.
+    #[inline]
+    pub fn cubic_pot(&mut self, v: C64, g: f64, h: f64) -> (C64, C64) {
+        let (w_abs, flux, _) = self.cubic_pot_full(v, g, h);
         (w_abs, flux)
+    }
+
+    /// Full symmetric 3-stage Strang step (`O(dt^2)`) returning `(w_abs, flux, p_diss)`.
+    #[inline]
+    pub fn step_single_full(&mut self, p: AtomParams, v_mid: C64, dt: f64) -> (C64, C64, f64) {
+        self.rot_kerr(p, 0.5 * dt);
+        let out = self.cubic_pot_full(v_mid, p.g, dt);
+        self.rot_kerr(p, 0.5 * dt);
+        out
     }
 
     /// Full symmetric 3-stage Strang step (`O(dt^2)`) returning `(w_abs, flux)`.
     #[inline]
     pub fn step_single(&mut self, p: AtomParams, v_mid: C64, dt: f64) -> (C64, C64) {
-        self.rot_kerr(p, 0.5 * dt);
-        let out = self.cubic_pot(v_mid, p.g, dt);
-        self.rot_kerr(p, 0.5 * dt);
-        out
+        let (w_abs, flux, _) = self.step_single_full(p, v_mid, dt);
+        (w_abs, flux)
+    }
+
+    /// Exact closed-form joint free-decay flow (`v == 0`) with zero splitting error:
+    /// `z(t) = z0 * exp(i * (omega * t + (omega * beta / g) * ln(1 + g * |z0| * t))) / (1 + g * |z0| * t)`.
+    #[inline]
+    pub fn step_free_exact(&mut self, p: AtomParams, dt: f64) {
+        let a0 = self.z.abs();
+        if a0 <= 0.0 {
+            return;
+        }
+        let u = p.g * a0 * dt;
+        let inv = 1.0 / (1.0 + u);
+        let kerr_phase = if u.abs() > 1e-12 {
+            (p.omega * p.beta / p.g) * u.ln_1p()
+        } else {
+            p.omega * p.beta * a0 * dt * (1.0 - 0.5 * u)
+        };
+        let phi = p.omega * dt + kerr_phase;
+        let (s, c) = phi.sin_cos();
+        self.z = self.z.scale(inv).rotate(c, s);
     }
 }
 
@@ -645,7 +696,7 @@ impl MobiusDelayBank {
 /// Exact palindromic `-w_abs` conservation cascade (`tau = 0`).
 ///
 /// At `coupling = 1.0`, `sum(z_mid[..n]) + v_rem == v_in` holds to machine precision (`~1e-15`)
-/// and integration converges at exact `O(dt^2)` (`4.00x`).
+/// and integration converges at exact `O(dt^2)` (`4.00x`). Returns `(z_mid, v_rem, p_diss_0)`.
 #[inline]
 pub fn step_cascade(
     atoms: &mut [CubicAtom; MOBIUS_MAX_ATOMS],
@@ -654,17 +705,17 @@ pub fn step_cascade(
     v_in: C64,
     coupling: f64,
     dt: f64,
-) -> ([C64; MOBIUS_MAX_ATOMS], C64) {
+) -> ([C64; MOBIUS_MAX_ATOMS], C64, f64) {
     let count = n.clamp(1, MOBIUS_MAX_ATOMS);
     let c = coupling.clamp(0.0, 1.0);
     let mut z_mid = [C64::ZERO; MOBIUS_MAX_ATOMS];
 
     if count == 1 {
         atoms[0].rot_kerr(params[0], 0.5 * dt);
-        let (w_abs, _) = atoms[0].cubic_pot(v_in, params[0].g, dt);
+        let (w_abs, _, pd0) = atoms[0].cubic_pot_full(v_in, params[0].g, dt);
         z_mid[0] = atoms[0].z;
         atoms[0].rot_kerr(params[0], 0.5 * dt);
-        return (z_mid, w_abs.neg());
+        return (z_mid, w_abs.neg(), pd0);
     }
 
     for k in 0..count {
@@ -673,9 +724,13 @@ pub fn step_cascade(
 
     let mut v_saved = [C64::ZERO; MOBIUS_MAX_ATOMS];
     let mut v_cur = v_in;
+    let mut pd0_a = 0.0_f64;
     for k in 0..(count - 1) {
         v_saved[k] = v_cur;
-        let (w_abs_mid, _) = atoms[k].cubic_pot(v_cur, params[k].g, 0.5 * dt);
+        let (w_abs_mid, _, pd) = atoms[k].cubic_pot_full(v_cur, params[k].g, 0.5 * dt);
+        if k == 0 {
+            pd0_a = pd;
+        }
         z_mid[k] = atoms[k].z;
         v_cur = w_abs_mid.neg().scale(c);
     }
@@ -685,18 +740,22 @@ pub fn step_cascade(
     z_mid[last] = atoms[last].z;
     let v_rem = w_abs_last.neg();
 
+    let mut pd0_b = 0.0_f64;
     for k in (0..last).rev() {
-        let _ = atoms[k].cubic_pot(v_saved[k], params[k].g, 0.5 * dt);
+        let (_, _, pd) = atoms[k].cubic_pot_full(v_saved[k], params[k].g, 0.5 * dt);
+        if k == 0 {
+            pd0_b = pd;
+        }
     }
 
     for k in 0..count {
         atoms[k].rot_kerr(params[k], 0.5 * dt);
     }
-    (z_mid, v_rem)
+    (z_mid, v_rem, 0.5 * (pd0_a + pd0_b))
 }
 
 /// Exact `O(dt^2)` step-averaged cubic flux bloom chain (`tau = 0`):
-/// `v_0 = v_in`, `v_k = eta * flux_{k-1}`.
+/// `v_0 = v_in`, `v_k = eta * flux_{k-1}`. Returns Atom 0's discrete dissipated power.
 #[inline]
 pub fn step_bloom(
     atoms: &mut [CubicAtom; MOBIUS_MAX_ATOMS],
@@ -705,15 +764,19 @@ pub fn step_bloom(
     v_in: C64,
     eta: f64,
     dt: f64,
-) {
+) -> f64 {
     let count = n.clamp(1, MOBIUS_MAX_ATOMS);
     let gain = eta.max(0.0);
     for k in 0..count {
         atoms[k].rot_kerr(params[k], 0.5 * dt);
     }
     let mut v_cur = v_in;
+    let mut pd0 = 0.0_f64;
     for k in 0..count {
-        let (_, flux) = atoms[k].cubic_pot(v_cur, params[k].g, dt);
+        let (_, flux, pd) = atoms[k].cubic_pot_full(v_cur, params[k].g, dt);
+        if k == 0 {
+            pd0 = pd;
+        }
         if k + 1 < count {
             v_cur = flux.scale(gain);
         }
@@ -721,11 +784,13 @@ pub fn step_bloom(
     for k in 0..count {
         atoms[k].rot_kerr(params[k], 0.5 * dt);
     }
+    pd0
 }
 
 /// Exact `O(dt^2)` weighted-ball Star-Chamber sandwich (`tau = 0`):
 /// `v_0 = (1 - c^2) * v_in + (c / M) * sum_{j=1..N-1} z_j`, `v_j = c * z_0`.
 /// Preserves the exact invariant ball `{|z_0| <= |v_in|, |z_j| <= c * |v_in|}` with zero attack droop.
+/// Returns Atom 0's step-averaged discrete dissipated power.
 #[inline]
 pub fn step_star(
     atoms: &mut [CubicAtom; MOBIUS_MAX_ATOMS],
@@ -734,11 +799,10 @@ pub fn step_star(
     v_in: C64,
     c: f64,
     dt: f64,
-) {
+) -> f64 {
     let count = n.clamp(1, MOBIUS_MAX_ATOMS);
     if count == 1 {
-        atoms[0].step_single(params[0], v_in, dt);
-        return;
+        return atoms[0].step_single_full(params[0], v_in, dt).2;
     }
     let cc = c.clamp(0.0, 1.0);
     let m_inv = 1.0 / (count - 1) as f64;
@@ -753,7 +817,7 @@ pub fn step_star(
         body_sum = body_sum.add(atom.z);
     }
     let v0_a = v_in.scale(in_scale).add(body_sum.scale(cc * m_inv));
-    let _ = atoms[0].cubic_pot(v0_a, params[0].g, 0.5 * dt);
+    let (_, _, pd0_a) = atoms[0].cubic_pot_full(v0_a, params[0].g, 0.5 * dt);
 
     let v_body = atoms[0].z.scale(cc);
     let mut body_sum_b = C64::ZERO;
@@ -763,15 +827,17 @@ pub fn step_star(
     }
 
     let v0_b = v_in.scale(in_scale).add(body_sum_b.scale(cc * m_inv));
-    let _ = atoms[0].cubic_pot(v0_b, params[0].g, 0.5 * dt);
+    let (_, _, pd0_b) = atoms[0].cubic_pot_full(v0_b, params[0].g, 0.5 * dt);
 
     for k in 0..count {
         atoms[k].rot_kerr(params[k], 0.5 * dt);
     }
+    0.5 * (pd0_a + pd0_b)
 }
 
 /// Strictly convex non-expansive closed ring (`tau = 0` symmetric Strang):
 /// `v_0 = (1 - c) * v_in + c * z_{N-1}`, `v_k = c * z_{k-1}`.
+/// Returns Atom 0's step-averaged discrete dissipated power.
 #[inline]
 pub fn step_ring(
     atoms: &mut [CubicAtom; MOBIUS_MAX_ATOMS],
@@ -780,44 +846,53 @@ pub fn step_ring(
     v_in: C64,
     c: f64,
     dt: f64,
-) {
+) -> f64 {
     let count = n.clamp(1, MOBIUS_MAX_ATOMS);
     if count == 1 {
-        atoms[0].step_single(params[0], v_in, dt);
-        return;
+        return atoms[0].step_single_full(params[0], v_in, dt).2;
     }
     let cc = c.clamp(0.0, 1.0);
     for k in 0..count {
         atoms[k].rot_kerr(params[k], 0.5 * dt);
     }
 
+    let mut pd0_a = 0.0_f64;
     for k in 0..(count - 1) {
         let vk = if k == 0 {
             v_in.scale(1.0 - cc).add(atoms[count - 1].z.scale(cc))
         } else {
             atoms[k - 1].z.scale(cc)
         };
-        let _ = atoms[k].cubic_pot(vk, params[k].g, 0.5 * dt);
+        let (_, _, pd) = atoms[k].cubic_pot_full(vk, params[k].g, 0.5 * dt);
+        if k == 0 {
+            pd0_a = pd;
+        }
     }
     let last = count - 1;
     let v_last = atoms[last - 1].z.scale(cc);
     let _ = atoms[last].cubic_pot(v_last, params[last].g, dt);
+    let mut pd0_b = 0.0_f64;
     for k in (0..last).rev() {
         let vk = if k == 0 {
             v_in.scale(1.0 - cc).add(atoms[last].z.scale(cc))
         } else {
             atoms[k - 1].z.scale(cc)
         };
-        let _ = atoms[k].cubic_pot(vk, params[k].g, 0.5 * dt);
+        let (_, _, pd) = atoms[k].cubic_pot_full(vk, params[k].g, 0.5 * dt);
+        if k == 0 {
+            pd0_b = pd;
+        }
     }
 
     for k in 0..count {
         atoms[k].rot_kerr(params[k], 0.5 * dt);
     }
+    0.5 * (pd0_a + pd0_b)
 }
 
 /// Exact `O(dt^2)` palindromic all-to-all mean-field Kuramoto swarm (`tau = 0`):
 /// `v_k = (1 - c) * v_in + (c / (N - 1)) * sum_{j != k} z_j`.
+/// Returns Atom 0's step-averaged discrete dissipated power.
 #[inline]
 pub fn step_swarm(
     atoms: &mut [CubicAtom; MOBIUS_MAX_ATOMS],
@@ -826,11 +901,10 @@ pub fn step_swarm(
     v_in: C64,
     c: f64,
     dt: f64,
-) {
+) -> f64 {
     let count = n.clamp(1, MOBIUS_MAX_ATOMS);
     if count == 1 {
-        atoms[0].step_single(params[0], v_in, dt);
-        return;
+        return atoms[0].step_single_full(params[0], v_in, dt).2;
     }
     let cc = c.clamp(0.0, 1.0);
     let inv_nm1 = 1.0 / (count - 1) as f64;
@@ -845,11 +919,15 @@ pub fn step_swarm(
         sum = sum.add(atom.z);
     }
 
+    let mut pd0_a = 0.0_f64;
     for k in 0..(count - 1) {
         let old = atoms[k].z;
         let others = sum.sub(old).scale(inv_nm1);
         let vk = in_part.add(others.scale(cc));
-        let _ = atoms[k].cubic_pot(vk, params[k].g, 0.5 * dt);
+        let (_, _, pd) = atoms[k].cubic_pot_full(vk, params[k].g, 0.5 * dt);
+        if k == 0 {
+            pd0_a = pd;
+        }
         sum = sum.sub(old).add(atoms[k].z);
     }
 
@@ -862,21 +940,27 @@ pub fn step_swarm(
         sum = sum.sub(old).add(atoms[last].z);
     }
 
+    let mut pd0_b = 0.0_f64;
     for k in (0..last).rev() {
         let old = atoms[k].z;
         let others = sum.sub(old).scale(inv_nm1);
         let vk = in_part.add(others.scale(cc));
-        let _ = atoms[k].cubic_pot(vk, params[k].g, 0.5 * dt);
+        let (_, _, pd) = atoms[k].cubic_pot_full(vk, params[k].g, 0.5 * dt);
+        if k == 0 {
+            pd0_b = pd;
+        }
         sum = sum.sub(old).add(atoms[k].z);
     }
 
     for k in 0..count {
         atoms[k].rot_kerr(params[k], 0.5 * dt);
     }
+    0.5 * (pd0_a + pd0_b)
 }
 
 /// Exact `O(dt^2)` two-stage hybrid acoustic bell/bar (`Core` doublet `A0 <-> A1` +
 /// `Halo` Moreau bloom chain `A0 -> A2 -> ... -> A_{N-1}`).
+/// Returns Atom 0's step-averaged discrete dissipated power.
 #[inline]
 pub fn step_hybrid(
     atoms: &mut [CubicAtom; MOBIUS_MAX_ATOMS],
@@ -885,17 +969,15 @@ pub fn step_hybrid(
     v_in: C64,
     coupling: f64,
     dt: f64,
-) {
+) -> f64 {
     let count = n.clamp(1, MOBIUS_MAX_ATOMS);
     if count == 1 {
-        atoms[0].step_single(params[0], v_in, dt);
-        return;
+        return atoms[0].step_single_full(params[0], v_in, dt).2;
     }
     let coup = coupling.clamp(0.0, 1.0);
     let c_pair = (0.35 + 0.60 * coup).clamp(0.0, 0.96);
     if count == 2 {
-        step_star(atoms, params, 2, v_in, c_pair, dt);
-        return;
+        return step_star(atoms, params, 2, v_in, c_pair, dt);
     }
     let eta = 2.0 * coup;
     let in_scale = 1.0 - c_pair * c_pair;
@@ -905,13 +987,13 @@ pub fn step_hybrid(
     }
 
     let v0a = v_in.scale(in_scale).add(atoms[1].z.scale(c_pair));
-    let (_, flux_0a) = atoms[0].cubic_pot(v0a, params[0].g, 0.5 * dt);
+    let (_, flux_0a, pd0_a) = atoms[0].cubic_pot_full(v0a, params[0].g, 0.5 * dt);
 
     let v1 = atoms[0].z.scale(c_pair);
     let _ = atoms[1].cubic_pot(v1, params[1].g, dt);
 
     let v0b = v_in.scale(in_scale).add(atoms[1].z.scale(c_pair));
-    let (_, flux_0b) = atoms[0].cubic_pot(v0b, params[0].g, 0.5 * dt);
+    let (_, flux_0b, pd0_b) = atoms[0].cubic_pot_full(v0b, params[0].g, 0.5 * dt);
 
     // Total step-averaged flux from A0 across both half-steps: 0.5 * (flux_0a + flux_0b).
     let mut v_halo = flux_0a.add(flux_0b).scale(0.5 * eta);
@@ -923,10 +1005,12 @@ pub fn step_hybrid(
     for k in 0..count {
         atoms[k].rot_kerr(params[k], 0.5 * dt);
     }
+    0.5 * (pd0_a + pd0_b)
 }
 
 /// Space-time delayed step (`tau > 0`) for any [`MobiusTopology`], strictly composing
 /// exact 3-stage `CubicAtom` steps with convex linear-interpolated `MobiusDelayBank` reads.
+/// Returns Atom 0's discrete dissipated power.
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn step_delayed(
@@ -939,11 +1023,10 @@ fn step_delayed(
     v_in: C64,
     coupling: f64,
     dt: f64,
-) {
+) -> f64 {
     let count = n.clamp(1, MOBIUS_MAX_ATOMS);
     if count == 1 {
-        atoms[0].step_single(params[0], v_in, dt);
-        return;
+        return atoms[0].step_single_full(params[0], v_in, dt).2;
     }
     let coup = coupling.clamp(0.0, 1.0);
     let c_net = (0.96 * coup).clamp(0.0, 0.96);
@@ -963,33 +1046,43 @@ fn step_delayed(
     match topology {
         MobiusTopology::Cascade => {
             let mut push_vals = [C64::ZERO; MOBIUS_MAX_ATOMS];
+            let mut pd0 = 0.0_f64;
             for k in 0..count {
                 let vk = if k == 0 {
                     v_in
                 } else {
                     delayed[k - 1].scale(coup)
                 };
-                let (w_abs, _) = atoms[k].step_single(params[k], vk, dt);
+                let (w_abs, _, pd) = atoms[k].step_single_full(params[k], vk, dt);
+                if k == 0 {
+                    pd0 = pd;
+                }
                 push_vals[k] = w_abs.neg();
             }
             for (k, &val) in push_vals[..count].iter().enumerate() {
                 delays.push_atom(k, val);
             }
+            pd0
         }
         MobiusTopology::Bloom => {
             let mut push_vals = [C64::ZERO; MOBIUS_MAX_ATOMS];
+            let mut pd0 = 0.0_f64;
             for k in 0..count {
                 let vk = if k == 0 {
                     v_in
                 } else {
                     delayed[k - 1].scale(eta)
                 };
-                let (_, flux) = atoms[k].step_single(params[k], vk, dt);
+                let (_, flux, pd) = atoms[k].step_single_full(params[k], vk, dt);
+                if k == 0 {
+                    pd0 = pd;
+                }
                 push_vals[k] = flux;
             }
             for (k, &val) in push_vals[..count].iter().enumerate() {
                 delays.push_atom(k, val);
             }
+            pd0
         }
         MobiusTopology::Star => {
             let m_inv = 1.0 / (count - 1) as f64;
@@ -1000,7 +1093,7 @@ fn step_delayed(
             let v0 = v_in
                 .scale(1.0 - c_net * c_net)
                 .add(spoke_sum.scale(c_net * m_inv));
-            let _ = atoms[0].step_single(params[0], v0, dt);
+            let (_, _, pd0) = atoms[0].step_single_full(params[0], v0, dt);
 
             for k in 1..count {
                 let d_k = delay_samples[k];
@@ -1014,8 +1107,10 @@ fn step_delayed(
             for (k, atom) in atoms[..count].iter().enumerate() {
                 delays.push_atom(k, atom.z);
             }
+            pd0
         }
         MobiusTopology::Ring => {
+            let mut pd0 = 0.0_f64;
             for k in 0..count {
                 let prev = if k == 0 { count - 1 } else { k - 1 };
                 let vk = if k == 0 {
@@ -1023,11 +1118,15 @@ fn step_delayed(
                 } else {
                     delayed[prev].scale(c_net)
                 };
-                let _ = atoms[k].step_single(params[k], vk, dt);
+                let (_, _, pd) = atoms[k].step_single_full(params[k], vk, dt);
+                if k == 0 {
+                    pd0 = pd;
+                }
             }
             for (k, atom) in atoms[..count].iter().enumerate() {
                 delays.push_atom(k, atom.z);
             }
+            pd0
         }
         MobiusTopology::Swarm => {
             let inv_nm1 = 1.0 / (count - 1) as f64;
@@ -1036,14 +1135,19 @@ fn step_delayed(
                 sum = sum.add(z_del);
             }
             let in_part = v_in.scale(1.0 - c_net);
+            let mut pd0 = 0.0_f64;
             for k in 0..count {
                 let others = sum.sub(delayed[k]).scale(inv_nm1);
                 let vk = in_part.add(others.scale(c_net));
-                let _ = atoms[k].step_single(params[k], vk, dt);
+                let (_, _, pd) = atoms[k].step_single_full(params[k], vk, dt);
+                if k == 0 {
+                    pd0 = pd;
+                }
             }
             for (k, atom) in atoms[..count].iter().enumerate() {
                 delays.push_atom(k, atom.z);
             }
+            pd0
         }
         MobiusTopology::Hybrid => {
             let c_pair = (0.35 + 0.60 * coup).clamp(0.0, 0.96);
@@ -1051,21 +1155,21 @@ fn step_delayed(
                 let v0 = v_in
                     .scale(1.0 - c_pair * c_pair)
                     .add(delayed[1].scale(c_pair));
-                let _ = atoms[0].step_single(params[0], v0, dt);
+                let (_, _, pd0) = atoms[0].step_single_full(params[0], v0, dt);
                 let _ = atoms[1].step_single(params[1], delayed[0].scale(c_pair), dt);
                 delays.push_atom(0, atoms[0].z);
                 delays.push_atom(1, atoms[1].z);
-                return;
+                return pd0;
             }
             // Core doublet A0 <-> A1 at tau = 0 for tight body lock, with delayed Bloom halo A2..N.
             atoms[0].rot_kerr(params[0], 0.5 * dt);
             atoms[1].rot_kerr(params[1], 0.5 * dt);
             let in_scale = 1.0 - c_pair * c_pair;
             let v0a = v_in.scale(in_scale).add(atoms[1].z.scale(c_pair));
-            let (_, flux_0a) = atoms[0].cubic_pot(v0a, params[0].g, 0.5 * dt);
+            let (_, flux_0a, pd0_a) = atoms[0].cubic_pot_full(v0a, params[0].g, 0.5 * dt);
             let _ = atoms[1].cubic_pot(atoms[0].z.scale(c_pair), params[1].g, dt);
             let v0b = v_in.scale(in_scale).add(atoms[1].z.scale(c_pair));
-            let (_, flux_0b) = atoms[0].cubic_pot(v0b, params[0].g, 0.5 * dt);
+            let (_, flux_0b, pd0_b) = atoms[0].cubic_pot_full(v0b, params[0].g, 0.5 * dt);
             atoms[0].rot_kerr(params[0], 0.5 * dt);
             atoms[1].rot_kerr(params[1], 0.5 * dt);
 
@@ -1082,6 +1186,7 @@ fn step_delayed(
             for (k, &val) in push_vals[..count].iter().enumerate() {
                 delays.push_atom(k, val);
             }
+            0.5 * (pd0_a + pd0_b)
         }
     }
 }
@@ -1110,6 +1215,8 @@ pub struct MobiusAtomDescriptor {
     pub stereo_angle_rad: f64,
     /// Propagation delay assigned to this atom's outgoing edge (ms).
     pub delay_ms: f64,
+    /// Exact velocity-independent foldover amplitude `s_fold in (0, 1)` when `|beta| > 2 * xi`.
+    pub fold_s: Option<f64>,
     /// True when this atom is part of the active `0..N` bank.
     pub active: bool,
 }
@@ -1122,6 +1229,7 @@ pub struct MobiusSynthParams {
     pub brightness: f64,
     pub shape: f64,
     pub chirality: f64,
+    pub texture: f64,
     pub attack_ms: f64,
     pub decay_ms: f64,
     pub sustain: f64,
@@ -1136,6 +1244,7 @@ pub struct MobiusSynthParams {
     pub topology: MobiusTopology,
     pub coupling: f64,
     pub distance_ms: f64,
+    pub sympathy: f64,
     pub feedback: f64,
     pub fb_lock: bool,
     pub fb_cycles: f64,
@@ -1151,6 +1260,7 @@ impl Default for MobiusSynthParams {
             brightness: 0.72,
             shape: 0.50,
             chirality: 0.20,
+            texture: 0.0,
             attack_ms: 4.0,
             decay_ms: 220.0,
             sustain: 0.80,
@@ -1165,6 +1275,7 @@ impl Default for MobiusSynthParams {
             topology: MobiusTopology::Cascade,
             coupling: 0.85,
             distance_ms: 0.0,
+            sympathy: 0.0,
             feedback: 0.0,
             fb_lock: true,
             fb_cycles: 1.5,
@@ -1379,6 +1490,7 @@ pub fn mobius_atom_descriptors(
             beta,
             stereo_angle_rad: atom_stereo_angle(k, n, theta_max),
             delay_ms,
+            fold_s: mobius_foldover_amplitude(xi_k, beta),
             active: true,
         };
     }
@@ -1446,6 +1558,236 @@ pub fn mobius_target_preview(
 }
 
 // =============================================================================
+// PROJECTIVE SHARED POLYPHONIC CUBIC BRIDGE (`MobiusBridge`)
+// =============================================================================
+
+/// Power-of-two complex ring capacity holding exact `AUDIO_SUB_BLOCK_FRAMES` (`64` samples =
+/// `1.33 ms` at `48 kHz`) bridge propagation delay across arbitrary event-split sub-blocks.
+const MOBIUS_BRIDGE_RING: usize = AUDIO_SUB_BLOCK_FRAMES * 2;
+const MOBIUS_BRIDGE_MASK: usize = MOBIUS_BRIDGE_RING - 1;
+/// Projective Möbius disk ceiling bounding shared bridge return unconditionally for any polyphony.
+const MOBIUS_BRIDGE_MAX_NORM: f64 = 2.0;
+
+/// Instrument-level shared projective cubic soundboard / bridge coupling polyphonic
+/// [`MobiusSynth`] voices across a fixed `64`-sample (`1.33 ms` at `48 kHz`) propagation delay.
+///
+/// Voices render full L1D-hot sub-blocks independently: each frame reads the bridge return from
+/// exactly `AUDIO_SUB_BLOCK_FRAMES` samples earlier and radiates its summed mode state into
+/// `accum_buf`. At the end of the sub-block, `finish_sub_block` applies projective Möbius
+/// bounding `v_br = S / (1 + |S| / M_br)` (guaranteeing `|v_br| < M_br` for any voice count),
+/// advances two broadband cubic soundboard atoms, and stores the bridge return into the ring.
+#[derive(Clone, Debug)]
+pub struct MobiusBridge {
+    sample_rate: f64,
+    dt: f64,
+    board: [CubicAtom; 2],
+    board_params: [AtomParams; 2],
+    ring: [C64; MOBIUS_BRIDGE_RING],
+    write_pos: usize,
+    accum_buf: [C64; AUDIO_SUB_BLOCK_FRAMES],
+    had_radiators: bool,
+    active: bool,
+}
+
+impl Default for MobiusBridge {
+    fn default() -> Self {
+        Self::new(48_000.0)
+    }
+}
+
+impl MobiusBridge {
+    pub fn new(sample_rate: f64) -> Self {
+        let sr = sanitize_sample_rate(sample_rate).clamp(8_000.0, 384_000.0);
+        Self {
+            sample_rate: sr,
+            dt: 1.0 / sr,
+            board: [CubicAtom::default(); 2],
+            board_params: Self::default_board_params(),
+            ring: [C64::ZERO; MOBIUS_BRIDGE_RING],
+            write_pos: 0,
+            accum_buf: [C64::ZERO; AUDIO_SUB_BLOCK_FRAMES],
+            had_radiators: false,
+            active: false,
+        }
+    }
+
+    #[inline]
+    fn default_board_params() -> [AtomParams; 2] {
+        [
+            AtomParams::from_invariants(146.832, 0.85, 0.5, 1.0),
+            AtomParams::from_invariants(293.665, 0.85, -0.4, 1.0),
+        ]
+    }
+
+    #[inline]
+    pub fn set_sample_rate(&mut self, sample_rate: f64) {
+        let sr = sanitize_sample_rate(sample_rate).clamp(8_000.0, 384_000.0);
+        if sr.to_bits() != self.sample_rate.to_bits() {
+            self.sample_rate = sr;
+            self.dt = 1.0 / sr;
+        }
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.board = [CubicAtom::default(); 2];
+        self.ring = [C64::ZERO; MOBIUS_BRIDGE_RING];
+        self.write_pos = 0;
+        self.accum_buf = [C64::ZERO; AUDIO_SUB_BLOCK_FRAMES];
+        self.had_radiators = false;
+        self.active = false;
+    }
+
+    #[inline]
+    pub fn reset(&mut self, sample_rate: f64) {
+        self.set_sample_rate(sample_rate);
+        self.clear();
+    }
+
+    #[inline]
+    pub fn is_active(&self) -> bool {
+        self.active
+    }
+
+    /// Prepare the bridge accumulator for a sub-block of `frames <= AUDIO_SUB_BLOCK_FRAMES`.
+    #[inline]
+    pub fn begin_sub_block(&mut self, frames: usize) {
+        let n = frames.min(AUDIO_SUB_BLOCK_FRAMES);
+        self.accum_buf[..n].fill(C64::ZERO);
+        self.had_radiators = false;
+    }
+
+    /// Read the delayed bridge return at offset `frame_idx` within the current sub-block
+    /// (exact `AUDIO_SUB_BLOCK_FRAMES` sample delay regardless of sub-block splitting).
+    #[inline]
+    pub fn read_frame(&self, frame_idx: usize) -> C64 {
+        if !self.active {
+            return C64::ZERO;
+        }
+        let idx = (self.write_pos + frame_idx + MOBIUS_BRIDGE_RING - AUDIO_SUB_BLOCK_FRAMES)
+            & MOBIUS_BRIDGE_MASK;
+        self.ring[idx]
+    }
+
+    /// Accumulate one voice's radiated complex mode state at `frame_idx`.
+    #[inline]
+    pub fn accumulate_frame(&mut self, frame_idx: usize, rad: C64) {
+        if frame_idx < AUDIO_SUB_BLOCK_FRAMES && rad.abs_sq() > 0.0 && rad.is_finite() {
+            self.accum_buf[frame_idx] = self.accum_buf[frame_idx].add(rad);
+            self.had_radiators = true;
+        }
+    }
+
+    /// Advance the shared 2-atom projective soundboard across `frames` and commit returns
+    /// to the ring buffer. Zero CPU when idle.
+    #[inline]
+    pub fn finish_sub_block(&mut self, frames: usize) {
+        let n = frames.min(AUDIO_SUB_BLOCK_FRAMES);
+        if n == 0 || (!self.had_radiators && !self.active) {
+            return;
+        }
+        let dt = self.dt;
+        let mut peak_sq = 0.0_f64;
+        for i in 0..n {
+            let s = self.accum_buf[i];
+            let s_abs = s.abs();
+            let v_br = if s_abs > 0.0 {
+                s.scale(1.0 / (1.0 + s_abs / MOBIUS_BRIDGE_MAX_NORM))
+            } else {
+                C64::ZERO
+            };
+            if v_br == C64::ZERO {
+                self.board[0].step_free_exact(self.board_params[0], dt);
+                self.board[1].step_free_exact(self.board_params[1], dt);
+            } else {
+                let _ = self.board[0].step_single(self.board_params[0], v_br, dt);
+                let _ = self.board[1].step_single(self.board_params[1], v_br, dt);
+            }
+            for atom in &mut self.board {
+                if !atom.z.is_finite() {
+                    atom.z = C64::ZERO;
+                } else {
+                    atom.z = atom.z.flush_denormal();
+                }
+            }
+            let b_avg = self.board[0].z.add(self.board[1].z).scale(0.5);
+            let ret = v_br.scale(0.65).add(b_avg.scale(0.35)).flush_denormal();
+            let slot = (self.write_pos + i) & MOBIUS_BRIDGE_MASK;
+            self.ring[slot] = ret;
+            peak_sq = peak_sq
+                .max(ret.abs_sq())
+                .max(self.board[0].z.abs_sq())
+                .max(self.board[1].z.abs_sq());
+        }
+        self.write_pos = (self.write_pos + n) & MOBIUS_BRIDGE_MASK;
+        if self.had_radiators || peak_sq > 1e-12 {
+            self.active = true;
+        } else {
+            // Check whether any remaining unread samples in the 64-frame window are non-zero.
+            let mut ring_live = false;
+            for k in 0..AUDIO_SUB_BLOCK_FRAMES {
+                let idx = (self.write_pos + MOBIUS_BRIDGE_RING - 1 - k) & MOBIUS_BRIDGE_MASK;
+                if self.ring[idx].abs_sq() > 1e-12 {
+                    ring_live = true;
+                    break;
+                }
+            }
+            if !ring_live {
+                self.ring = [C64::ZERO; MOBIUS_BRIDGE_RING];
+                self.board = [CubicAtom::default(); 2];
+                self.active = false;
+            }
+        }
+    }
+}
+
+/// Compact deterministic band-shaped micro-noise generator modulated strictly by driven
+/// `P_diss = g * |v - z|^3` (zero heap allocations, sample-rate-invariant filter poles).
+#[derive(Clone, Copy, Debug)]
+struct PdissNoise {
+    state: u64,
+    lp: f64,
+    hp_x1: f64,
+    hp_y1: f64,
+}
+
+impl PdissNoise {
+    #[inline]
+    const fn new(seed: u64) -> Self {
+        Self {
+            state: if seed == 0 {
+                0x9E37_79B9_7F4A_7C15
+            } else {
+                seed
+            },
+            lp: 0.0,
+            hp_x1: 0.0,
+            hp_y1: 0.0,
+        }
+    }
+
+    #[inline]
+    fn reset(&mut self, seed: u64) {
+        *self = Self::new(seed);
+    }
+
+    #[inline]
+    fn next_band(&mut self, lp_alpha: f64, hp_r: f64) -> f64 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.state = x;
+        let white = ((x >> 11) as f64) * (2.0 / ((1u64 << 53) as f64)) - 1.0;
+        self.lp += lp_alpha * (white - self.lp);
+        let y = self.lp - self.hp_x1 + hp_r * self.hp_y1;
+        self.hp_x1 = self.lp;
+        self.hp_y1 = flush_denormal_f64(y);
+        self.hp_y1
+    }
+}
+
+// =============================================================================
 // REAL-TIME SYNTHESIZER ENGINE (`MobiusSynth`)
 // =============================================================================
 
@@ -1490,6 +1832,14 @@ pub struct MobiusSynth {
     strike_amp: f64,
     note_released: bool,
 
+    // Native P_diss interface texture state (strictly gated on active drive; 0.0 in free decay).
+    pdiss_noise: PdissNoise,
+    last_driven_pdiss: f64,
+    strike_lp_alpha: f64,
+    strike_hp_r: f64,
+    breath_lp_alpha: f64,
+    breath_hp_r: f64,
+
     // Host-only output de-click fade (used strictly for choke / force_release, NEVER in ODE).
     host_fade: f64,
     host_fade_active: bool,
@@ -1506,10 +1856,22 @@ impl Default for MobiusSynth {
 }
 
 impl MobiusSynth {
+    #[inline]
+    fn texture_filter_coeffs(sr: f64) -> (f64, f64, f64, f64) {
+        let dt = 1.0 / sr;
+        let strike_lp = 1.0 - (-TAU * 6_500.0 * dt).exp();
+        let strike_hp = (-TAU * 950.0 * dt).exp();
+        let breath_lp = 1.0 - (-TAU * 4_800.0 * dt).exp();
+        let breath_hp = (-TAU * 650.0 * dt).exp();
+        (strike_lp, strike_hp, breath_lp, breath_hp)
+    }
+
     /// Construct a lightweight voice-pool core with zero delay allocation (attach a pooled
     /// [`MobiusDelayBank`] via [`Self::attach_delay_bank`] on trigger).
     pub fn new_core(sample_rate: f64) -> Self {
         let sr = sanitize_sample_rate(sample_rate).clamp(8_000.0, 384_000.0);
+        let (strike_lp_alpha, strike_hp_r, breath_lp_alpha, breath_hp_r) =
+            Self::texture_filter_coeffs(sr);
         let mut synth = Self {
             sample_rate: sr,
             dt: 1.0 / sr,
@@ -1532,6 +1894,12 @@ impl MobiusSynth {
             strike_active: false,
             strike_amp: 0.0,
             note_released: true,
+            pdiss_noise: PdissNoise::new(0xC0B1_CA70_5EED_0001),
+            last_driven_pdiss: 0.0,
+            strike_lp_alpha,
+            strike_hp_r,
+            breath_lp_alpha,
+            breath_hp_r,
             host_fade: 1.0,
             host_fade_active: false,
             host_fade_coeff: 1.0,
@@ -1569,6 +1937,12 @@ impl MobiusSynth {
         self.delays.is_some()
     }
 
+    /// Current sympathetic bridge coupling amount (`0..=1`).
+    #[inline]
+    pub fn sympathy(&self) -> f64 {
+        self.params.sympathy
+    }
+
     /// Update sample rate without clearing ringing atoms; returns `true` if rate changed.
     #[inline]
     pub fn set_sample_rate(&mut self, sample_rate: f64) -> bool {
@@ -1578,6 +1952,11 @@ impl MobiusSynth {
         }
         self.sample_rate = sr;
         self.dt = 1.0 / sr;
+        let (slp, shp, blp, bhp) = Self::texture_filter_coeffs(sr);
+        self.strike_lp_alpha = slp;
+        self.strike_hp_r = shp;
+        self.breath_lp_alpha = blp;
+        self.breath_hp_r = bhp;
         true
     }
 
@@ -1587,6 +1966,11 @@ impl MobiusSynth {
         let sr = sanitize_sample_rate(sample_rate).clamp(8_000.0, 384_000.0);
         self.sample_rate = sr;
         self.dt = 1.0 / sr;
+        let (slp, shp, blp, bhp) = Self::texture_filter_coeffs(sr);
+        self.strike_lp_alpha = slp;
+        self.strike_hp_r = shp;
+        self.breath_lp_alpha = blp;
+        self.breath_hp_r = bhp;
         self.atoms = [CubicAtom::default(); MOBIUS_MAX_ATOMS];
         self.theta_v = 0.0;
         self.theta_f = 0.0;
@@ -1599,6 +1983,8 @@ impl MobiusSynth {
         self.strike_active = false;
         self.strike_amp = 0.0;
         self.note_released = true;
+        self.pdiss_noise.reset(0xC0B1_CA70_5EED_0001);
+        self.last_driven_pdiss = 0.0;
         self.host_fade = 1.0;
         self.host_fade_active = false;
         self.host_fade_coeff = 1.0;
@@ -1627,6 +2013,9 @@ impl MobiusSynth {
                 self.theta_f = 0.0;
             }
             self.drive_level = 0.0;
+            self.last_driven_pdiss = 0.0;
+            let pitch_seed = params.base_hz.to_bits() ^ 0xA5A5_5A5A_1337_BEEF;
+            self.pdiss_noise.reset(pitch_seed);
         }
         self.set_parameters(params);
         self.velocity = vel;
@@ -1784,9 +2173,21 @@ impl MobiusSynth {
         }
     }
 
-    /// Evaluate one stereo frame `[L, R]` at full `f64` internal precision.
+    /// Evaluate one stereo frame `[L, R]` with no external shared bridge return.
     #[inline]
     pub fn process_stereo(&mut self, ext_in: [f64; 2], mix: f64) -> [f64; 2] {
+        self.process_stereo_bridged(ext_in, mix, C64::ZERO).0
+    }
+
+    /// Evaluate one stereo frame `[L, R]` coupled to an optional instrument-level shared
+    /// projective cubic bridge (`bridge_return`), returning `([L, R], bridge_radiation)`.
+    #[inline]
+    pub fn process_stereo_bridged(
+        &mut self,
+        ext_in: [f64; 2],
+        mix: f64,
+        bridge_return: C64,
+    ) -> ([f64; 2], C64) {
         let dry_l = sanitize_sample_f64(ext_in[0]);
         let dry_r = sanitize_sample_f64(ext_in[1]);
         let m = sanitize_clamp_f64(mix, 0.0, 1.0, 1.0);
@@ -1823,11 +2224,15 @@ impl MobiusSynth {
         };
 
         // 2. Synthesize unit-disk complex target `v_in(t)` with exact Nyquist caps.
-        let v_in = match self.params.exciter {
+        let mut exciter_driven = false;
+        let v_in_base = match self.params.exciter {
             MobiusExciter::External => {
                 let mid = 0.5 * (dry_l + dry_r);
                 let side = 0.5 * (dry_l - dry_r);
-                apply_chirality(C64::new(mid, side), self.params.chirality)
+                let chi = self.params.chirality.clamp(0.0, 1.0);
+                // Narrow stereo Side cleanly toward the real axis at exact unity mono gain.
+                exciter_driven = mid.abs() + side.abs() > 1e-9;
+                C64::new(mid, side * (1.0 - chi))
             }
             MobiusExciter::Strike => {
                 if self.strike_active {
@@ -1837,6 +2242,7 @@ impl MobiusSynth {
                         self.strike_active = false;
                         C64::ZERO
                     } else {
+                        exciter_driven = true;
                         let pulse = 0.5 * (1.0 - (TAU * t / self.strike_duration).cos());
                         C64::new(self.strike_amp * pulse, 0.0)
                     }
@@ -1867,6 +2273,7 @@ impl MobiusSynth {
                 if env_a <= 0.0 {
                     C64::ZERO
                 } else {
+                    exciter_driven = true;
                     let bright = self.params.brightness.clamp(0.0, 1.0);
                     let th_pm = th_v_mid + 5.8 * fb * p_tilde.re;
                     let valve_mod = 1.0 / (1.0 + 3.5 * fb * p_tilde.re.max(0.0));
@@ -1897,9 +2304,49 @@ impl MobiusSynth {
             }
         };
 
+        // 2b. Native P_diss = g|v - z|^3 interface contact / breath texture (bit-exact 0.0 in free decay).
+        let tex = self.params.texture.clamp(0.0, 1.0);
+        let (v_in, direct_tex) = if tex > 1e-6 && exciter_driven {
+            let pd_gate = (self.last_driven_pdiss / (1.0 + self.last_driven_pdiss)).sqrt();
+            if self.params.exciter == MobiusExciter::Strike {
+                let c = 0.42
+                    * tex
+                    * pd_gate
+                    * self
+                        .pdiss_noise
+                        .next_band(self.strike_lp_alpha, self.strike_hp_r);
+                (v_in_base.add(C64::new(c * 2.8, 0.0)), c * 0.32)
+            } else {
+                let c = 0.24
+                    * tex
+                    * pd_gate
+                    * self
+                        .pdiss_noise
+                        .next_band(self.breath_lp_alpha, self.breath_hp_r);
+                (v_in_base.add(C64::new(c * 0.60, 0.0)), c * 0.16)
+            }
+        } else {
+            (v_in_base, 0.0)
+        };
+
+        // 2c. Weighted-ball Star projective shared polyphonic bridge blend (`c_br = 0.55 * sympathy`):
+        // preserves punchy direct attack `(1 - c_br^2) * v_in` while coupling unconditionally bounded
+        // `c_br * bridge_return` across the 64-sample soundboard bus.
+        let symp = self.params.sympathy.clamp(0.0, 1.0);
+        let c_br = 0.55 * symp;
+        let v_atom0 = if c_br > 1e-6 {
+            v_in.scale(1.0 - c_br * c_br).add(bridge_return.scale(c_br))
+        } else {
+            v_in
+        };
+
         // 3. Advance the N-atom space-time network via exact closed-form primitives.
         let use_delay = self.params.distance_ms > 0.0 && n > 1 && self.delays.is_some();
-        if use_delay {
+        let p_diss_0 = if n == 1 && v_atom0 == C64::ZERO {
+            // Exact closed-form joint free-decay fast path (zero splitting error).
+            self.atoms[0].step_free_exact(self.atom_params[0], dt);
+            0.0
+        } else if use_delay {
             if let Some(delays) = self.delays.as_mut() {
                 step_delayed(
                     self.params.topology,
@@ -1908,34 +2355,53 @@ impl MobiusSynth {
                     delays,
                     &self.delay_samples,
                     n,
-                    v_in,
+                    v_atom0,
                     self.params.coupling,
                     dt,
-                );
+                )
+            } else {
+                0.0
             }
         } else {
             let coup = self.params.coupling.clamp(0.0, 1.0);
             let c_net = (0.96 * coup).clamp(0.0, 0.96);
             match self.params.topology {
                 MobiusTopology::Cascade => {
-                    let _ = step_cascade(&mut self.atoms, &self.atom_params, n, v_in, coup, dt);
+                    step_cascade(&mut self.atoms, &self.atom_params, n, v_atom0, coup, dt).2
                 }
-                MobiusTopology::Bloom => {
-                    step_bloom(&mut self.atoms, &self.atom_params, n, v_in, 2.0 * coup, dt);
-                }
+                MobiusTopology::Bloom => step_bloom(
+                    &mut self.atoms,
+                    &self.atom_params,
+                    n,
+                    v_atom0,
+                    2.0 * coup,
+                    dt,
+                ),
                 MobiusTopology::Star => {
-                    step_star(&mut self.atoms, &self.atom_params, n, v_in, c_net, dt);
+                    step_star(&mut self.atoms, &self.atom_params, n, v_atom0, c_net, dt)
                 }
                 MobiusTopology::Ring => {
-                    step_ring(&mut self.atoms, &self.atom_params, n, v_in, c_net, dt);
+                    step_ring(&mut self.atoms, &self.atom_params, n, v_atom0, c_net, dt)
                 }
                 MobiusTopology::Swarm => {
-                    step_swarm(&mut self.atoms, &self.atom_params, n, v_in, c_net, dt);
+                    step_swarm(&mut self.atoms, &self.atom_params, n, v_atom0, c_net, dt)
                 }
                 MobiusTopology::Hybrid => {
-                    step_hybrid(&mut self.atoms, &self.atom_params, n, v_in, coup, dt);
+                    step_hybrid(&mut self.atoms, &self.atom_params, n, v_atom0, coup, dt)
                 }
             }
+        };
+
+        // Latch driven interface dissipation strictly while the exciter is active.
+        if exciter_driven && tex > 1e-6 {
+            let pd_scale = if self.params.exciter == MobiusExciter::Strike {
+                0.002
+            } else {
+                0.004
+            };
+            self.last_driven_pdiss = (p_diss_0 * pd_scale).clamp(0.0, 1e6);
+        } else {
+            self.last_driven_pdiss = 0.0;
         }
 
         // Flush denormals and guard against unexpected external NaN/Inf.
@@ -1948,6 +2414,23 @@ impl MobiusSynth {
                 energy += atom.z.abs();
             }
         }
+
+        // Radiate active modes into the shared polyphonic bridge when sympathy > 0.
+        // `MobiusBridge` applies projective Möbius bounding `S / (1 + |S| / M_br)`, so raw mode
+        // summation preserves full per-partial sympathetic drive while remaining unconditionally bounded.
+        let bridge_rad = if symp > 1e-6 && (!self.host_fade_active || self.host_fade > 0.0) {
+            let mut sum = C64::ZERO;
+            for atom in &self.atoms[..n] {
+                sum = sum.add(atom.z);
+            }
+            if self.host_fade_active {
+                sum.scale(self.host_fade)
+            } else {
+                sum
+            }
+        } else {
+            C64::ZERO
+        };
 
         // Push body pressure into bore delay line and update O(1) delay drain tracker.
         let p_now = self.bore_pressure();
@@ -1969,8 +2452,8 @@ impl MobiusSynth {
             wet_l += l;
             wet_r += r;
         }
-        wet_l *= self.output_norm;
-        wet_r *= self.output_norm;
+        wet_l = wet_l * self.output_norm + direct_tex;
+        wet_r = wet_r * self.output_norm + direct_tex;
 
         // Host-only choke / force-release de-click fade (never alters atom physics).
         if self.host_fade_active {
@@ -1983,11 +2466,12 @@ impl MobiusSynth {
         }
 
         let wet = [flush_denormal_f64(wet_l), flush_denormal_f64(wet_r)];
-        if self.params.exciter == MobiusExciter::External || m < 1.0 {
+        let out = if self.params.exciter == MobiusExciter::External || m < 1.0 {
             mix_stereo_f64([dry_l, dry_r], wet, m)
         } else {
             wet
-        }
+        };
+        (out, bridge_rad)
     }
 
     #[inline]
@@ -2025,6 +2509,10 @@ impl MobiusSynth {
     pub fn is_quiet(&self) -> bool {
         if self.host_fade_active {
             return self.host_fade <= 0.0;
+        }
+        // Held key with sympathetic bridge active keeps the damper lifted until note_off.
+        if self.params.sympathy > 1e-4 && !self.note_released {
+            return false;
         }
         if self.strike_active || self.drive_stage != DriveEnvStage::Idle {
             return false;
@@ -2135,9 +2623,15 @@ mod tests {
                     MobiusTopology::Cascade => {
                         let _ = step_cascade(&mut atoms, &params, 4, v, 1.0, dt);
                     }
-                    MobiusTopology::Bloom => step_bloom(&mut atoms, &params, 4, v, 0.9, dt),
-                    MobiusTopology::Star => step_star(&mut atoms, &params, 4, v, 0.72, dt),
-                    MobiusTopology::Swarm => step_swarm(&mut atoms, &params, 4, v, 0.72, dt),
+                    MobiusTopology::Bloom => {
+                        let _ = step_bloom(&mut atoms, &params, 4, v, 0.9, dt);
+                    }
+                    MobiusTopology::Star => {
+                        let _ = step_star(&mut atoms, &params, 4, v, 0.72, dt);
+                    }
+                    MobiusTopology::Swarm => {
+                        let _ = step_swarm(&mut atoms, &params, 4, v, 0.72, dt);
+                    }
                     _ => unreachable!(),
                 }
             }
@@ -2237,7 +2731,7 @@ mod tests {
 
         for i in 0..4000 {
             let v_in = eval_dipole(TAU * 220.0 * i as f64 * dt, 0.78, PI * 0.45);
-            let (z_mid, v_rem) = step_cascade(&mut atoms, &params, 4, v_in, 1.0, dt);
+            let (z_mid, v_rem, _) = step_cascade(&mut atoms, &params, 4, v_in, 1.0, dt);
             let total = z_mid[0]
                 .add(z_mid[1])
                 .add(z_mid[2])
@@ -2289,7 +2783,7 @@ mod tests {
         };
         let dt = 1.0 / 48_000.0;
         for _ in 0..96_000 {
-            step_star(&mut atoms, &params, 2, C64::ZERO, c, dt);
+            let _ = step_star(&mut atoms, &params, 2, C64::ZERO, c, dt);
         }
         let ratio = atoms[1].z.abs() / atoms[0].z.abs();
         let rel_err = (ratio - lambda_star).abs() / lambda_star;
@@ -2633,6 +3127,447 @@ mod tests {
                     "({dispersion:?}, {topology:?}) failed to settle quiet after host fade"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn exact_free_decay_semigroup_and_strang_oracle_convergence() {
+        let p = AtomParams::from_invariants(440.0, 0.04, 6.0, 1.0);
+        let z0 = C64::from_polar(0.90, 0.42);
+        let dur = 0.50_f64;
+
+        let mut a_one = CubicAtom { z: z0 };
+        a_one.step_free_exact(p, dur);
+
+        let mut a_many = CubicAtom { z: z0 };
+        let dt = 1.0 / 48_000.0;
+        for _ in 0..24_000 {
+            a_many.step_free_exact(p, dt);
+        }
+        assert!(
+            a_many.z.sub(a_one.z).abs() < 1e-13,
+            "Exact free-decay semigroup drift: {:.3e}",
+            a_many.z.sub(a_one.z).abs()
+        );
+
+        let err_at = |sr: f64| {
+            let mut a = CubicAtom { z: z0 };
+            let h = 1.0 / sr;
+            for _ in 0..((dur * sr).round() as usize) {
+                let _ = a.step_single(p, C64::ZERO, h);
+            }
+            a.z.sub(a_one.z).abs()
+        };
+        let e24 = err_at(24_000.0);
+        let e48 = err_at(48_000.0);
+        let e96 = err_at(96_000.0);
+        assert!(
+            (3.95..=4.05).contains(&(e24 / e48)) && (3.95..=4.05).contains(&(e48 / e96)),
+            "Strang vs exact free-decay ratios=({:.4}, {:.4})",
+            e24 / e48,
+            e48 / e96
+        );
+    }
+
+    #[test]
+    fn exact_locked_response_q_and_duffing_foldover_boundary() {
+        let sr = 48_000.0;
+        let dt = 1.0 / sr;
+        let f0 = 220.0;
+        let xi = 0.08;
+        let a_drv = 0.85;
+
+        // Exact half-power detuning d = xi * A / sqrt(2) -> R / A = 1 / sqrt(2).
+        let p0 = AtomParams::from_invariants(f0, xi, 0.0, 1.0);
+        let fv = f0 * (1.0 + xi * a_drv / 2.0_f64.sqrt());
+        let mut atom = CubicAtom::default();
+        for i in 0..48_000 {
+            let v = C64::from_polar(a_drv, TAU * fv * (i as f64 + 0.5) * dt);
+            let _ = atom.step_single(p0, v, dt);
+        }
+        let s_meas = atom.z.abs() / a_drv;
+        assert!(
+            (s_meas - 1.0 / 2.0_f64.sqrt()).abs() < 1e-5,
+            "Half-power response {s_meas:.6} != 1/sqrt(2)"
+        );
+
+        // Dimensionless foldover boundary |beta| > 2 * xi.
+        assert!(mobius_foldover_amplitude(xi, 1.0 * xi).is_none());
+        let s_fold = mobius_foldover_amplitude(xi, 4.0 * xi).expect("supercritical must fold");
+        assert!((s_fold - (1.0_f64 / 3.0).sqrt()).abs() < 1e-12);
+
+        // Verify zero hysteresis below boundary vs strong hysteresis above boundary.
+        let sweep_hyst = |beta: f64| -> f64 {
+            let kerr_st = 12.0 * (1.0 + beta).log2();
+            let pk = AtomParams::from_invariants(f0, xi, kerr_st, 1.0);
+            let steps = 25usize;
+            let (d_min, d_max) = (-0.15_f64, 0.45_f64);
+            let mut up = vec![0.0_f64; steps];
+            let mut dn = vec![0.0_f64; steps];
+            let mut au = CubicAtom::default();
+            let mut thu = 0.0_f64;
+            for (k, slot) in up.iter_mut().enumerate() {
+                let fv_k = f0 * (1.0 + d_min + (d_max - d_min) * (k as f64 / (steps - 1) as f64));
+                for _ in 0..7200 {
+                    let v = C64::from_polar(a_drv, thu + 0.5 * TAU * fv_k * dt);
+                    thu = (thu + TAU * fv_k * dt).rem_euclid(TAU);
+                    let _ = au.step_single(pk, v, dt);
+                }
+                *slot = au.z.abs() / a_drv;
+            }
+            let mut ad = CubicAtom::default();
+            let mut thd = 0.0_f64;
+            for k in (0..steps).rev() {
+                let fv_k = f0 * (1.0 + d_min + (d_max - d_min) * (k as f64 / (steps - 1) as f64));
+                for _ in 0..7200 {
+                    let v = C64::from_polar(a_drv, thd + 0.5 * TAU * fv_k * dt);
+                    thd = (thd + TAU * fv_k * dt).rem_euclid(TAU);
+                    let _ = ad.step_single(pk, v, dt);
+                }
+                dn[k] = ad.z.abs() / a_drv;
+            }
+            up.iter()
+                .zip(dn.iter())
+                .map(|(u, d)| (u - d).abs())
+                .fold(0.0_f64, f64::max)
+        };
+        assert!(sweep_hyst(1.0 * xi) < 0.03);
+        assert!(sweep_hyst(4.0 * xi) > 0.40);
+    }
+
+    #[test]
+    fn swarm_sustain_boost_and_critical_locking_threshold() {
+        let dt = 1.0 / 48_000.0;
+        let f0 = 220.0;
+        let p = AtomParams::from_invariants(f0, 0.08, 0.0, 1.0);
+
+        // Exact synchronized sustain multiplier T_boost = (1 - c)^-2.
+        let half_time = |c: f64| -> f64 {
+            let mut atoms = [CubicAtom::default(); MOBIUS_MAX_ATOMS];
+            atoms[0].z = C64::ONE;
+            atoms[1].z = C64::ONE;
+            let params = [p; MOBIUS_MAX_ATOMS];
+            let mut frames = 0usize;
+            while atoms[0].z.abs() > 0.5 && frames < 500_000 {
+                let _ = step_swarm(&mut atoms, &params, 2, C64::ZERO, c, dt);
+                frames += 1;
+            }
+            frames as f64 * dt
+        };
+        let t0 = half_time(0.0);
+        for &(c, expected) in &[(0.50, 4.0), (0.80, 25.0), (0.90, 100.0)] {
+            let boost = half_time(c) / t0;
+            assert!(
+                ((boost - expected).abs() / expected) < 0.02,
+                "Swarm c={c} boost={boost:.2}x != {expected:.2}x"
+            );
+        }
+
+        // Exact static phase-locking threshold a_crit = 3*sqrt(3)*|dw| / (16*g) at c = 1.
+        let df = 6.0;
+        let a_crit = 3.0 * 3.0_f64.sqrt() * (TAU * df) / (16.0 * p.g);
+        let mut params = [p; MOBIUS_MAX_ATOMS];
+        params[0].omega = TAU * (f0 - 0.5 * df);
+        params[1].omega = TAU * (f0 + 0.5 * df);
+        let slips_at = |a_hold: f64| -> bool {
+            let mut atoms = [CubicAtom::default(); MOBIUS_MAX_ATOMS];
+            atoms[0].z = C64::new(a_hold, 0.0);
+            atoms[1].z = C64::new(a_hold, 0.0);
+            for _ in 0..48_000 {
+                let _ = step_swarm(&mut atoms, &params, 2, C64::ZERO, 1.0, dt);
+                atoms[0].z = atoms[0].z.scale(a_hold / atoms[0].z.abs().max(1e-18));
+                atoms[1].z = atoms[1].z.scale(a_hold / atoms[1].z.abs().max(1e-18));
+                let rel = atoms[1].z.mul(atoms[0].z.conj());
+                if rel.im.atan2(rel.re).abs() > 2.8 {
+                    return true;
+                }
+            }
+            false
+        };
+        assert!(!slips_at(1.02 * a_crit), "1.02 * a_crit must stay locked");
+        assert!(slips_at(0.98 * a_crit), "0.98 * a_crit must slip");
+    }
+
+    #[test]
+    fn discrete_power_port_passivity_holds_to_machine_precision() {
+        let dt = 1.0 / 48_000.0;
+        let p = AtomParams::from_invariants(440.0, 0.35, 6.0, 1.0);
+        let mut atom = CubicAtom {
+            z: C64::new(0.63, -0.41),
+        };
+        let v = C64::new(-0.82, 0.95);
+        let e_before = 0.5 * atom.z.abs_sq();
+        atom.rot_kerr(p, 0.5 * dt);
+        let z_pre = atom.z;
+        let (_, _, p_diss) = atom.cubic_pot_full(v, p.g, dt);
+        let j_disc = atom.z.sub(z_pre).scale(1.0 / dt);
+        atom.rot_kerr(p, 0.5 * dt);
+        let e_after = 0.5 * atom.z.abs_sq();
+
+        let lhs = (e_after - e_before) / dt;
+        let rhs = v.conj().mul(j_disc).re - p_diss;
+        assert!(p_diss > 0.0);
+        assert!(
+            (lhs - rhs).abs() / p_diss < 1e-13,
+            "Discrete passivity balance err {:.3e}",
+            (lhs - rhs).abs() / p_diss
+        );
+    }
+
+    #[test]
+    fn external_chirality_preserves_exact_unity_mono_gain() {
+        let sr = 48_000.0;
+        let run_rms = |chi: f64| -> f64 {
+            let mut synth = MobiusSynth::new(sr);
+            let p = MobiusSynthParams {
+                exciter: MobiusExciter::External,
+                base_hz: 220.0,
+                chirality: chi,
+                atoms: 1,
+                stiffness: 0.35,
+                kerr_semitones: 0.0,
+                stereo_width: 0.0,
+                ..MobiusSynthParams::default()
+            };
+            synth.trigger(1.0, &p, false, true);
+            let mut sum_sq = 0.0;
+            for i in 0..4800 {
+                let s = (TAU * 220.0 * i as f64 / sr).sin() * 0.6;
+                let [l, r] = synth.process_stereo([s, s], 1.0);
+                if i >= 2400 {
+                    sum_sq += 0.5 * (l * l + r * r);
+                }
+            }
+            (sum_sq / 2400.0).sqrt()
+        };
+        let rms0 = run_rms(0.0);
+        let rms1 = run_rms(1.0);
+        assert!(
+            (rms0 - rms1).abs() < 1e-9,
+            "Mono External RMS drifted across chirality 0..1: rms0={rms0:.8}, rms1={rms1:.8}"
+        );
+    }
+
+    #[test]
+    fn pdiss_texture_is_active_under_drive_and_bit_exact_zero_in_free_decay() {
+        let sr = 48_000.0;
+        let p_pure = MobiusSynthParams {
+            exciter: MobiusExciter::Strike,
+            base_hz: 329.63,
+            brightness: 0.80,
+            texture: 0.0,
+            atoms: 2,
+            stiffness: 0.025,
+            kerr_semitones: 2.5,
+            topology: MobiusTopology::Bloom,
+            ..MobiusSynthParams::default()
+        };
+        let mut p_tex = p_pure;
+        p_tex.texture = 0.85;
+
+        let mut s_pure = MobiusSynth::new(sr);
+        let mut s_tex = MobiusSynth::new(sr);
+        s_pure.trigger(1.0, &p_pure, false, true);
+        s_tex.trigger(1.0, &p_tex, false, true);
+
+        let mut max_early_diff = 0.0_f64;
+        for _ in 0..240 {
+            let a = s_pure.process_stereo([0.0, 0.0], 1.0);
+            let b = s_tex.process_stereo([0.0, 0.0], 1.0);
+            max_early_diff = max_early_diff.max((a[0] - b[0]).abs());
+        }
+        assert!(
+            max_early_diff > 1e-2,
+            "P_diss mallet texture did not affect strike transient (diff={max_early_diff:.3e})"
+        );
+        // After strike completes (~2 ms), driven P_diss must latch to bit-exact 0.0.
+        for _ in 0..1200 {
+            let _ = s_tex.process_stereo([0.0, 0.0], 1.0);
+        }
+        assert_eq!(
+            s_tex.last_driven_pdiss, 0.0,
+            "Free ring-out must have zero residual P_diss texture drive"
+        );
+    }
+
+    #[test]
+    fn projective_shared_bridge_excites_harmonic_sympathy_selectively_across_64_sample_block() {
+        let sr = 48_000.0;
+        let mut bridge = MobiusBridge::new(sr);
+
+        // Struck 4-atom harmonic C2 bass string vs two silent held strings:
+        //   - Harmonic C3 (2 * C2 = 130.81 Hz) -> must bloom strongly via 64-sample bridge
+        //   - Dissonant F#3 (185.00 Hz) -> must stay >20 dB quieter (harmonic selectivity!)
+        let mut c2 = MobiusSynth::new(sr);
+        let mut c3_held = MobiusSynth::new(sr);
+        let mut fs3_held = MobiusSynth::new(sr);
+
+        let p_c2 = MobiusSynthParams {
+            exciter: MobiusExciter::Szego,
+            base_hz: 65.406,
+            brightness: 0.85,
+            chirality: 0.2,
+            attack_ms: 3.0,
+            decay_ms: 520.0,
+            sustain: 0.0,
+            atoms: 4,
+            dispersion: MobiusDispersion::Harmonic,
+            structure: 0.0,
+            stiffness: 0.04,
+            kerr_semitones: 0.5,
+            topology: MobiusTopology::Cascade,
+            coupling: 1.0,
+            sympathy: 1.0,
+            ..MobiusSynthParams::default()
+        };
+        let p_held = |hz: f64| MobiusSynthParams {
+            exciter: MobiusExciter::Strike,
+            base_hz: hz,
+            atoms: 1,
+            stiffness: 0.014,
+            kerr_semitones: 0.3,
+            sympathy: 1.0,
+            ..MobiusSynthParams::default()
+        };
+
+        c2.trigger(1.2, &p_c2, false, true);
+        // Hold C3 and F#3 silently (velocity 0.0 -> zero direct excitation, damper lifted!).
+        c3_held.trigger(0.0, &p_held(130.813), false, true);
+        fs3_held.trigger(0.0, &p_held(184.997), false, true);
+        assert!(!c3_held.is_quiet(), "Held sympathetic string stays ready");
+
+        let blocks = (0.9 * sr) as usize / AUDIO_SUB_BLOCK_FRAMES;
+        let damp_block = (0.55 * sr) as usize / AUDIO_SUB_BLOCK_FRAMES;
+        let mut post_c3 = 0.0_f64;
+        let mut post_fs3 = 0.0_f64;
+
+        for blk in 0..blocks {
+            if blk == damp_block {
+                c2.begin_host_fade(decay_coeff_60db_ms(12.0, sr));
+            }
+            bridge.begin_sub_block(AUDIO_SUB_BLOCK_FRAMES);
+            for i in 0..AUDIO_SUB_BLOCK_FRAMES {
+                let ret = bridge.read_frame(i);
+                let (_, r0) = c2.process_stereo_bridged([0.0, 0.0], 1.0, ret);
+                let (o1, r1) = c3_held.process_stereo_bridged([0.0, 0.0], 1.0, ret);
+                let (o2, r2) = fs3_held.process_stereo_bridged([0.0, 0.0], 1.0, ret);
+                bridge.accumulate_frame(i, r0);
+                bridge.accumulate_frame(i, r1);
+                bridge.accumulate_frame(i, r2);
+                if blk >= damp_block + 40 {
+                    post_c3 = post_c3.max(o1[0].abs()).max(o1[1].abs());
+                    post_fs3 = post_fs3.max(o2[0].abs()).max(o2[1].abs());
+                }
+            }
+            bridge.finish_sub_block(AUDIO_SUB_BLOCK_FRAMES);
+        }
+
+        let selectivity_db = 20.0 * (post_c3 / post_fs3.max(1e-12)).log10();
+        assert!(
+            post_c3 > 0.015,
+            "Held harmonic C3 failed to ring sympathetically via 64-sample bridge: {post_c3:.5}"
+        );
+        assert!(
+            selectivity_db > 20.0,
+            "Bridge harmonic selectivity {selectivity_db:.1} dB < 20 dB (C3={post_c3:.4}, F#3={post_fs3:.4})"
+        );
+
+        // Lifting the held damper key must allow clean retirement once decayed.
+        c3_held.note_off();
+        assert!(c3_held.is_exciter_released());
+    }
+
+    #[test]
+    fn coherent_a6_full_band_aliasing_matches_384khz_bandlimited_reference() {
+        let sr = 48_000.0;
+        let n = 4096usize;
+        let settle = 4096usize;
+        let bin_hz = sr / n as f64;
+        // Odd integer bin k0 = 151 -> f0 = 1769.53 Hz (A6), gcd(151, 4096) = 1 -> zero leakage!
+        let k0 = 151usize;
+        let f0 = k0 as f64 * bin_hz;
+
+        let fft_mag = |sig: &[f64]| -> Vec<f64> {
+            let mut a: Vec<C64> = sig.iter().map(|&x| C64::new(x, 0.0)).collect();
+            let mut j = 0usize;
+            for i in 1..n {
+                let mut bit = n >> 1;
+                while j & bit != 0 {
+                    j ^= bit;
+                    bit >>= 1;
+                }
+                j ^= bit;
+                if i < j {
+                    a.swap(i, j);
+                }
+            }
+            let mut len = 2;
+            while len <= n {
+                let wlen = C64::from_polar(1.0, -TAU / len as f64);
+                for i in (0..n).step_by(len) {
+                    let mut w = C64::ONE;
+                    for k in 0..(len / 2) {
+                        let u = a[i + k];
+                        let v = a[i + k + len / 2].mul(w);
+                        a[i + k] = u.add(v);
+                        a[i + k + len / 2] = u.sub(v);
+                        w = w.mul(wlen);
+                    }
+                }
+                len <<= 1;
+            }
+            (0..=n / 2).map(|k| 2.0 * a[k].abs() / n as f64).collect()
+        };
+
+        // Check analytic Szego (chi=0 -> < -100 dB) and Dipole Brass (chi=0.2 -> < -85 dB; chi=1.0 -> < -65 dB).
+        for &(mode, chi, max_spur_db) in &[
+            (0u8, 0.0_f64, -100.0_f64),
+            (1u8, 0.2_f64, -85.0_f64),
+            (1u8, 1.0_f64, -65.0_f64),
+        ] {
+            let r_fixed = if mode == 0 {
+                r_max_szego(f0, sr)
+            } else {
+                r_max_dipole(f0, sr)
+            };
+            let run = |rate: f64, total: usize| -> Vec<f64> {
+                let h = 1.0 / rate;
+                let p = AtomParams::from_invariants(f0, 0.25, 3.0, 1.0);
+                let mut atom = CubicAtom::default();
+                let mut th = 0.0_f64;
+                let mut out = Vec::with_capacity(total);
+                for _ in 0..total {
+                    let th_mid = th + 0.5 * TAU * f0 * h;
+                    th = (th + TAU * f0 * h).rem_euclid(TAU);
+                    let vc = if mode == 0 {
+                        eval_szego(th_mid, r_fixed)
+                    } else {
+                        eval_dipole(th_mid, r_fixed, 0.25 * PI)
+                    };
+                    let v = apply_chirality(vc, chi).scale(0.85);
+                    let _ = atom.step_single(p, v, h);
+                    out.push(atom.z.re);
+                }
+                out
+            };
+
+            let sig48 = run(sr, settle + n);
+            let spec48 = fft_mag(&sig48[settle..settle + n]);
+            let pk = spec48.iter().copied().fold(1e-18_f64, f64::max);
+
+            let k_lo = (20.0 / bin_hz).ceil() as usize;
+            let k_hi = (20_000.0 / bin_hz).floor() as usize;
+            let mut max_nonharm = 1e-18_f64;
+            for (k, &mag) in spec48.iter().enumerate().take(k_hi + 1).skip(k_lo) {
+                if k % k0 != 0 {
+                    max_nonharm = max_nonharm.max(mag);
+                }
+            }
+            let spur_db = 20.0 * (max_nonharm / pk).log10();
+            assert!(
+                spur_db <= max_spur_db,
+                "A6 mode={mode} chi={chi} worst folded spur {spur_db:.1} dB exceeded {max_spur_db:.1} dB"
+            );
         }
     }
 }

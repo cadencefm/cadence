@@ -135,6 +135,9 @@ impl VoiceModule for MobiusNode {
         if !locks.is_module_locked(module_id, ModuleParam::MobiusChirality) {
             self.target.chirality = s.chirality;
         }
+        if !locks.is_module_locked(module_id, ModuleParam::MobiusTexture) {
+            self.target.texture = s.texture;
+        }
         if !locks.is_module_locked(module_id, ModuleParam::Sustain) {
             self.target.sustain = s.sustain;
         }
@@ -158,6 +161,9 @@ impl VoiceModule for MobiusNode {
         }
         if !locks.is_module_locked(module_id, ModuleParam::MobiusDistance) {
             self.target.distance_ms = s.distance_ms;
+        }
+        if !locks.is_module_locked(module_id, ModuleParam::MobiusSympathy) {
+            self.target.sympathy = s.sympathy;
         }
         if !locks.is_module_locked(module_id, ModuleParam::MobiusFeedback) {
             self.target.feedback = s.feedback;
@@ -289,6 +295,7 @@ impl VoiceModule for MobiusNode {
         smooth_step_f32(&mut self.current.brightness, self.target.brightness, s32);
         smooth_step_f32(&mut self.current.shape, self.target.shape, s32);
         smooth_step_f32(&mut self.current.chirality, self.target.chirality, s32);
+        smooth_step_f32(&mut self.current.texture, self.target.texture, s32);
         smooth_step_f32(&mut self.current.sustain, self.target.sustain, s32);
         smooth_step_f32(&mut self.current.structure, self.target.structure, s32);
         self.current.stiffness = self.stiffness.step(s64) as f32;
@@ -305,6 +312,7 @@ impl VoiceModule for MobiusNode {
         smooth_step_f32(&mut self.current.kerr_spread, self.target.kerr_spread, s32);
         smooth_step_f32(&mut self.current.coupling, self.target.coupling, s32);
         smooth_step_f32(&mut self.current.distance_ms, self.target.distance_ms, s32);
+        smooth_step_f32(&mut self.current.sympathy, self.target.sympathy, s32);
         smooth_step_f32(&mut self.current.feedback, self.target.feedback, s32);
         smooth_step_f32(&mut self.current.fb_cycles, self.target.fb_cycles, s32);
         smooth_step_f32(&mut self.current.fb_ms, self.target.fb_ms, s32);
@@ -392,7 +400,10 @@ impl VoiceModule for MobiusNode {
             self.prev_trig = high;
         }
 
-        bank.process_stereo(inputs.in_audio, f64::from(m.mix))
+        let (out, rad) =
+            bank.process_stereo_bridged(inputs.in_audio, f64::from(m.mix), ctx.bridge_return);
+        ctx.bridge_rad = ctx.bridge_rad + rad;
+        out
     }
 
     #[inline]

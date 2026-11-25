@@ -6,7 +6,8 @@ use super::voices::{HeldNotes, Voice};
 use super::*;
 use crate::modular_voice::{VoiceStart, ZoneTriggerSpec};
 use cadence_core::dsp::{
-    db_to_lin, mix_seed, sanitize_sample, stereo_mid_f32, MobiusDelayBank, AUDIO_SUB_BLOCK_FRAMES,
+    db_to_lin, mix_seed, sanitize_sample, stereo_mid_f32, MobiusBridge, MobiusDelayBank,
+    AUDIO_SUB_BLOCK_FRAMES,
 };
 use cadence_core::params::{InstrumentParam, RackParam, ZoneParam};
 use cadence_core::rack::{
@@ -217,6 +218,7 @@ pub(super) struct VoicePool {
     voices: Box<[Voice]>,
     mobius_delay_pool: Box<[Option<Box<MobiusDelayBank>>]>,
     mobius_delay_free_count: usize,
+    mobius_bridges: Box<[MobiusBridge]>,
     active_voices: [u16; VOICES],
     active_voice_count: usize,
     voice_cursor: usize,
@@ -240,10 +242,15 @@ impl VoicePool {
             .map(|_| Some(Box::new(MobiusDelayBank::new(sample_rate))))
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let mobius_bridges = (0..MAX_INSTRUMENTS)
+            .map(|_| MobiusBridge::new(sample_rate))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self {
             voices,
             mobius_delay_pool,
             mobius_delay_free_count: MOBIUS_DELAY_POOL_SLOTS,
+            mobius_bridges,
             active_voices: [0; VOICES],
             active_voice_count: 0,
             voice_cursor: 0,
@@ -313,10 +320,22 @@ impl VoicePool {
         &self.voices
     }
 
+    #[cfg(test)]
+    pub(super) fn choke_live_key_for_test(&mut self, key: u8, sample_rate: f64) {
+        for v in self.voices.iter_mut() {
+            if v.active && v.live_key == Some(key) {
+                v.choke(sample_rate);
+            }
+        }
+    }
+
     pub(super) fn clear_all(&mut self) {
         for slot in 0..self.voices.len() {
             self.reclaim_voice_mobius_delays(slot);
             self.voices[slot].deactivate();
+        }
+        for bridge in &mut self.mobius_bridges {
+            bridge.clear();
         }
         self.active_voice_count = 0;
         self.steal_fades = [StealFade::default(); STEAL_FADE_SLOTS];
@@ -987,6 +1006,9 @@ impl VoicePool {
         };
 
         let idx_u8 = req.inst_index as u8;
+        if !graph.mobius_slots.is_empty() && req.inst_index < MAX_INSTRUMENTS {
+            self.mobius_bridges[req.inst_index].set_sample_rate(sr);
+        }
         self.sync_voice_mobius_delays(slot, graph.mobius_slots.len());
         let voice = &mut self.voices[slot];
         let same_topology = voice.modular.begin_trigger_from_zone(&ZoneTriggerSpec {
@@ -1328,6 +1350,15 @@ impl VoicePool {
             return;
         }
 
+        // Prepare any already-ringing shared Mobius soundboard bridges before voices read them.
+        let mut bridge_mask = 0u32;
+        for (track, bridge) in self.mobius_bridges.iter_mut().enumerate() {
+            if bridge.is_active() {
+                bridge.begin_sub_block(n);
+                bridge_mask |= 1u32 << track;
+            }
+        }
+
         let mut active_idx = 0usize;
         while active_idx < self.active_voice_count {
             let slot = self.active_voices[active_idx] as usize;
@@ -1346,18 +1377,29 @@ impl VoicePool {
                     out.track_scope[track][..n].fill(0.0);
                     out.source_active_mask |= bit;
                 }
+                let bridge = if voice.modular.has_mobius() {
+                    let br = &mut self.mobius_bridges[track];
+                    if bridge_mask & bit == 0 {
+                        br.begin_sub_block(n);
+                        bridge_mask |= bit;
+                    }
+                    Some(br)
+                } else {
+                    None
+                };
                 voice.render_block(
                     samples,
                     preview_ref,
                     &mut out.sources[track][..n],
                     Some(&mut out.track_scope[track][..n]),
+                    bridge,
                 );
             } else {
                 if !out.preview_active {
                     out.preview[..n].fill([0.0; 2]);
                     out.preview_active = true;
                 }
-                voice.render_block(samples, preview_ref, &mut out.preview[..n], None);
+                voice.render_block(samples, preview_ref, &mut out.preview[..n], None, None);
             }
             let retired = !voice.active;
             let retired_mono = if retired {
@@ -1381,6 +1423,14 @@ impl VoicePool {
             } else {
                 active_idx += 1;
             }
+        }
+
+        // Advance active track-level shared cubic soundboard bridges for the next sub-block.
+        let mut done_mask = bridge_mask;
+        while done_mask != 0 {
+            let track = done_mask.trailing_zeros() as usize;
+            done_mask &= done_mask - 1;
+            self.mobius_bridges[track].finish_sub_block(n);
         }
 
         // Apply short micro-fade de-click tails for any recently stolen active voices.

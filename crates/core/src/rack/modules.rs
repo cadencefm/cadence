@@ -347,6 +347,7 @@ impl ModuleKindTag {
                 ModuleParam::Brightness,
                 ModuleParam::MobiusShape,
                 ModuleParam::MobiusChirality,
+                ModuleParam::MobiusTexture,
                 ModuleParam::Attack,
                 ModuleParam::Decay,
                 ModuleParam::Sustain,
@@ -360,6 +361,7 @@ impl ModuleKindTag {
                 ModuleParam::MobiusTopology,
                 ModuleParam::MobiusCoupling,
                 ModuleParam::MobiusDistance,
+                ModuleParam::MobiusSympathy,
                 ModuleParam::MobiusFeedback,
                 ModuleParam::MobiusFbLock,
                 ModuleParam::MobiusFbCycles,
@@ -1070,6 +1072,8 @@ pub struct MobiusModule {
     pub shape: f32,
     #[serde(default = "default_mobius_chirality")]
     pub chirality: f32,
+    #[serde(default)]
+    pub texture: f32,
     #[serde(default = "default_env_attack")]
     pub attack_ms: f32,
     #[serde(default = "default_mobius_decay")]
@@ -1096,6 +1100,8 @@ pub struct MobiusModule {
     pub coupling: f32,
     #[serde(default)]
     pub distance_ms: f32,
+    #[serde(default)]
+    pub sympathy: f32,
     #[serde(default)]
     pub feedback: f32,
     #[serde(default = "default_true")]
@@ -1127,6 +1133,7 @@ impl Default for MobiusModule {
             brightness: 0.72,
             shape: 0.50,
             chirality: 0.20,
+            texture: 0.0,
             attack_ms: 4.0,
             decay_ms: 220.0,
             sustain: 0.80,
@@ -1140,6 +1147,7 @@ impl Default for MobiusModule {
             topology: MobiusTopology::Cascade,
             coupling: 0.85,
             distance_ms: 0.0,
+            sympathy: 0.0,
             feedback: 0.0,
             fb_lock: true,
             fb_cycles: 1.5,
@@ -1166,6 +1174,7 @@ impl MobiusModule {
             brightness: brightness_override,
             shape: f64::from(self.shape),
             chirality: f64::from(self.chirality),
+            texture: f64::from(self.texture),
             attack_ms: f64::from(self.attack_ms),
             decay_ms: f64::from(self.decay_ms),
             sustain: f64::from(self.sustain),
@@ -1180,6 +1189,7 @@ impl MobiusModule {
             topology: self.topology,
             coupling: f64::from(self.coupling),
             distance_ms: f64::from(self.distance_ms),
+            sympathy: f64::from(self.sympathy),
             feedback: f64::from(self.feedback),
             fb_lock: self.fb_lock,
             fb_cycles: f64::from(self.fb_cycles),
@@ -1391,6 +1401,7 @@ impl ModuleKind {
             (Self::Mobius(m), ModuleParam::Brightness) => Some(m.brightness),
             (Self::Mobius(m), ModuleParam::MobiusShape) => Some(m.shape),
             (Self::Mobius(m), ModuleParam::MobiusChirality) => Some(m.chirality),
+            (Self::Mobius(m), ModuleParam::MobiusTexture) => Some(m.texture),
             (Self::Mobius(m), ModuleParam::Attack) => Some(m.attack_ms),
             (Self::Mobius(m), ModuleParam::Decay) => Some(m.decay_ms),
             (Self::Mobius(m), ModuleParam::Sustain) => Some(m.sustain),
@@ -1406,6 +1417,7 @@ impl ModuleKind {
             (Self::Mobius(m), ModuleParam::MobiusTopology) => Some(m.topology.to_index() as f32),
             (Self::Mobius(m), ModuleParam::MobiusCoupling) => Some(m.coupling),
             (Self::Mobius(m), ModuleParam::MobiusDistance) => Some(m.distance_ms),
+            (Self::Mobius(m), ModuleParam::MobiusSympathy) => Some(m.sympathy),
             (Self::Mobius(m), ModuleParam::MobiusFeedback) => Some(m.feedback),
             (Self::Mobius(m), ModuleParam::MobiusFbLock) => Some(if m.fb_lock { 1.0 } else { 0.0 }),
             (Self::Mobius(m), ModuleParam::MobiusFbCycles) => Some(m.fb_cycles),
@@ -1534,6 +1546,7 @@ impl ModuleKind {
             (Self::Mobius(m), ModuleParam::Brightness) => m.brightness = value,
             (Self::Mobius(m), ModuleParam::MobiusShape) => m.shape = value,
             (Self::Mobius(m), ModuleParam::MobiusChirality) => m.chirality = value,
+            (Self::Mobius(m), ModuleParam::MobiusTexture) => m.texture = value,
             (Self::Mobius(m), ModuleParam::Attack) => m.attack_ms = value,
             (Self::Mobius(m), ModuleParam::Decay) => m.decay_ms = value,
             (Self::Mobius(m), ModuleParam::Sustain) => m.sustain = value,
@@ -1551,6 +1564,7 @@ impl ModuleKind {
             }
             (Self::Mobius(m), ModuleParam::MobiusCoupling) => m.coupling = value,
             (Self::Mobius(m), ModuleParam::MobiusDistance) => m.distance_ms = value,
+            (Self::Mobius(m), ModuleParam::MobiusSympathy) => m.sympathy = value,
             (Self::Mobius(m), ModuleParam::MobiusFeedback) => m.feedback = value,
             (Self::Mobius(m), ModuleParam::MobiusFbLock) => m.fb_lock = value >= 0.5,
             (Self::Mobius(m), ModuleParam::MobiusFbCycles) => m.fb_cycles = value,

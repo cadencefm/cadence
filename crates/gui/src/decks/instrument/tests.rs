@@ -344,7 +344,9 @@ fn all_twelve_module_visuals_and_three_tabs_emit_balanced_display_lists() {
             stiffness: 0.22,
             kerr_semitones: 1.5,
             distance_ms: 18.0,
+            sympathy: 0.45,
             feedback: 0.35,
+            foldover: true,
             target_curve: wave.clone(),
             atoms: vec![
                 (0.32, 0.65, 0.12, 0.10),

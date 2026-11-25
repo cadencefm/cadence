@@ -4,8 +4,8 @@ use super::*;
 use crate::modular_voice::ModularVoice;
 use cadence_core::dsp::{
     control_stride_mask, flush_denormal_f32, one_pole_coeff_ms, pan_stereo_balance_f64,
-    sanitize_sample, sanitize_sample_rate, stereo_mid_f32, LogSmoother, Smoother, Svf, SvfCoeffs,
-    AUDIO_SUB_BLOCK_FRAMES,
+    sanitize_sample, sanitize_sample_rate, stereo_mid_f32, LogSmoother, MobiusBridge, Smoother,
+    Svf, SvfCoeffs, AUDIO_SUB_BLOCK_FRAMES,
 };
 use cadence_core::rack::FilterMode;
 use cadence_core::sampler::SampleData;
@@ -228,6 +228,7 @@ impl Voice {
         preview: Option<&Arc<SampleData>>,
         out_src: &mut [[f32; 2]],
         mut out_scope: Option<&mut [f32]>,
+        bridge: Option<&mut MobiusBridge>,
     ) {
         let frames = out_src.len().min(AUDIO_SUB_BLOCK_FRAMES);
         if !self.active || frames == 0 {
@@ -235,9 +236,9 @@ impl Voice {
         }
 
         let mut raw_buf = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
-        let mod_frames = self
-            .modular
-            .render_block(bank, preview, &mut raw_buf[..frames]);
+        let mod_frames =
+            self.modular
+                .render_block_bridged(bank, preview, &mut raw_buf[..frames], bridge);
 
         let settled = self.gain_scale.is_settled()
             && self.rack_pan_sm.is_settled()

@@ -30,7 +30,7 @@ pub(super) use vco::VcoNode;
 use super::{ModuleParams, VoiceLockKey};
 use cadence_core::dsp::{
     midi_to_hz, sanitize_clamp_f64, semitones_to_ratio_f64, stereo_mid_f64, MobiusSynth,
-    ModalResonator,
+    ModalResonator, C64,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking};
 use cadence_core::runtime::SampleBank;
@@ -178,11 +178,14 @@ pub(super) struct ProcessCtx<'a> {
     pub zone_pan: f32,
     pub control_tick: bool,
     pub use_fallback_gate: bool,
+    pub out_velocity_bypass: bool,
     pub fallback_env: f64,
     pub bank: &'a SampleBank,
     pub preview: Option<&'a Arc<SampleData>>,
     pub resonator_banks: &'a mut [ModalResonator],
     pub mobius_banks: &'a mut [MobiusSynth],
+    pub bridge_return: C64,
+    pub bridge_rad: C64,
 }
 
 /// Delegate normalized parameter writes on a `Copy` module struct straight to

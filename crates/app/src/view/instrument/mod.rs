@@ -215,7 +215,10 @@ pub enum ModuleVisualView {
         stiffness: f32,
         kerr_semitones: f32,
         distance_ms: f32,
+        sympathy: f32,
         feedback: f32,
+        /// True when any active atom satisfies `|beta| > 2 * xi` (Duffing-like foldover regime).
+        foldover: bool,
         /// Target source preview sampled strictly via `mobius_target_preview`.
         target_curve: Vec<f32>,
         /// `(freq_norm, ring_norm, kerr_signed_norm, delay_norm)` stems derived via `mobius_atom_descriptors`.

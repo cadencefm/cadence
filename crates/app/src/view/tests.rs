@@ -766,6 +766,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
             dispersion_label,
             topology_label,
             atom_count,
+            foldover,
             target_curve,
             atoms,
             ..
@@ -775,6 +776,8 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
             assert_eq!(topology_label, "Cascade");
             assert_eq!(atom_count, 4);
             assert_eq!(atoms.len(), 4);
+            // At stiffness 0.22, tilt -1.8 (min xi = 0.063) and kerr 1.5 st (beta = 0.0905 < 2*xi):
+            assert!(!foldover);
             assert!(!target_curve.is_empty());
             assert!(atoms.iter().all(|(x, h, k, d)| {
                 (0.0..=1.0).contains(x)

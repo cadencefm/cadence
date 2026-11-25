@@ -9,8 +9,8 @@ mod nodes;
 use cadence_core::dsp::{
     control_stride_mask, decay_coeff_60db_ms, flush_denormal_f64, fm_depth_from_amount,
     glide_coeff_ms, one_pole_coeff_ms, sanitize_sample, sanitize_sample_rate, smooth_step_f32,
-    smooth_step_f64, stereo_mid_f64, voice_guard_f64, AdsrStage, MobiusDelayBank, MobiusSynth,
-    ModalResonator, CHOKE_MS, FAST_RELEASE_MS, TAIL_SILENCE_FLOOR_F64,
+    smooth_step_f64, stereo_mid_f64, voice_guard_f64, AdsrStage, MobiusBridge, MobiusDelayBank,
+    MobiusSynth, ModalResonator, C64, CHOKE_MS, FAST_RELEASE_MS, TAIL_SILENCE_FLOOR_F64,
 };
 pub use cadence_core::rack::SamplerParams;
 use cadence_core::rack::{
@@ -233,6 +233,7 @@ pub struct ModularVoice {
     sampler_only_one_shot: bool,
     any_sampler_has_trig_in: bool,
     mobius_self_gated: bool,
+    mobius_owns_velocity: bool,
     any_mobius_has_trig_in: bool,
 
     // Compiled flat DAG snapshot (zero heap pointers).
@@ -330,6 +331,7 @@ impl ModularVoice {
             sampler_only_one_shot: false,
             any_sampler_has_trig_in: false,
             mobius_self_gated: false,
+            mobius_owns_velocity: false,
             any_mobius_has_trig_in: false,
             ops: [EMPTY_OP; MAX_MODULES_PER_ZONE],
             op_count: 0,
@@ -359,6 +361,11 @@ impl ModularVoice {
             locked_keys: [None; MAX_VOICE_LOCKS],
             locked_count: 0,
         })
+    }
+
+    #[inline]
+    pub(crate) fn has_mobius(&self) -> bool {
+        self.mobius_slot_count > 0
     }
 
     #[inline]
@@ -844,14 +851,18 @@ impl ModularVoice {
         let mut all_samplers_one_shot = self.sampler_slot_count > 0;
         let mut any_sampler_trig = false;
         let mut any_mobius_trig = false;
+        let mut all_mobius_internal = self.mobius_slot_count > 0;
         for (s, node) in self.nodes.iter().take(op_count).enumerate() {
             match node {
                 ModuleNode::Vco(_) | ModuleNode::Noise(_) => {
                     has_continuous_osc = true;
                     has_non_sampler_source = true;
                 }
-                ModuleNode::Mobius(_) => {
+                ModuleNode::Mobius(m) => {
                     has_non_sampler_source = true;
+                    if m.target.exciter == cadence_core::rack::MobiusExciter::External {
+                        all_mobius_internal = false;
+                    }
                     if slot_has_in_port(
                         &self.ops[..op_count],
                         &self.cables[..cable_count],
@@ -885,6 +896,8 @@ impl ModularVoice {
             && !self.sampler_only
             && self.mobius_slot_count > 0
             && !has_continuous_osc;
+        self.mobius_owns_velocity =
+            self.mobius_self_gated && self.sampler_slot_count == 0 && all_mobius_internal;
         self.any_mobius_has_trig_in = any_mobius_trig;
 
         self.active = true;
@@ -1144,8 +1157,20 @@ impl ModularVoice {
     /// `[f32; 2]` voice output). Zero allocations, zero locks, zero panics.
     #[inline]
     pub fn next_frame(&mut self, bank: &SampleBank, preview: Option<&Arc<SampleData>>) -> [f32; 2] {
+        self.next_frame_bridged(bank, preview, C64::ZERO).0
+    }
+
+    /// Execute one stereo frame coupled to an optional instrument-level shared [`MobiusBridge`],
+    /// returning `([L, R], bridge_radiation)`.
+    #[inline]
+    pub fn next_frame_bridged(
+        &mut self,
+        bank: &SampleBank,
+        preview: Option<&Arc<SampleData>>,
+        bridge_return: C64,
+    ) -> ([f32; 2], C64) {
         if !self.active || self.op_count == 0 {
-            return [0.0; 2];
+            return ([0.0; 2], C64::ZERO);
         }
         if !self.released
             && self
@@ -1193,11 +1218,14 @@ impl ModularVoice {
             use_fallback_gate: self.lifetime_env_count == 0
                 && !self.sampler_only
                 && !self.mobius_self_gated,
+            out_velocity_bypass: self.mobius_owns_velocity,
             fallback_env: self.fallback_env,
             bank,
             preview,
             resonator_banks: &mut self.resonator_banks,
             mobius_banks: &mut self.mobius_banks,
+            bridge_return,
+            bridge_rad: C64::ZERO,
         };
 
         for s in 0..op_count {
@@ -1212,6 +1240,7 @@ impl ModularVoice {
             let out = self.nodes[s].process(&inputs, &mut pctx);
             self.slots[s] = [flush_denormal_f64(out[0]), flush_denormal_f64(out[1])];
         }
+        let bridge_rad = pctx.bridge_rad;
 
         self.prev_slots[..op_count].copy_from_slice(&self.slots[..op_count]);
 
@@ -1224,9 +1253,9 @@ impl ModularVoice {
 
         if !out[0].is_finite() || !out[1].is_finite() {
             self.active = false;
-            return [0.0; 2];
+            return ([0.0; 2], C64::ZERO);
         }
-        out
+        (out, bridge_rad)
     }
 
     /// Execute up to `out.len()` consecutive frames for this voice while keeping its
@@ -1238,16 +1267,41 @@ impl ModularVoice {
         preview: Option<&Arc<SampleData>>,
         out: &mut [[f32; 2]],
     ) -> usize {
+        self.render_block_bridged(bank, preview, out, None)
+    }
+
+    /// Execute up to `out.len()` consecutive frames with optional track-level shared
+    /// [`MobiusBridge`] coupling across the `64`-sample sub-block boundary.
+    pub fn render_block_bridged(
+        &mut self,
+        bank: &SampleBank,
+        preview: Option<&Arc<SampleData>>,
+        out: &mut [[f32; 2]],
+        bridge: Option<&mut MobiusBridge>,
+    ) -> usize {
         if !self.active || self.op_count == 0 {
             return 0;
         }
         let mut written = 0usize;
-        for slot in out.iter_mut() {
-            if !self.active {
-                break;
+        if let Some(br) = bridge {
+            for (i, slot) in out.iter_mut().enumerate() {
+                if !self.active {
+                    break;
+                }
+                let ret = br.read_frame(i);
+                let (frame, rad) = self.next_frame_bridged(bank, preview, ret);
+                *slot = frame;
+                br.accumulate_frame(i, rad);
+                written += 1;
             }
-            *slot = self.next_frame(bank, preview);
-            written += 1;
+        } else {
+            for slot in out.iter_mut() {
+                if !self.active {
+                    break;
+                }
+                *slot = self.next_frame(bank, preview);
+                written += 1;
+            }
         }
         written
     }
