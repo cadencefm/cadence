@@ -283,12 +283,9 @@ impl App {
                     .collect();
                 ensure!(!edits.is_empty(), "Nothing fits at the current step");
                 let pasted = edits.len();
-                let out = if pasted == 1 {
-                    self.apply(Action::Edit {
-                        edit: edits.into_iter().next().unwrap(),
-                    })?
-                } else {
-                    self.apply(Action::Transaction { edits })?
+                let out = match <[Edit; 1]>::try_from(edits) {
+                    Ok([edit]) => self.apply(Action::Edit { edit })?,
+                    Err(edits) => self.apply(Action::Transaction { edits })?,
                 };
                 self.status = if pasted == 1 {
                     format!("Pasted rhythm hit at step {}", start + 1)
@@ -361,12 +358,9 @@ impl App {
                     }
                 }
                 let written = written_steps.len();
-                let out = if edits.len() == 1 {
-                    self.apply(Action::Edit {
-                        edit: edits.into_iter().next().unwrap(),
-                    })?
-                } else {
-                    self.apply(Action::Transaction { edits })?
+                let out = match <[Edit; 1]>::try_from(edits) {
+                    Ok([edit]) => self.apply(Action::Edit { edit })?,
+                    Err(edits) => self.apply(Action::Transaction { edits })?,
                 };
                 self.status = if written == 1 {
                     format!("Pasted value point at step {}", dest_start + 1)

@@ -11,21 +11,56 @@ use cadence_core::material::Section;
 use cadence_core::timeline::Segment;
 
 impl App {
+    /// Active Jam/Alt bank index clamped to the project's current bank count.
+    pub(crate) fn clamped_bank(&self) -> usize {
+        self.input.bank.min(self.jam_bank_count().saturating_sub(1))
+    }
+
     /// Whether the number row has sections to address.
     pub fn uses_sections(&self) -> bool {
         !self.doc.project().sections.is_empty()
     }
 
-    /// The sections the number row addresses in the current bank.
+    /// The sections sliced strictly for the current bank (`10` per bank).
     pub fn bank_sections(&self) -> Vec<Id> {
         self.doc
             .project()
             .sections
             .iter()
-            .skip(self.input.bank * SECTION_KEYS.len())
+            .skip(self.clamped_bank() * SECTION_KEYS.len())
             .take(SECTION_KEYS.len())
             .map(|s| s.id)
             .collect()
+    }
+
+    /// Sections bound to the number row (`1..0` / `Alt+1..0`) in the active bank.
+    ///
+    /// When the active bank contains sections, returns strictly that bank's slice
+    /// (never leaking Bank 1 slots into a partially populated Bank 2+). When the
+    /// user paged to Bank 2+ for lanes (`>10` lanes, `<=10` sections) so the active
+    /// bank has no sections of its own, falls back to Bank 1's sections so `1..0`
+    /// remain usable.
+    pub fn effective_bank_sections(&self) -> Vec<Id> {
+        let bank = self.bank_sections();
+        if !bank.is_empty() {
+            bank
+        } else {
+            self.doc
+                .project()
+                .sections
+                .iter()
+                .take(SECTION_KEYS.len())
+                .map(|s| s.id)
+                .collect()
+        }
+    }
+
+    /// Number-row shortcut (`1..0`) currently bound to `section_id`, if active in this bank.
+    pub(crate) fn section_key_char(&self, section_id: Id) -> Option<char> {
+        self.effective_bank_sections()
+            .iter()
+            .position(|&id| id == section_id)
+            .and_then(|pos| SECTION_KEYS.get(pos).copied())
     }
 
     fn section(&self, id: Id) -> Option<&Section> {
@@ -44,16 +79,7 @@ impl App {
             .max_by_key(|s| (s.start_step, s.id))
     }
 
-    pub(super) fn section_key(&mut self, index: usize) -> Result<Outcome> {
-        let bank = self.bank_sections();
-        let id = bank
-            .get(index)
-            .copied()
-            .or_else(|| self.doc.project().sections.get(index).map(|s| s.id))
-            .with_context(|| match SECTION_KEYS.get(index) {
-                Some(key) => format!("No section on {key}"),
-                None => format!("No section {}", index + 1),
-            })?;
+    pub(super) fn jump_to_section_id(&mut self, id: Id, key_hint: Option<char>) -> Result<Outcome> {
         let target = self.section(id).context("Section missing")?.clone();
         let mut out = Outcome::default();
         if self.is_solo_auditioning() {
@@ -138,7 +164,7 @@ impl App {
         self.status = if again {
             format!("{} at bar {bar}", target.name)
         } else {
-            match SECTION_KEYS.get(index) {
+            match key_hint {
                 Some(key) => format!(
                     "{} at bar {bar} · {key} again for bar {next_bar}",
                     target.name,
@@ -249,5 +275,152 @@ impl App {
             self.status = format!("Looping {}", section.name);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::view::DeckView;
+    use cadence_core::material::Project;
+    use cadence_core::runtime::AudioSnapshot;
+
+    fn app_with_sections_and_lanes(section_count: usize, lane_count: usize) -> App {
+        let mut proj = Project::empty();
+        proj.title = "Bank Test".into();
+        proj.bars = section_count.max(4) * 2;
+        for i in 0..lane_count {
+            proj.lanes.push(cadence_core::material::Lane {
+                id: 100 + i as Id,
+                name: format!("Lane {}", i + 1),
+                placements: Vec::new(),
+                parts: Vec::new(),
+            });
+        }
+        for i in 0..section_count {
+            proj.sections.push(Section {
+                id: 200 + i as Id,
+                name: format!("Sec {}", i + 1),
+                start_step: (i as u32) * 32,
+                length_steps: 32,
+            });
+        }
+        let io = std::sync::Arc::new(crate::MemoryHostIo::new("/workspace"));
+        App::new_with_host_io(proj, PathBuf::from("/workspace/bank-test.json"), io).unwrap()
+    }
+
+    #[test]
+    fn bank_2_sections_align_badges_keys_and_never_leak_bank_1_slots() {
+        let mut app = app_with_sections_and_lanes(12, 2);
+        app.press_keys("z2").unwrap(); // Arrange + Bank visible
+        app.press_keys("gj").unwrap(); // Enter Jam mode
+
+        let snap = AudioSnapshot::default();
+
+        // Bank 1: Arrange badges 1..10 with '1'..='0', 11..12 with None; Bank/Jam HUD show 1..10.
+        let frame1 = app.frame_view(&snap, "");
+        let arr1 = frame1
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Arrange(v) => Some(v),
+                _ => None,
+            })
+            .expect("Arrange deck");
+        assert_eq!(arr1.sections.len(), 12);
+        for (i, sec) in arr1.sections.iter().enumerate() {
+            let expected = SECTION_KEYS.get(i).copied();
+            assert_eq!(sec.key_char, expected, "Bank 1 Arrange badge at {i}");
+        }
+        let bank1 = frame1
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Bank(v) => Some(v),
+                _ => None,
+            })
+            .expect("Bank deck");
+        assert_eq!(bank1.sections.len(), 10);
+        assert_eq!(bank1.sections[0].name, "Sec 1");
+        assert_eq!(bank1.sections[0].key_char, Some('1'));
+
+        // Page to Bank 2 (`Tab` in Jam).
+        app.press_keys("<Tab>").unwrap();
+        assert_eq!(app.clamped_bank(), 1);
+
+        let frame2 = app.frame_view(&snap, "");
+        let arr2 = frame2
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Arrange(v) => Some(v),
+                _ => None,
+            })
+            .expect("Arrange deck");
+        for (i, sec) in arr2.sections.iter().enumerate() {
+            let expected = match i {
+                10 => Some('1'),
+                11 => Some('2'),
+                _ => None,
+            };
+            assert_eq!(sec.key_char, expected, "Bank 2 Arrange badge at {i}");
+        }
+        let bank2 = frame2
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Bank(v) => Some(v),
+                _ => None,
+            })
+            .expect("Bank deck");
+        assert_eq!(bank2.sections.len(), 2);
+        assert_eq!(bank2.sections[0].name, "Sec 11");
+        assert_eq!(bank2.sections[0].key_char, Some('1'));
+        assert_eq!(bank2.sections[1].name, "Sec 12");
+        assert_eq!(bank2.sections[1].key_char, Some('2'));
+
+        let hud2 = frame2.jam_hud.expect("Jam HUD on Bank 2");
+        assert_eq!(hud2.bank, 1);
+        assert_eq!(hud2.bank_count, 2);
+        assert_eq!(hud2.sections.len(), 2);
+        assert_eq!(hud2.sections[0].0, '1');
+        assert_eq!(hud2.sections[0].1, "Sec 11");
+        assert_eq!(hud2.sections[1].0, '2');
+        assert_eq!(hud2.sections[1].1, "Sec 12");
+
+        // Pressing '1' on Bank 2 jumps to Sec 11 (step 320); pressing '2' jumps to Sec 12 (step 352).
+        app.press_keys("1").unwrap();
+        assert_eq!(app.arrange_ui.step, 10 * 32);
+        app.press_keys("2").unwrap();
+        assert_eq!(app.arrange_ui.step, 11 * 32);
+
+        // Pressing '3' on Bank 2 MUST fail cleanly instead of jumping to Sec 3 from Bank 1!
+        let err = app
+            .number_key('3')
+            .expect_err("empty Bank 2 slot must not leak Bank 1 Sec 3");
+        assert!(format!("{err:#}").contains("No section on 3"));
+        assert_eq!(app.arrange_ui.step, 11 * 32);
+
+        // Absolute MIDI/ProgramChange jump (index 0 = Sec 1, index 11 = Sec 12) stays bank-independent.
+        app.trigger_section_jump(0).unwrap();
+        assert_eq!(app.arrange_ui.step, 0);
+        app.trigger_section_jump(11).unwrap();
+        assert_eq!(app.arrange_ui.step, 11 * 32);
+    }
+
+    #[test]
+    fn bank_2_for_many_lanes_with_few_sections_keeps_bank_1_sections_accessible() {
+        let mut app = app_with_sections_and_lanes(4, 12);
+        app.press_keys("gj<Tab>").unwrap();
+        assert_eq!(app.clamped_bank(), 1);
+        assert_eq!(app.effective_bank_sections().len(), 4);
+
+        app.press_keys("4").unwrap();
+        assert_eq!(app.arrange_ui.step, 3 * 32);
+
+        let err = app
+            .number_key('5')
+            .expect_err("slot 5 beyond 4 sections must report missing");
+        assert!(format!("{err:#}").contains("No section on 5"));
     }
 }

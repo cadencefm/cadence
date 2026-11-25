@@ -102,7 +102,9 @@ pub fn parse_key_sequence(input: &str) -> Vec<KeyEvent> {
                     if (other.starts_with("c-s-") && other.chars().count() == 5)
                         || (other.starts_with("c-shift-") && other.chars().count() == 9) =>
                 {
-                    let ch = token.chars().last().unwrap();
+                    let Some(ch) = token.chars().last() else {
+                        continue;
+                    };
                     let ch = if ch.is_ascii_lowercase() {
                         ch.to_ascii_uppercase()
                     } else {
@@ -115,7 +117,9 @@ pub fn parse_key_sequence(input: &str) -> Vec<KeyEvent> {
                 }
                 // Ctrl+<char>: preserves shift on uppercase (<c-P>) or shifted symbols (<c-?>, <c-<>).
                 other if other.starts_with("c-") && other.chars().count() == 3 => {
-                    let ch = token.chars().nth(2).unwrap();
+                    let Some(ch) = token.chars().nth(2) else {
+                        continue;
+                    };
                     let mods = if ch.is_ascii_uppercase() || matches!(ch, '?' | '<') {
                         KeyModifiers::CONTROL | KeyModifiers::SHIFT
                     } else {
@@ -128,12 +132,17 @@ pub fn parse_key_sequence(input: &str) -> Vec<KeyEvent> {
                     if (other.starts_with("m-s-") && other.chars().count() == 5)
                         || (other.starts_with("m-shift-") && other.chars().count() == 9) =>
                 {
-                    let ch = token.chars().last().unwrap().to_ascii_uppercase();
+                    let Some(ch) = token.chars().last() else {
+                        continue;
+                    };
+                    let ch = ch.to_ascii_uppercase();
                     KeyEvent::new(KeyCode::Char(ch), KeyModifiers::ALT | KeyModifiers::SHIFT)
                 }
                 // Alt keeps its case: <m-X> is Alt+Shift+x.
                 other if other.starts_with("m-") && other.chars().count() == 3 => {
-                    let ch = token.chars().nth(2).unwrap();
+                    let Some(ch) = token.chars().nth(2) else {
+                        continue;
+                    };
                     let mods = if ch.is_ascii_uppercase() {
                         KeyModifiers::ALT | KeyModifiers::SHIFT
                     } else {

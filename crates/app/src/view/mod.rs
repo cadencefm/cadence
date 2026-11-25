@@ -264,33 +264,26 @@ impl App {
     fn build_jam_hud(&self) -> JamHudView {
         let project = self.project();
         let bank_count = self.jam_bank_count();
-        let bank = self.input.bank.min(bank_count.saturating_sub(1));
+        let bank = self.clamped_bank();
         let heard = self.song_step_heard();
         let queued_section = self.live.pending.iter().find_map(|p| match p.change {
             Change::Timeline { segment } => Some(segment.song),
             _ => None,
         });
-        let bank_sec_ids = self.bank_sections();
-        let section_slice: Vec<_> = if !bank_sec_ids.is_empty() {
-            bank_sec_ids
-                .into_iter()
-                .filter_map(|id| project.sections.iter().find(|s| s.id == id))
-                .collect()
-        } else {
-            project.sections.iter().take(SECTION_KEYS.len()).collect()
-        };
-        let sections = section_slice
+        let sections = self
+            .effective_bank_sections()
             .into_iter()
             .enumerate()
-            .map(|(i, s)| {
+            .filter_map(|(i, id)| {
+                let s = project.sections.iter().find(|s| s.id == id)?;
                 let start = u64::from(s.start_step);
                 let len = u64::from(s.length_steps.max(16));
-                (
+                Some((
                     SECTION_KEYS[i],
                     s.name.clone(),
                     (start..start + len).contains(&heard),
                     queued_section == Some(start),
-                )
+                ))
             })
             .collect();
         let focused = self.focused_lane();

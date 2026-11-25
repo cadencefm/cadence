@@ -409,10 +409,6 @@ struct NotesRollData<'a> {
     pitch_range: (u8, u8),
 }
 
-fn is_literal_notes_editable(view: &PatternDeckView) -> bool {
-    view.kind_label == "Notes" || view.scope_label.starts_with("PLACEMENT ")
-}
-
 struct PatternSubHeader<'a> {
     readout: &'a str,
     emphasized: bool,
@@ -495,7 +491,7 @@ fn draw_notes_roll(
 
     // Focused step & polyphonic voice readout bar (`Voice 2/4 · A♭4 · len 1.50 · vel 88%`).
     if voice_bar_h >= 18.0 {
-        let literal_editable = is_literal_notes_editable(view);
+        let literal_editable = view.editable_literal || view.is_placement_scope;
         let mode_col = if view.insert_mode {
             theme.accent.playhead
         } else {
@@ -875,7 +871,7 @@ fn draw_rhythm_pads(
     if info_bar_h >= 18.0 {
         let step_active = steps.iter().find(|s| s.selected).is_some_and(|s| s.active);
         let state_lbl = if step_active { "Hit" } else { "Rest" };
-        let is_literal_rhythm = view.kind_label == "Rhythm";
+        let is_literal_rhythm = view.editable_literal;
         let cue = if is_literal_rhythm {
             "Enter / x toggle hit · r edit"
         } else if !view.sources.is_empty() {
@@ -1011,33 +1007,69 @@ fn draw_value_curve(
         cursor_value,
         cursor_authored,
     } = *data;
-    let (info_row, plot_outer) = area.split_top(22.0);
-    let unit_lbl = if unit == ValueUnit::Degrees {
-        "DEGREES"
-    } else {
-        "NORMALIZED 0–1"
-    };
-    let val_lbl = if unit == ValueUnit::Degrees {
-        format!("{cursor_value:+.0} deg")
-    } else {
-        format!("{:.1}%", cursor_value * 100.0)
-    };
-    dl.text(
-        info_row,
-        format!(
-            "{unit_lbl} · {mode_label} · step {} = {val_lbl}{}",
-            view.cursor + 1,
-            if cursor_authored {
-                " (authored)"
+    let info_bar_h = if area.h >= 84.0 { 22.0 } else { 0.0 };
+    let (info_row, plot_outer) = area.split_top(info_bar_h);
+    if info_bar_h >= 18.0 {
+        let unit_lbl = if unit == ValueUnit::Degrees {
+            "DEGREES"
+        } else {
+            "NORMALIZED 0–1"
+        };
+        let val_lbl = if unit == ValueUnit::Degrees {
+            format!("{cursor_value:+.0} deg")
+        } else {
+            format!("{:.1}%", cursor_value * 100.0)
+        };
+        let (readout, pill_lbl, pill_w, pill_col) = if view.editable_literal {
+            let point_state = if cursor_authored {
+                "authored"
             } else {
-                " (interpolated)"
-            }
-        ),
-        theme.font.small,
-        false,
-        theme.text.secondary,
-        TextAlign::Left,
-    );
+                "interpolated"
+            };
+            (
+                format!(
+                    "{unit_lbl} · {mode_label} · step {} = {val_lbl} ({point_state}) · Alt+j/k adjust · Enter exact · m mode",
+                    view.cursor + 1
+                ),
+                "VALUES",
+                68.0,
+                accent,
+            )
+        } else if !view.sources.is_empty() {
+            (
+                format!(
+                    "{unit_lbl} · {mode_label} · step {} = {val_lbl} · j/k source · Enter/gs open · F freeze",
+                    view.cursor + 1
+                ),
+                "DERIVED",
+                72.0,
+                theme.accent.focus,
+            )
+        } else {
+            (
+                format!(
+                    "{unit_lbl} · {mode_label} · step {} = {val_lbl} · r edit · F freeze",
+                    view.cursor + 1
+                ),
+                "SEEDED",
+                68.0,
+                theme.accent.focus,
+            )
+        };
+        let bar_rect = Rect::new(info_row.x, info_row.y, info_row.w, info_row.h - 2.0);
+        draw_pattern_sub_header(
+            dl,
+            bar_rect,
+            &PatternSubHeader {
+                readout: &readout,
+                emphasized: view.editable_literal && cursor_authored,
+                pill_label: pill_lbl,
+                pill_w,
+                pill_color: pill_col,
+            },
+            theme,
+        );
+    }
 
     let plot = plot_outer.inset(6.0, 6.0);
     if plot.is_empty() {
@@ -1101,16 +1133,22 @@ fn draw_value_curve(
     };
     dl.polyline(&pts, 2.0, accent, theme.glow.scope, Some((base_y, 0.20)));
 
-    // Authored breakpoint glowing diamonds.
+    // Authored breakpoint diamonds (or subtler sampled markers on derived/seeded value curves).
     let cursor_rel = view.cursor as f64 - view.page_start as f64;
     for &(rx, v) in points {
         let px = map_x(rx);
         let py = map_y(v);
         let is_cur = (rx - cursor_rel).abs() < 0.01;
-        let (sz, fill, border, glow) = if is_cur {
-            (9.5, theme.accent.focus, theme.text.primary, 0.45)
+        let (sz, fill, border, glow) = if view.editable_literal {
+            if is_cur {
+                (9.5, theme.accent.focus, theme.text.primary, 0.45)
+            } else {
+                (8.0, accent, theme.text.primary, 0.40)
+            }
+        } else if is_cur {
+            (7.5, theme.accent.focus, theme.text.primary, 0.30)
         } else {
-            (8.0, accent, theme.text.primary, 0.40)
+            (5.5, accent.with_alpha(0.75), theme.border.subtle, 0.12)
         };
         dl.panel(
             Rect::new(px - sz * 0.5, py - sz * 0.5, sz, sz),
@@ -1134,6 +1172,8 @@ mod tests {
     fn base_pattern_view(
         kind_label: &'static str,
         scope_label: &str,
+        editable_literal: bool,
+        is_placement_scope: bool,
         content: PatternContentView,
     ) -> PatternDeckView {
         PatternDeckView {
@@ -1142,6 +1182,8 @@ mod tests {
             name: "Test Pat".into(),
             kind_label,
             scope_label: scope_label.into(),
+            editable_literal,
+            is_placement_scope,
             zoom: 1.0,
             period: 16,
             page_start: 0,
@@ -1201,13 +1243,31 @@ mod tests {
         PatternContentView::Rhythm { steps }
     }
 
+    fn values_content(cursor_authored: bool) -> PatternContentView {
+        PatternContentView::Values {
+            unit: ValueUnit::Normalized,
+            mode: cadence_core::params::ValueMode::Ramp,
+            range: (0.0, 1.0),
+            curve: vec![(0.0, 0.25), (8.0, 0.75), (16.0, 0.25)],
+            points: vec![(0.0, 0.25), (8.0, 0.75)],
+            cursor_value: 0.25,
+            cursor_authored,
+        }
+    }
+
     #[test]
     fn notes_sub_header_shows_add_note_cue_only_on_literal_or_placement_scope() {
         let theme = Theme::cadence_dark();
         let area = Rect::new(0.0, 0.0, 960.0, 360.0);
 
         // 1. Literal Notes definition shows `o add note · i step insert`.
-        let literal = base_pattern_view("Notes", "SHARED DEFINITION", empty_notes_content());
+        let literal = base_pattern_view(
+            "Notes",
+            "SHARED DEFINITION",
+            true,
+            false,
+            empty_notes_content(),
+        );
         let mut dl_lit = DisplayList::new(960.0, 360.0, 1.0);
         draw_pattern(&mut dl_lit, area, &literal, UiModeKind::Normal, &theme);
         assert_eq!(dl_lit.current_clip(), dl_lit.viewport);
@@ -1218,7 +1278,13 @@ mod tests {
             .any(|t| t.text.contains("o add note · i step insert")));
 
         // 2. Mini pattern hides `o add note · i step insert` and shows `Enter edit mini`.
-        let mut mini = base_pattern_view("Mini", "SHARED DEFINITION", empty_notes_content());
+        let mut mini = base_pattern_view(
+            "Mini",
+            "SHARED DEFINITION",
+            false,
+            false,
+            empty_notes_content(),
+        );
         mini.mini_code = Some("c4 ~ e4 g4".into());
         let mut dl_mini = DisplayList::new(960.0, 360.0, 1.0);
         draw_pattern(&mut dl_mini, area, &mini, UiModeKind::Normal, &theme);
@@ -1236,8 +1302,13 @@ mod tests {
         assert!(dl_mini.base.texts.iter().any(|t| t.text == "Enter · edit"));
 
         // 3. Derived Transpose pattern hides `o add note · i step insert` and shows source cue.
-        let mut derived =
-            base_pattern_view("Transpose", "SHARED DEFINITION", empty_notes_content());
+        let mut derived = base_pattern_view(
+            "Transpose",
+            "SHARED DEFINITION",
+            false,
+            false,
+            empty_notes_content(),
+        );
         derived.sources.push(PatternSourceChip {
             id: 2,
             name: "Lead".into(),
@@ -1258,10 +1329,13 @@ mod tests {
             .iter()
             .any(|t| t.text.contains("Enter/gs open")));
 
-        // 4. Placement local-occurrence scope retains `o add note · i step insert` even for derived patterns.
+        // 4. Placement local-occurrence scope retains `o add note · i step insert` even for derived patterns
+        //    and relies on typed `is_placement_scope`, not display strings.
         let placed = base_pattern_view(
             "Transpose",
-            "PLACEMENT 12 · local steps",
+            "CUSTOM LABEL",
+            false,
+            true,
             empty_notes_content(),
         );
         let mut dl_pl = DisplayList::new(960.0, 360.0, 1.0);
@@ -1279,7 +1353,8 @@ mod tests {
         let theme = Theme::cadence_dark();
         let area = Rect::new(0.0, 0.0, 960.0, 320.0);
 
-        let literal_rhythm = base_pattern_view("Rhythm", "SHARED DEFINITION", rhythm_content());
+        let literal_rhythm =
+            base_pattern_view("Rhythm", "SHARED DEFINITION", true, false, rhythm_content());
         let mut dl_r = DisplayList::new(960.0, 320.0, 1.0);
         draw_pattern(&mut dl_r, area, &literal_rhythm, UiModeKind::Normal, &theme);
         assert_eq!(dl_r.current_clip(), dl_r.viewport);
@@ -1294,7 +1369,13 @@ mod tests {
             .iter()
             .any(|t| t.text.contains("o add note")));
 
-        let euclid = base_pattern_view("Euclidean", "SHARED DEFINITION", rhythm_content());
+        let euclid = base_pattern_view(
+            "Euclidean",
+            "SHARED DEFINITION",
+            false,
+            false,
+            rhythm_content(),
+        );
         let mut dl_e = DisplayList::new(960.0, 320.0, 1.0);
         draw_pattern(&mut dl_e, area, &euclid, UiModeKind::Normal, &theme);
         assert_eq!(dl_e.current_clip(), dl_e.viewport);
@@ -1308,5 +1389,73 @@ mod tests {
             .texts
             .iter()
             .any(|t| t.text.contains("toggle hit")));
+    }
+
+    #[test]
+    fn values_sub_header_shows_edit_cue_for_literal_and_non_literal_cues_for_derived_and_seeded() {
+        let theme = Theme::cadence_dark();
+        let area = Rect::new(0.0, 0.0, 960.0, 320.0);
+
+        let literal_vals = base_pattern_view(
+            "Values",
+            "SHARED DEFINITION",
+            true,
+            false,
+            values_content(true),
+        );
+        let mut dl_lit = DisplayList::new(960.0, 320.0, 1.0);
+        draw_pattern(&mut dl_lit, area, &literal_vals, UiModeKind::Normal, &theme);
+        assert_eq!(dl_lit.current_clip(), dl_lit.viewport);
+        assert!(dl_lit
+            .base
+            .texts
+            .iter()
+            .any(|t| t.text.contains("(authored)") && t.text.contains("Alt+j/k adjust")));
+        assert!(dl_lit.base.texts.iter().any(|t| t.text == "VALUES"));
+
+        let mut derived_vals = base_pattern_view(
+            "Shift",
+            "SHARED DEFINITION",
+            false,
+            false,
+            values_content(false),
+        );
+        derived_vals.sources.push(PatternSourceChip {
+            id: 2,
+            name: "Cutoff".into(),
+            kind_label: "Values",
+            selected: true,
+        });
+        let mut dl_drv = DisplayList::new(960.0, 320.0, 1.0);
+        draw_pattern(&mut dl_drv, area, &derived_vals, UiModeKind::Normal, &theme);
+        assert_eq!(dl_drv.current_clip(), dl_drv.viewport);
+        assert!(dl_drv
+            .base
+            .texts
+            .iter()
+            .any(|t| t.text.contains("j/k source · Enter/gs open · F freeze")));
+        assert!(dl_drv.base.texts.iter().any(|t| t.text == "DERIVED"));
+        assert!(!dl_drv
+            .base
+            .texts
+            .iter()
+            .any(|t| t.text.contains("(authored)")));
+
+        let seeded_vals = base_pattern_view(
+            "SeededValues",
+            "SHARED DEFINITION",
+            false,
+            false,
+            values_content(false),
+        );
+        let mut dl_seed = DisplayList::new(960.0, 320.0, 1.0);
+        draw_pattern(&mut dl_seed, area, &seeded_vals, UiModeKind::Normal, &theme);
+        assert_eq!(dl_seed.current_clip(), dl_seed.viewport);
+        assert!(dl_seed
+            .base
+            .texts
+            .iter()
+            .any(|t| t.text.contains("r edit · F freeze")));
+        assert!(dl_seed.base.texts.iter().any(|t| t.text == "SEEDED"));
     }
 }

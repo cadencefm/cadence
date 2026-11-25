@@ -1198,10 +1198,18 @@ fn mini_overwrite_guard_seeded_degrees_view_and_resize_patterns() {
         .id;
     app.selected_pattern = Some(seed_id);
     let pview = pattern_view(&mut app);
+    assert!(!pview.editable_literal);
+    assert!(!pview.is_placement_scope);
     match pview.content {
-        PatternContentView::Values { unit, mode, .. } => {
+        PatternContentView::Values {
+            unit,
+            mode,
+            cursor_authored,
+            ..
+        } => {
             assert_eq!(unit, ValueUnit::Degrees);
             assert_eq!(mode, ValueMode::Hold);
+            assert!(!cursor_authored);
         }
         other => panic!("expected Values view for SeededValues(Degrees), got {other:?}"),
     }
@@ -1223,9 +1231,16 @@ fn mini_overwrite_guard_seeded_degrees_view_and_resize_patterns() {
         .id;
     app.selected_pattern = Some(shifted_id);
     let pview2 = pattern_view(&mut app);
+    assert!(!pview2.editable_literal);
+    assert!(!pview2.is_placement_scope);
     match pview2.content {
-        PatternContentView::Values { unit, .. } => {
+        PatternContentView::Values {
+            unit,
+            cursor_authored,
+            ..
+        } => {
             assert_eq!(unit, ValueUnit::Degrees);
+            assert!(!cursor_authored);
         }
         other => panic!("expected Values view for shifted Degrees, got {other:?}"),
     }

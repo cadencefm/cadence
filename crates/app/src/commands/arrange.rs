@@ -1,25 +1,24 @@
 //! Arrangement, transport, timeline, section, lane, and placement Ex commands.
-use super::{parse_phase, require_args};
+use super::{parse_phase, require_args, ArrangeVerb};
 use crate::*;
 
 impl App {
-    pub(super) fn execute_arrange_command(
+    pub(super) fn execute_arrange_verb(
         &mut self,
-        command: &str,
+        verb: ArrangeVerb,
         args: &[String],
-    ) -> Option<Result<Outcome>> {
-        let res = match command {
-            "stop" => (|| {
+    ) -> Result<Outcome> {
+        match verb {
+            ArrangeVerb::Stop => {
                 require_args(args, 0, ":stop")?;
                 self.apply(Action::Stop)
-            })(),
-            "restart" => (|| {
+            }
+            ArrangeVerb::Restart => {
                 require_args(args, 0, ":restart")?;
                 self.apply(Action::RestartLoop)
-            })(),
-            "cue" | "play" => (|| {
+            }
+            ArrangeVerb::Cue { play } => {
                 ensure!(args.len() <= 1, "Usage: :cue [BAR] or :play [BAR]");
-                let play = command == "play";
                 if let Some(bar) = args.first() {
                     let bar = bar
                         .parse::<usize>()?
@@ -30,8 +29,8 @@ impl App {
                 } else {
                     self.apply(Action::CueSelection { play })
                 }
-            })(),
-            "monitor" => (|| {
+            }
+            ArrangeVerb::Monitor => {
                 ensure!(args.len() <= 1, "Usage: :monitor [on|off|toggle]");
                 let visible = match args.first().map(String::as_str) {
                     None | Some("toggle") => !self.view_state.monitor_visible,
@@ -40,8 +39,8 @@ impl App {
                     _ => bail!("Usage: :monitor [on|off|toggle]"),
                 };
                 self.apply(Action::SetMonitor { visible })
-            })(),
-            "follow" => (|| {
+            }
+            ArrangeVerb::Follow => {
                 ensure!(args.len() <= 1, "Usage: :follow [on|off|resume|toggle]");
                 match args.first().map(String::as_str) {
                     None | Some("toggle") => self.apply(Action::ToggleFollow),
@@ -49,32 +48,32 @@ impl App {
                     Some("off") => self.apply(Action::SetFollow { enabled: false }),
                     _ => bail!("Usage: :follow [on|off|resume|toggle]"),
                 }
-            })(),
-            "bpm" => (|| {
+            }
+            ArrangeVerb::Bpm => {
                 require_args(args, 1, ":bpm NUMBER")?;
                 self.apply(Action::Edit {
                     edit: Edit::SetTempo {
                         bpm: args[0].parse()?,
                     },
                 })
-            })(),
-            "bars" => (|| {
+            }
+            ArrangeVerb::Bars => {
                 require_args(args, 1, ":bars COUNT")?;
                 self.apply(Action::Edit {
                     edit: Edit::SetBars {
                         bars: args[0].parse()?,
                     },
                 })
-            })(),
-            "title" => (|| {
+            }
+            ArrangeVerb::Title => {
                 ensure!(!args.is_empty(), "Usage: :title NAME");
                 self.apply(Action::Edit {
                     edit: Edit::RenameProject {
                         title: args.join(" "),
                     },
                 })
-            })(),
-            "key" => (|| {
+            }
+            ArrangeVerb::Key => {
                 ensure!(
                     (1..=3).contains(&args.len()),
                     "Usage: :key D4 [minor|major|dorian|phrygian|lydian|mixolydian|harmonic_minor|melodic_minor|pentatonic|major_pentatonic|blues|whole_tone|chromatic]"
@@ -91,9 +90,9 @@ impl App {
                 self.apply(Action::Edit {
                     edit: Edit::SetKey { root_midi, scale },
                 })
-            })(),
-            "lane" => self.lane_command(args),
-            "place" => (|| {
+            }
+            ArrangeVerb::Lane => self.lane_command(args),
+            ArrangeVerb::Place => {
                 if args.is_empty() {
                     return self.begin_workflow(WorkflowKind::Place);
                 }
@@ -116,9 +115,9 @@ impl App {
                     phase,
                     offset_steps: args.get(5).map(|s| s.parse()).transpose()?.unwrap_or(0),
                 })
-            })(),
-            "placement" => self.placement_command(args),
-            "section" => (|| {
+            }
+            ArrangeVerb::Placement => self.placement_command(args),
+            ArrangeVerb::Section => {
                 if args.is_empty() {
                     return self.begin_workflow(WorkflowKind::Section);
                 }
@@ -223,18 +222,18 @@ impl App {
                         length_steps,
                     })
                 }
-            })(),
-            "end" => (|| {
+            }
+            ArrangeVerb::End => {
                 require_args(args, 1, ":end loop|stop|continue")?;
                 let end = cadence_core::music::EndRule::parse(&args[0])
                     .context("Usage: :end loop|stop|continue")?;
                 self.set_end_rule(end)
-            })(),
-            "loop" => match args.first().map(|s| s.to_ascii_lowercase()).as_deref() {
+            }
+            ArrangeVerb::Loop => match args.first().map(|s| s.to_ascii_lowercase()).as_deref() {
                 None => self.toggle_song_loop(),
                 Some("song" | "off") => self.disable_loop(),
                 Some("clear" | "none" | "reset") => self.clear_loop_region(),
-                Some(_) => (|| {
+                Some(_) => {
                     ensure!(args.len() == 1, "Usage: :loop [song|off|clear|SECTION]");
                     let s = self
                         .doc
@@ -246,9 +245,9 @@ impl App {
                         })
                         .context("Section missing")?;
                     self.activate_loop((s.start_step, s.start_step + s.length_steps))
-                })(),
+                }
             },
-            "arrange" => (|| {
+            ArrangeVerb::Arrange => {
                 ensure!(
                     args.len() <= 1,
                     "Usage: :arrange [placements|overview|roll]"
@@ -261,14 +260,12 @@ impl App {
                     _ => bail!("Use placements, overview or roll"),
                 };
                 self.apply(Action::SetArrangeView { view })
-            })(),
-            "inspect-event" => (|| {
+            }
+            ArrangeVerb::InspectEvent => {
                 require_args(args, 0, ":inspect-event")?;
                 self.open_arrangement_inspection()
-            })(),
-            _ => return None,
-        };
-        Some(res)
+            }
+        }
     }
 
     pub(crate) fn lane_command(&mut self, args: &[String]) -> Result<Outcome> {

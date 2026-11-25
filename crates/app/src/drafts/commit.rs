@@ -1076,10 +1076,11 @@ impl App {
             self.show_workspace(Workspace::Arrange);
             self.select_placement(id)?;
             if selected.new_pattern && matches!(plan, WorkflowPlan::PlacedPart(_)) {
-                let pattern = selected.pattern.unwrap();
-                self.select_pattern(pattern)?;
-                self.input.mode = Mode::Insert;
-                self.status = "Part created · enter notes · Esc returns to Normal".into();
+                if let Some(pattern) = selected.pattern {
+                    self.select_pattern(pattern)?;
+                    self.input.mode = Mode::Insert;
+                    self.status = "Part created · enter notes · Esc returns to Normal".into();
+                }
             }
         } else if let Some(id) = selected.part {
             let b = self.part(id).context("Created part missing")?.clone();

@@ -301,4 +301,38 @@ fn gpu_modeless_decks_value_input_chords_mixer_jam_and_overlays() {
         860,
         &px_pick_committed,
     );
+    send_key(&mut app, KeyCode::Esc);
+    send_key(&mut app, KeyCode::Esc);
+
+    // -----------------------------------------------------------------------
+    // 6. Values Pattern Deck: Literal VALUES pill vs Derived DERIVED pill
+    // -----------------------------------------------------------------------
+    app.execute_command("pattern values SweepCurve 16 ramp 0:0.15 8:0.85 12:0.45")
+        .unwrap();
+    app.execute_command("open SweepCurve").unwrap();
+    app.press_keys("gpzz").unwrap();
+    let fv_val_lit = app.frame_view(&snap_mix, status);
+    assert!(fv_val_lit.decks.iter().any(|d| matches!(
+        &d.view,
+        DeckView::Pattern(pv)
+            if pv.editable_literal && matches!(pv.content, PatternContentView::Values { .. })
+    )));
+    let px_val_lit = gpu.render_rgba8(&fv_val_lit, &dark).unwrap();
+    maybe_save_png("19-values-literal-dark.png", 1440, 860, &px_val_lit);
+
+    app.execute_command("derive ShiftedSweep shift SweepCurve 4")
+        .unwrap();
+    app.execute_command("open ShiftedSweep").unwrap();
+    let fv_val_drv = app.frame_view(&snap_mix, status);
+    assert!(fv_val_drv.decks.iter().any(|d| matches!(
+        &d.view,
+        DeckView::Pattern(pv)
+            if !pv.editable_literal && matches!(pv.content, PatternContentView::Values { .. })
+    )));
+    let px_val_drv = gpu.render_rgba8(&fv_val_drv, &dark).unwrap();
+    assert!(
+        frame_diff_ratio(&px_val_lit, &px_val_drv) > 0.002,
+        "Literal vs derived Values curves must visually differ"
+    );
+    maybe_save_png("20-values-derived-dark.png", 1440, 860, &px_val_drv);
 }

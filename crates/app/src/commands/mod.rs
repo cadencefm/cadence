@@ -3,6 +3,11 @@ mod arrange;
 mod instruments;
 mod material;
 mod mixer;
+mod registry;
+
+pub(crate) use registry::{
+    ArrangeVerb, ExVerb, InstrumentVerb, LiveVerb, MaterialVerb, MixerVerb, SessionVerb,
+};
 
 use crate::*;
 
@@ -198,24 +203,23 @@ impl App {
         }
         let command = words[0].as_str();
         let args = &words[1..];
-        if let Some(result) = self.execute_live_command(command, args) {
-            return result;
+        let Some(verb) = ExVerb::parse(command) else {
+            bail!("Unknown command '{command}' · ? lists command families");
+        };
+        match verb {
+            ExVerb::Live(v) => self.execute_live_verb(v, args),
+            ExVerb::Arrange(v) => self.execute_arrange_verb(v, args),
+            ExVerb::Material(v) => self.execute_material_verb(v, args),
+            ExVerb::Instrument(v) => self.execute_instrument_verb(v, args),
+            ExVerb::Mixer(v) => self.execute_mixer_verb(v, args),
+            ExVerb::Session(v) => self.execute_session_verb(v, args),
         }
-        if let Some(result) = self.execute_arrange_command(command, args) {
-            return result;
-        }
-        if let Some(result) = self.execute_material_command(command, args) {
-            return result;
-        }
-        if let Some(result) = self.execute_instrument_command(command, args) {
-            return result;
-        }
-        if let Some(result) = self.execute_mixer_command(command, args) {
-            return result;
-        }
-        match command {
-            "new" | "new!" => {
-                if command == "new" {
+    }
+
+    fn execute_session_verb(&mut self, verb: SessionVerb, args: &[String]) -> Result<Outcome> {
+        match verb {
+            SessionVerb::New { force } => {
+                if !force {
                     if let Some(first) = args.first() {
                         if let Some(template) = cadence_core::rack::RackTemplate::parse(first) {
                             let name = if args.len() > 1 {
@@ -244,14 +248,14 @@ impl App {
                 } else {
                     Some(args.join(" "))
                 };
-                if command == "new" && self.dirty() {
+                if !force && self.dirty() {
                     self.input.mode = Mode::Confirm(ConfirmAction::New(title));
                     Ok(Outcome::default())
                 } else {
                     self.apply(Action::New { title })
                 }
             }
-            "w" | "write" => {
+            SessionVerb::Write => {
                 ensure!(args.len() <= 1, "Usage: :w [path]");
                 let path = match args.first() {
                     Some(p) => PathBuf::from(p),
@@ -265,35 +269,35 @@ impl App {
                 };
                 self.apply(Action::Save { path })
             }
-            "e" | "e!" | "open-project" | "open-project!" => {
+            SessionVerb::Open { force } => {
                 require_args(args, 1, ":e PATH")?;
                 let path = PathBuf::from(&args[0]);
-                if !command.ends_with('!') && self.dirty() {
+                if !force && self.dirty() {
                     self.input.mode = Mode::Confirm(ConfirmAction::Open(path));
                     Ok(Outcome::default())
                 } else {
                     self.apply(Action::Load { path })
                 }
             }
-            "import-rbs" | "import-rbs!" => {
+            SessionVerb::ImportRbs { force } => {
                 ensure!(!args.is_empty(), "Usage: :import-rbs PATH");
                 let path = PathBuf::from(args.join(" "));
-                if !command.ends_with('!') && self.dirty() {
+                if !force && self.dirty() {
                     self.input.mode = Mode::Confirm(ConfirmAction::ImportRbs(path));
                     Ok(Outcome::default())
                 } else {
                     self.apply(Action::ImportRbs { path })
                 }
             }
-            "q" => {
+            SessionVerb::Quit { force: false } => {
                 require_args(args, 0, ":q")?;
                 Ok(self.request_quit())
             }
-            "q!" => Ok(Outcome {
+            SessionVerb::Quit { force: true } => Ok(Outcome {
                 quit: true,
                 ..Outcome::default()
             }),
-            "wq" => {
+            SessionVerb::WriteQuit => {
                 ensure!(
                     !self.doc.is_untitled(),
                     "Untitled project · save with :w PATH first"
@@ -304,7 +308,7 @@ impl App {
                 out.quit = true;
                 Ok(out)
             }
-            "inspect" => {
+            SessionVerb::Inspect => {
                 ensure!(args.len() <= 1, "Usage: :inspect [PATTERN]");
                 let out = self.apply(Action::Inspect {
                     pattern: args.first().map(|s| self.pattern_id(s)).transpose()?,
@@ -313,12 +317,12 @@ impl App {
                 self.input.mode = Mode::Inspect;
                 Ok(out)
             }
-            "assets" => {
+            SessionVerb::Assets => {
                 self.help_ui.overlay_scroll = 0;
                 self.input.mode = Mode::Assets;
                 Ok(Outcome::default())
             }
-            "deck" => {
+            SessionVerb::Deck => {
                 ensure!(args.len() <= 1, "Usage: :deck [on|off|toggle|pin|unpin]");
                 match args.first().map(String::as_str).unwrap_or("toggle") {
                     "on" => self.apply(Action::SetDeck { visible: true }),
@@ -331,7 +335,7 @@ impl App {
                     _ => bail!("Usage: :deck [on|off|toggle|pin|unpin]"),
                 }
             }
-            "tips" => {
+            SessionVerb::Tips => {
                 let next = match args.first().map(String::as_str) {
                     None | Some("toggle") => !self.view_state.tips,
                     Some("on") => true,
@@ -341,45 +345,44 @@ impl App {
                 self.set_key_hints_visible(next);
                 Ok(Outcome::default())
             }
-            "tutorial" => {
+            SessionVerb::Tutorial => {
                 self.input.mode = Mode::Tutorial;
                 self.help_ui.tutorial_step = 0;
                 Ok(Outcome::default())
             }
-            "help" => {
+            SessionVerb::Help => {
                 self.help_ui.searching = false;
                 self.help_ui.query.clear();
                 self.help_ui.overlay_scroll = 0;
                 self.input.mode = Mode::Help;
                 Ok(Outcome::default())
             }
-            "settings" | "config" => {
+            SessionVerb::Settings => {
                 self.settings_ui.cursor = 0;
                 self.input.mode = Mode::Settings;
                 Ok(Outcome::default())
             }
-            "files" | "hub" => {
+            SessionVerb::Files => {
                 self.open_file_hub(FileHubTab::Open);
                 Ok(Outcome::default())
             }
-            "saveas" => {
+            SessionVerb::SaveAs => {
                 self.open_file_hub(FileHubTab::Save);
                 Ok(Outcome::default())
             }
-            "zone" => self.zone_command(args),
-            "patch" => self.patch_command(args),
-            "unpatch" => self.unpatch_command(args),
-            "pin" => self.pin_command(args),
-            "unpin" => self.unpin_command(args),
-            "bounce" | "resample" => self.bounce_command(args),
-            "rec" | "record" => self.record_command(args),
-            "audio" => self.execute_audio_command(args),
-            "panic" => {
+            SessionVerb::Zone => self.zone_command(args),
+            SessionVerb::Patch => self.patch_command(args),
+            SessionVerb::Unpatch => self.unpatch_command(args),
+            SessionVerb::Pin => self.pin_command(args),
+            SessionVerb::Unpin => self.unpin_command(args),
+            SessionVerb::Bounce => self.bounce_command(args),
+            SessionVerb::Record => self.record_command(args),
+            SessionVerb::Audio => self.execute_audio_command(args),
+            SessionVerb::Panic => {
                 require_args(args, 0, ":panic")?;
                 self.apply(Action::AudioPanic)
             }
-            "midi" => self.execute_midi_command(args),
-            _ => bail!("Unknown command '{command}' · ? lists command families"),
+            SessionVerb::Midi => self.execute_midi_command(args),
         }
     }
 }
