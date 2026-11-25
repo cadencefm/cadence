@@ -14,8 +14,8 @@ pub const LANE_KEYS: [char; 10] = ['q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 
 pub const SECTION_KEYS: [char; 10] = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'];
 
 impl App {
-    /// The ten lanes addressed by Play mode's lane keys.
-    pub fn play_bank_lanes(&self) -> Vec<Id> {
+    /// Lanes strictly in the active bank (`10` per bank).
+    pub fn bank_lanes(&self) -> Vec<Id> {
         self.doc
             .project()
             .lanes
@@ -24,6 +24,36 @@ impl App {
             .take(LANE_KEYS.len())
             .map(|l| l.id)
             .collect()
+    }
+
+    /// The ten lanes addressed by `q..p` / `Alt+q..p` in the active bank.
+    ///
+    /// When the active bank contains lanes, returns strictly that bank's slice
+    /// (never leaking Bank 1 slots into a partially populated Bank 2+). When the
+    /// user paged to Bank 2+ for sections (`>10` sections, `<=10` lanes) so the
+    /// active bank has no lanes of its own, falls back to Bank 1's lanes so `q..p`
+    /// remain usable.
+    pub fn play_bank_lanes(&self) -> Vec<Id> {
+        let bank = self.bank_lanes();
+        if !bank.is_empty() {
+            bank
+        } else {
+            self.doc
+                .project()
+                .lanes
+                .iter()
+                .take(LANE_KEYS.len())
+                .map(|l| l.id)
+                .collect()
+        }
+    }
+
+    /// Lane shortcut (`q..p`) currently bound to `lane_id`, if active in this bank.
+    pub(crate) fn lane_key_char(&self, lane_id: Id) -> Option<char> {
+        self.play_bank_lanes()
+            .iter()
+            .position(|&id| id == lane_id)
+            .and_then(|pos| LANE_KEYS.get(pos).copied())
     }
 
     fn edit_boundary(&self) -> Boundary {

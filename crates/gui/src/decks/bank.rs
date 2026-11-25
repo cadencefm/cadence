@@ -406,6 +406,7 @@ fn draw_bank_parts_rows(
         draw_lane_row_header(
             dl,
             hdr,
+            li,
             lane,
             lane_col,
             lane_sel,
@@ -439,6 +440,7 @@ fn draw_bank_parts_rows(
 fn draw_lane_row_header(
     dl: &mut DisplayList,
     hdr: Rect,
+    lane_index: usize,
     lane: &BankLaneGroup,
     lane_col: crate::theme::Color,
     lane_sel: bool,
@@ -492,24 +494,36 @@ fn draw_lane_row_header(
         hdr.y + (hdr.h - key_h) * 0.5
     };
     let key_r = Rect::new(hdr.x + 7.0, key_y, kw, key_h);
-    let klbl = if jam_active {
-        lane.key_char.to_string()
+    if let Some(k) = lane.key_char {
+        let klbl = if jam_active {
+            k.to_string()
+        } else {
+            format!("⌥{k}")
+        };
+        dl.rounded(
+            key_r,
+            lane_col.with_alpha(if jam_active { 0.28 } else { 0.16 }),
+            theme.radii.badge,
+        );
+        dl.text(
+            key_r,
+            klbl,
+            theme.font.small - if jam_active { 0.0 } else { 1.0 },
+            jam_active || lane_sel,
+            lane_col,
+            TextAlign::Center,
+        );
     } else {
-        format!("⌥{}", lane.key_char)
-    };
-    dl.rounded(
-        key_r,
-        lane_col.with_alpha(if jam_active { 0.28 } else { 0.16 }),
-        theme.radii.badge,
-    );
-    dl.text(
-        key_r,
-        klbl,
-        theme.font.small - if jam_active { 0.0 } else { 1.0 },
-        jam_active || lane_sel,
-        lane_col,
-        TextAlign::Center,
-    );
+        dl.rounded(key_r, theme.surface.elevated, theme.radii.badge);
+        dl.text(
+            key_r,
+            format!("{}", lane_index + 1),
+            theme.font.small - 1.0,
+            lane_sel,
+            theme.text.muted,
+            TextAlign::Center,
+        );
+    }
 
     let mut flags = String::new();
     if let Some(m) = lane.staged_mute {
@@ -994,7 +1008,7 @@ mod tests {
         BankLaneGroup {
             lane_id: id,
             lane_name: name.into(),
-            key_char: key,
+            key_char: Some(key),
             muted: false,
             solo: false,
             staged_mute: None,
@@ -1233,5 +1247,44 @@ mod tests {
             .texts
             .iter()
             .any(|t| t.text.contains("No material yet")));
+    }
+
+    #[test]
+    fn bank_lane_outside_active_key_bank_renders_numeric_index_badge() {
+        let lanes: Vec<BankLaneGroup> = (0..11)
+            .map(|i| {
+                let mut lane = sample_lane(
+                    i as u64 + 1,
+                    'q',
+                    &format!("Lane {}", i + 1),
+                    vec![sample_part(1, "Loop", BankPartStatus::Idle)],
+                );
+                lane.key_char = if i < 10 {
+                    Some(cadence_app::LANE_KEYS[i])
+                } else {
+                    None
+                };
+                lane
+            })
+            .collect();
+        let mut view = sample_bank_view(BankMode::Parts, true, lanes);
+        view.selected_lane_idx = 10;
+
+        let theme = Theme::cadence_dark();
+        let mut dl = DisplayList::new(960.0, 540.0, 1.0);
+        draw_bank(
+            &mut dl,
+            Rect::new(0.0, 0.0, 960.0, 540.0),
+            &view,
+            true,
+            UiModeKind::Normal,
+            &theme,
+        );
+        assert_eq!(dl.current_clip(), dl.viewport);
+        assert!(
+            dl.base.texts.iter().any(|t| t.text == "11"),
+            "lane outside active key bank should display its 1-based numeric index badge"
+        );
+        assert!(dl.base.texts.iter().any(|t| t.text.contains("Lane 11")));
     }
 }
