@@ -7,10 +7,10 @@
 
 use crate::dsp::biquad::{DcBlocker, TptOnePoleLpf};
 use crate::dsp::math::{
-    clamp_freq_hz, control_stride_mask, db_to_lin, db_to_lin_f64, flush_denormal_f64,
-    mix_stereo_f64, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame, sanitize_sample,
-    sanitize_sample_f64, sanitize_sample_rate, BypassFader, BypassStep, LogSmoother, Smoother,
-    LIN_FLOOR_F64, NYQUIST_SAFE_RATIO,
+    clamp_freq_hz, control_stride_last_tick, control_stride_mask, db_to_lin, db_to_lin_f64,
+    flush_denormal_f64, mix_stereo_f64, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame,
+    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, BypassFader, BypassStep,
+    LogSmoother, Smoother, LIN_FLOOR_F64, NYQUIST_SAFE_RATIO,
 };
 use crate::mixer::{DriveMode, DrivePatch};
 
@@ -746,17 +746,58 @@ impl Drive {
         }
     }
 
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        self.drive.advance_silent(frames);
+        self.asymmetry.advance_silent(frames);
+        self.output_gain.advance_silent(frames);
+        self.mix.advance_silent(frames);
+        self.mode_xfade.advance_silent(frames);
+        if let Some(last_tick) = control_stride_last_tick(self.ctrl_count, self.ctrl_mask, frames) {
+            self.tone_hz.advance_silent(self.tone_coeff, last_tick + 1);
+            let tone = self.tone_hz.current();
+            let tone_bits = tone.to_bits();
+            if tone_bits != self.cached_tone_bits {
+                self.cached_tone_bits = tone_bits;
+                self.tone_lpf.set_cutoff(self.sample_rate, tone);
+            }
+            let rem = frames - 1 - last_tick;
+            if rem > 0 {
+                self.tone_hz.advance_silent(self.tone_coeff, rem);
+            }
+        } else {
+            self.tone_hz.advance_silent(self.tone_coeff, frames);
+        }
+        self.ctrl_count = self.ctrl_count.wrapping_add(frames as u32) & self.ctrl_mask;
+        let drv = self.drive.current();
+        let asym = self.asymmetry.current();
+        let key = (drv.to_bits(), asym.to_bits(), self.mode);
+        if key != self.cached_shaper_key {
+            self.cached_shaper_key = key;
+            self.cached_shaper = DriveShaperCoeffs::new(drv, asym, self.mode);
+        }
+    }
+
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
         let bypass_w = match self.bypass.step(bypassed) {
-            BypassStep::Idle => return dry,
+            BypassStep::Idle => {
+                self.advance_silent_frames(1, true);
+                return dry;
+            }
             BypassStep::SettledBypass => {
                 self.os.reset();
                 self.dry_align.reset();
                 self.tone_lpf.reset();
                 self.dc_blocker.reset();
                 self.bypass.mark_idle();
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::Active(w) => w,
@@ -821,6 +862,7 @@ impl crate::dsp::StereoEffect for Drive {
         }
         self.has_processed = true;
         if self.bypass.check_idle_bypass(bypassed) {
+            self.advance_silent_frames(buf.len(), true);
             for frame in buf.iter_mut() {
                 *frame = sanitize_frame(*frame);
             }
@@ -844,6 +886,11 @@ impl crate::dsp::StereoEffect for Drive {
                     && self.dry_align.quiet()
                     && self.tone_lpf.quiet()
                     && self.dc_blocker.quiet()))
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        Drive::advance_silent_frames(self, frames, bypassed);
     }
 }
 

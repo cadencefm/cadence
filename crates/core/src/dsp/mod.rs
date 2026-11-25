@@ -54,16 +54,16 @@ pub use lofi::{
     LOFI_MAX_BITS, LOFI_MAX_RATE_HZ, LOFI_MIN_BITS, LOFI_MIN_RATE_HZ,
 };
 pub use math::{
-    clamp_freq_hz, control_stride_mask, db_to_lin, db_to_lin_f64, decay_coeff_60db_ms,
-    flush_denormal_f32, flush_denormal_f64, glide_coeff_ms, hann_fade_in, hann_fade_out,
-    hermite4_f32, hermite4_f64, lin_to_db, lin_to_db_f64, log_to_norm, midi_to_hz, mix_stereo_f32,
-    mix_stereo_f64, norm_to_log, octaves_to_ratio_f32, octaves_to_ratio_f64, one_pole_coeff_ms,
-    one_pole_decay_ms, sanitize_clamp_f32, sanitize_clamp_f64, sanitize_frame, sanitize_sample,
-    sanitize_sample_f64, sanitize_sample_rate, semitones_to_ratio_f32, semitones_to_ratio_f64,
-    smooth_step_f32, smooth_step_f64, BypassFader, BypassStep, LogSmoother, PeakHold, Smoother,
-    AUDIO_SUB_BLOCK_FRAMES, BYPASS_FADE_MS, BYPASS_SETTLE_EPS, CHOKE_MS, DECAY_LN_60DB,
-    FAST_RELEASE_MS, LN_100, NYQUIST_SAFE_RATIO, SMOOTH_SETTLE_EPS_F32, SMOOTH_SETTLE_EPS_F64,
-    TAIL_SILENCE_FLOOR_F32, TAIL_SILENCE_FLOOR_F64,
+    clamp_freq_hz, control_stride_last_tick, control_stride_mask, db_to_lin, db_to_lin_f64,
+    decay_coeff_60db_ms, flush_denormal_f32, flush_denormal_f64, glide_coeff_ms, hann_fade_in,
+    hann_fade_out, hermite4_f32, hermite4_f64, lin_to_db, lin_to_db_f64, log_to_norm, midi_to_hz,
+    mix_stereo_f32, mix_stereo_f64, norm_to_log, octaves_to_ratio_f32, octaves_to_ratio_f64,
+    one_pole_coeff_ms, one_pole_decay_ms, sanitize_clamp_f32, sanitize_clamp_f64, sanitize_frame,
+    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, semitones_to_ratio_f32,
+    semitones_to_ratio_f64, smooth_step_f32, smooth_step_f64, BypassFader, BypassStep, LogSmoother,
+    PeakHold, Smoother, AUDIO_SUB_BLOCK_FRAMES, BYPASS_FADE_MS, BYPASS_SETTLE_EPS, CHOKE_MS,
+    DECAY_LN_60DB, FAST_RELEASE_MS, LN_100, NYQUIST_SAFE_RATIO, SMOOTH_SETTLE_EPS_F32,
+    SMOOTH_SETTLE_EPS_F64, TAIL_SILENCE_FLOOR_F32, TAIL_SILENCE_FLOOR_F64,
 };
 pub use noise::{
     mix_seed, NoiseGen, PinkFilter, XorShift32, GOLDEN_RATIO_32, NOISE_REF_SAMPLE_RATE,
@@ -141,14 +141,12 @@ pub trait StereoEffect {
     /// True when internal delay/reverb/filter/envelope/lookahead state is completely
     /// drained and bypass crossfade is settled for `bypassed`, so feeding `[0.0, 0.0]`
     /// produces `[0.0, 0.0]` with no ringing tail or state drift.
-    fn is_quiet(&self, _bypassed: bool) -> bool {
-        false
-    }
+    fn is_quiet(&self, bypassed: bool) -> bool;
 
-    /// Advance any free-running phase state (e.g., `Chorus` LFO) across `frames`
-    /// skipped silent frames in O(1).
-    #[inline]
-    fn advance_silent_frames(&mut self, _frames: usize, _bypassed: bool) {}
+    /// Advance parameter smoothers, control-rate coefficient caches, and free-running
+    /// clocks/LFOs across `frames` silent or idle-bypassed samples without running the
+    /// audio processing path.
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool);
 }
 
 #[cfg(test)]

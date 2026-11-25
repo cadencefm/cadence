@@ -187,19 +187,32 @@ impl Compressor {
         }
     }
 
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        self.makeup_gain.advance_silent(frames);
+        self.mix.advance_silent(frames);
+        if bypassed {
+            self.gr_db = 0.0;
+            self.current_gr_db = 0.0;
+        }
+    }
+
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
         let bypass_w = match self.bypass.step(bypassed) {
             BypassStep::Idle => {
-                self.gr_db = 0.0;
-                self.current_gr_db = 0.0;
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::SettledBypass => {
-                self.gr_db = 0.0;
-                self.current_gr_db = 0.0;
                 self.bypass.mark_idle();
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::Active(w) => w,
@@ -251,8 +264,7 @@ impl crate::dsp::StereoEffect for Compressor {
         }
         self.has_processed = true;
         if self.bypass.check_idle_bypass(bypassed) {
-            self.gr_db = 0.0;
-            self.current_gr_db = 0.0;
+            self.advance_silent_frames(buf.len(), true);
             for frame in buf.iter_mut() {
                 *frame = sanitize_frame(*frame);
             }
@@ -299,6 +311,11 @@ impl crate::dsp::StereoEffect for Compressor {
     #[inline]
     fn is_quiet(&self, bypassed: bool) -> bool {
         self.bypass.is_settled_for(bypassed) && self.gr_db == 0.0 && self.current_gr_db == 0.0
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        Compressor::advance_silent_frames(self, frames, bypassed);
     }
 }
 
@@ -493,6 +510,34 @@ impl Limiter {
         self.deque[self.deque_head].1
     }
 
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        self.ceiling_db.advance_silent(frames);
+        let ceiling_db = self.ceiling_db.current();
+        let ceiling_bits = ceiling_db.to_bits();
+        if ceiling_bits != self.cached_ceiling_db_bits {
+            self.cached_ceiling_db_bits = ceiling_bits;
+            self.cached_ceiling_lin = db_to_lin_f64(ceiling_db);
+        }
+        self.drive_db.advance_silent(frames);
+        let drive_db = self.drive_db.current();
+        let drive_bits = drive_db.to_bits();
+        if drive_bits != self.cached_drive_db_bits {
+            self.cached_drive_db_bits = drive_bits;
+            self.cached_drive_lin = db_to_lin_f64(drive_db);
+        }
+        self.mix.advance_silent(frames);
+        if bypassed {
+            self.gr_db = 0.0;
+            self.current_gr_db = 0.0;
+        }
+    }
+
     /// Process one stereo frame.
     ///
     /// While `bypassed == true`, `delay_buf` continues to advance with live dry audio so
@@ -510,17 +555,15 @@ impl Limiter {
 
         let bypass_w = match self.bypass.step(bypassed) {
             BypassStep::Idle => {
-                self.gr_db = 0.0;
-                self.current_gr_db = 0.0;
+                self.advance_silent_frames(1, true);
                 self.observe_tail_silence(dry_in);
                 return delayed_dry;
             }
             BypassStep::SettledBypass => {
                 self.deque_head = 0;
                 self.deque_tail = 0;
-                self.gr_db = 0.0;
-                self.current_gr_db = 0.0;
                 self.bypass.mark_idle();
+                self.advance_silent_frames(1, true);
                 self.observe_tail_silence(dry_in);
                 return delayed_dry;
             }
@@ -611,8 +654,7 @@ impl crate::dsp::StereoEffect for Limiter {
         }
         self.has_processed = true;
         if self.bypass.check_idle_bypass(bypassed) {
-            self.gr_db = 0.0;
-            self.current_gr_db = 0.0;
+            self.advance_silent_frames(buf.len(), true);
             let lookahead = self.lookahead;
             let mut w = self.write_idx;
             for frame in buf.iter_mut() {
@@ -678,6 +720,11 @@ impl crate::dsp::StereoEffect for Limiter {
             && self.gr_db == 0.0
             && self.current_gr_db == 0.0
             && self.bypass.is_settled_for(bypassed)
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        Limiter::advance_silent_frames(self, frames, bypassed);
     }
 }
 

@@ -1135,6 +1135,26 @@ impl RhythmicEnv {
         self.env_smooth
     }
 
+    /// Advance the rhythmic envelope across `frames` silent or idle-bypassed samples
+    /// with bit-exact parity to [`RhythmicEnv::next_sample`], returning the final
+    /// smoothed envelope level.
+    #[inline]
+    pub fn advance_silent(&mut self, frames: usize) -> f64 {
+        if frames == 0 {
+            return self.env_smooth;
+        }
+        if !self.transport_running && self.env_raw == 0.0 && self.env_smooth == 0.0 {
+            return 0.0;
+        }
+        for _ in 0..frames {
+            self.next_sample();
+            if !self.transport_running && self.env_raw == 0.0 && self.env_smooth == 0.0 {
+                break;
+            }
+        }
+        self.env_smooth
+    }
+
     /// Exact closed-form advance of the coupled 2-stage 1-pole ODE over `dt_sec`:
     /// `r'(t) = -r / tau_decay`, `s'(t) = (r - s) / tau_atk`.
     #[inline]

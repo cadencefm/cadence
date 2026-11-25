@@ -326,11 +326,30 @@ impl Delay {
             self.feedback.set_target(fb);
             self.mix.set_target(mix);
             self.ping_pong_blend.set_target(pp);
-            if self.xfade >= 1.0 && (target_time - self.time_a).abs() > 0.5 {
+            if self.tail_quiet {
+                self.time_a = target_time;
+                self.time_b = target_time;
+                self.xfade = 1.0;
+            } else if self.xfade >= 1.0 && (target_time - self.time_a).abs() > 0.5 {
                 self.time_b = target_time;
                 self.xfade = 0.0;
             }
         }
+    }
+
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        self.feedback.advance_silent(frames);
+        self.mix.advance_silent(frames);
+        self.ping_pong_blend.advance_silent(frames);
+        self.time_a = self.target_time;
+        self.time_b = self.target_time;
+        self.xfade = 1.0;
     }
 
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
@@ -342,9 +361,7 @@ impl Delay {
 
         let (bypass_w, bypass_settled) = match self.bypass.step(bypassed) {
             BypassStep::Idle => {
-                self.time_a = self.target_time;
-                self.time_b = self.target_time;
-                self.xfade = 1.0;
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::SettledBypass => (0.0, true),
@@ -420,6 +437,9 @@ impl Delay {
                     // O(1) validity reset (zero memset on RT thread) clears any longer stale history.
                     self.line.reset();
                     self.damp_lpf.reset();
+                    self.time_a = self.target_time;
+                    self.time_b = self.target_time;
+                    self.xfade = 1.0;
                     self.tail_silent_frames = 0;
                     self.tail_quiet = true;
                 }
@@ -459,9 +479,7 @@ impl crate::dsp::StereoEffect for Delay {
             return;
         }
         if self.bypass.check_idle_bypass(bypassed) {
-            self.time_a = self.target_time;
-            self.time_b = self.target_time;
-            self.xfade = 1.0;
+            self.advance_silent_frames(buf.len(), true);
             for frame in buf.iter_mut() {
                 *frame = sanitize_frame(*frame);
             }
@@ -480,6 +498,11 @@ impl crate::dsp::StereoEffect for Delay {
     #[inline]
     fn is_quiet(&self, bypassed: bool) -> bool {
         (!self.line.is_allocated() || self.tail_quiet) && self.bypass.is_settled_for(bypassed)
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        Delay::advance_silent_frames(self, frames, bypassed);
     }
 }
 

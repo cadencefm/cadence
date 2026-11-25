@@ -6,10 +6,10 @@
 use crate::dsp::biquad::{DcBlocker, TptOnePoleLpf};
 use crate::dsp::env::RhythmicEnv;
 use crate::dsp::math::{
-    clamp_freq_hz, control_stride_mask, flush_denormal_f64, lin_to_db_f64, mix_stereo_f64,
-    one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame, sanitize_sample, sanitize_sample_f64,
-    sanitize_sample_rate, BypassFader, BypassStep, LogSmoother, Smoother, LIN_FLOOR_F64,
-    NYQUIST_SAFE_RATIO, TAIL_SILENCE_FLOOR_F64,
+    clamp_freq_hz, control_stride_last_tick, control_stride_mask, flush_denormal_f64,
+    lin_to_db_f64, mix_stereo_f64, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame,
+    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, BypassFader, BypassStep,
+    LogSmoother, Smoother, LIN_FLOOR_F64, NYQUIST_SAFE_RATIO, TAIL_SILENCE_FLOOR_F64,
 };
 use crate::dsp::saturate::SoftClipCoeffs;
 use crate::filter_patterns::CompiledFilterPattern;
@@ -706,26 +706,72 @@ impl RhythmicFilter {
         }
     }
 
-    pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
-        self.has_processed = true;
-        let dry = sanitize_frame(input);
+    #[inline]
+    fn advance_smoothers_and_env(&mut self, frames: usize) -> f64 {
         let env_level = if self.env_amount_ln2 != 0.0 {
-            self.env.next_sample()
+            self.env.advance_silent(frames)
         } else {
             0.0
         };
+        self.cutoff.advance_silent(self.cutoff_coeff, frames);
+        self.resonance.advance_silent(frames);
+        self.drive.advance_silent(frames);
+        self.mix.advance_silent(frames);
+        self.mode_xfade.advance_silent(frames);
+        env_level
+    }
+
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        if let Some(last_tick) = control_stride_last_tick(self.ctrl_count, self.ctrl_mask, frames) {
+            let env_at_tick = self.advance_smoothers_and_env(last_tick + 1);
+            self.recompute_coefficients_inner(env_at_tick, false);
+            let rem = frames - 1 - last_tick;
+            if rem > 0 {
+                self.advance_smoothers_and_env(rem);
+            }
+        } else {
+            self.advance_smoothers_and_env(frames);
+        }
+        self.ctrl_count = self.ctrl_count.wrapping_add(frames as u32) & self.ctrl_mask;
+        let drv = self.drive.current();
+        let drv_bits = drv.to_bits();
+        if drv_bits != self.cached_drive_bits {
+            self.cached_drive_bits = drv_bits;
+            self.cached_drive_coeffs = SoftClipCoeffs::new(drv);
+        }
+    }
+
+    pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
+        self.has_processed = true;
+        let dry = sanitize_frame(input);
 
         let bypass_w = match self.bypass.step(bypassed) {
-            BypassStep::Idle => return dry,
+            BypassStep::Idle => {
+                self.advance_silent_frames(1, true);
+                return dry;
+            }
             BypassStep::SettledBypass => {
                 self.svf.reset();
                 self.acid.reset();
                 self.one_pole.reset();
                 self.dc_blocker.reset();
                 self.bypass.mark_idle();
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::Active(w) => w,
+        };
+
+        let env_level = if self.env_amount_ln2 != 0.0 {
+            self.env.next_sample()
+        } else {
+            0.0
         };
 
         self.cutoff.step(self.cutoff_coeff);
@@ -828,6 +874,7 @@ impl crate::dsp::StereoEffect for RhythmicFilter {
         }
         self.has_processed = true;
         if self.bypass.check_idle_bypass(bypassed) {
+            self.advance_silent_frames(buf.len(), true);
             for frame in buf.iter_mut() {
                 *frame = sanitize_frame(*frame);
             }
@@ -847,11 +894,15 @@ impl crate::dsp::StereoEffect for RhythmicFilter {
     fn is_quiet(&self, bypassed: bool) -> bool {
         self.bypass.is_settled_for(bypassed)
             && (bypassed
-                || (self.env_amount_ln2 == 0.0
-                    && self.svf.quiet()
+                || (self.svf.quiet()
                     && self.acid.quiet()
                     && self.one_pole.quiet()
                     && self.dc_blocker.quiet()))
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        RhythmicFilter::advance_silent_frames(self, frames, bypassed);
     }
 }
 

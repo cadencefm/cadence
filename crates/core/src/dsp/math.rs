@@ -230,6 +230,25 @@ pub fn control_stride_mask(sample_rate: f64, target_hz: f64) -> u32 {
     (1u32 << exp) - 1
 }
 
+/// Return the zero-based offset of the last frame in `0..frames` where a
+/// control-rate counter starting at `ctrl_count` hits `0` under `ctrl_mask`
+/// (`(ctrl_count + offset) & ctrl_mask == 0`), or `None` if no tick occurs.
+#[inline]
+pub fn control_stride_last_tick(ctrl_count: u32, ctrl_mask: u32, frames: usize) -> Option<usize> {
+    if frames == 0 {
+        return None;
+    }
+    let mask = ctrl_mask as usize;
+    let c0 = (ctrl_count as usize) & mask;
+    let first_tick = if c0 == 0 { 0 } else { (mask + 1) - c0 };
+    if first_tick >= frames {
+        None
+    } else {
+        let last = frames - 1;
+        Some(last - (c0.wrapping_add(last) & mask))
+    }
+}
+
 /// Flush subnormal/tiny values (`|x| < 1e-24`) and non-finite numbers to `0.0`.
 #[inline]
 pub fn flush_denormal_f32(x: f32) -> f32 {
@@ -534,6 +553,24 @@ impl Smoother {
     pub fn is_settled(&self) -> bool {
         (self.target - self.current).abs() <= self.settle_tol()
     }
+
+    /// Advance smoother state across `frames` silent or idle-bypassed samples.
+    ///
+    /// Costs O(1) once converged (`current == target`) and steps identically to
+    /// `frames` calls to [`Smoother::next`] while slewing, stopping early upon
+    /// settling to `target`.
+    #[inline]
+    pub fn advance_silent(&mut self, frames: usize) {
+        if self.current == self.target || frames == 0 {
+            return;
+        }
+        for _ in 0..frames {
+            self.next();
+            if self.current == self.target {
+                break;
+            }
+        }
+    }
 }
 
 /// Per-frame state returned by [`BypassFader::step`] for unified click-free effect bypass.
@@ -606,6 +643,18 @@ impl BypassFader {
             true
         } else {
             false
+        }
+    }
+
+    /// Keep the idle/active bypass latch consistent across skipped silent frames.
+    #[inline]
+    pub fn advance_silent(&mut self, bypassed: bool) {
+        if bypassed {
+            if !self.was_active {
+                self.wet.snap(0.0);
+            }
+        } else {
+            self.was_active = true;
         }
     }
 
@@ -754,6 +803,38 @@ impl LogSmoother {
     pub fn is_settled(&self) -> bool {
         (self.target_log - self.current_log).abs()
             <= Self::SETTLE_EPS * self.target_log.abs().max(1.0)
+    }
+
+    /// Advance smoother state across `frames` silent or idle-bypassed samples.
+    ///
+    /// Costs O(1) once converged (`current_log == target_log`) and refreshes
+    /// `current_val` with a single `exp()` after advancing `current_log` identically
+    /// to `frames` calls to [`LogSmoother::step`].
+    #[inline]
+    pub fn advance_silent(&mut self, coeff: f64, frames: usize) {
+        if self.current_log == self.target_log || frames == 0 {
+            return;
+        }
+        let tol = Self::SETTLE_EPS * self.target_log.abs().max(1.0);
+        let c = if coeff.is_finite() {
+            coeff.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        for _ in 0..frames {
+            let diff = self.target_log - self.current_log;
+            if diff.abs() <= tol {
+                self.current_log = self.target_log;
+                break;
+            }
+            let next = self.current_log + diff * c;
+            if c > 0.0 && next == self.current_log {
+                self.current_log = self.target_log;
+                break;
+            }
+            self.current_log = next;
+        }
+        self.current_val = self.current_log.exp();
     }
 }
 

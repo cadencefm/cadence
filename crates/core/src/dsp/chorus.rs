@@ -166,11 +166,43 @@ impl Chorus {
         }
     }
 
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        self.depth.advance_silent(frames);
+        self.width.advance_silent(frames);
+        self.mix.advance_silent(frames);
+        if bypassed {
+            self.rate_hz.advance_silent(frames);
+        } else if self.rate_hz.current() == self.rate_hz.target() {
+            self.lfo.advance_frames(frames, self.rate_hz.current());
+        } else {
+            for i in 0..frames {
+                let rate = self.rate_hz.next();
+                self.lfo.advance_frames(1, rate);
+                if self.rate_hz.current() == self.rate_hz.target() {
+                    let rem = frames - 1 - i;
+                    if rem > 0 {
+                        self.lfo.advance_frames(rem, self.rate_hz.current());
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
         let bypass_w = match self.bypass.step(bypassed) {
-            BypassStep::Idle => return dry,
+            BypassStep::Idle => {
+                self.advance_silent_frames(1, true);
+                return dry;
+            }
             BypassStep::SettledBypass => {
                 // O(1) validity reset prevents stale bursts when un-bypassed later.
                 self.line.reset();
@@ -178,6 +210,7 @@ impl Chorus {
                 self.tail_silent_frames = 0;
                 self.tail_quiet = true;
                 self.bypass.mark_idle();
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::Active(w) => w,
@@ -254,6 +287,7 @@ impl crate::dsp::StereoEffect for Chorus {
         }
         self.has_processed = true;
         if self.bypass.check_idle_bypass(bypassed) {
+            self.advance_silent_frames(buf.len(), true);
             for frame in buf.iter_mut() {
                 *frame = sanitize_frame(*frame);
             }
@@ -271,15 +305,12 @@ impl crate::dsp::StereoEffect for Chorus {
 
     #[inline]
     fn is_quiet(&self, bypassed: bool) -> bool {
-        self.tail_quiet && self.bypass.is_settled_for(bypassed) && self.rate_hz.is_settled()
+        self.tail_quiet && self.bypass.is_settled_for(bypassed)
     }
 
     #[inline]
     fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
-        if !bypassed {
-            self.has_processed = true;
-            self.lfo.advance_frames(frames, self.rate_hz.current());
-        }
+        Chorus::advance_silent_frames(self, frames, bypassed);
     }
 }
 
