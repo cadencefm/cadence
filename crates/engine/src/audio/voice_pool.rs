@@ -5,7 +5,9 @@ use super::shared::{AuditionKind, AuditionRequest, PREVIEW_TRACK, VOICES};
 use super::voices::{HeldNotes, Voice};
 use super::*;
 use crate::modular_voice::{VoiceStart, ZoneTriggerSpec};
-use cadence_core::dsp::{db_to_lin, mix_seed, sanitize_sample, stereo_mid_f32};
+use cadence_core::dsp::{
+    db_to_lin, mix_seed, sanitize_sample, stereo_mid_f32, AUDIO_SUB_BLOCK_FRAMES,
+};
 use cadence_core::params::{InstrumentParam, RackParam, ZoneParam};
 use cadence_core::rack::{
     module_sample_key, ModuleKind, ModuleParam, PitchTracking, RackPatch, RackZone, VoiceMode,
@@ -86,10 +88,38 @@ pub(super) struct LiveNote {
 }
 
 /// Stereo voice outputs accumulated across one audio frame.
+#[cfg(test)]
 pub(super) struct VoiceFrameOut {
     pub(super) sources: [[f32; 2]; MAX_INSTRUMENTS],
-    pub(super) preview: [f32; 2],
     pub(super) track_scope: [f32; MAX_INSTRUMENTS],
+}
+
+/// Heap-boxed scratch buffers accumulating up to [`AUDIO_SUB_BLOCK_FRAMES`] stereo frames
+/// per instrument, preview bus, and track oscilloscope with zero RT stack bloat.
+pub(super) struct VoiceBlockOut {
+    pub(super) sources: [[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+    pub(super) preview: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    pub(super) track_scope: [[f32; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+    pub(super) source_active_mask: u32,
+    pub(super) preview_active: bool,
+}
+
+impl VoiceBlockOut {
+    pub(super) fn new_boxed() -> Box<Self> {
+        Box::new(Self {
+            sources: [[[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+            preview: [[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            track_scope: [[0.0; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+            source_active_mask: 0,
+            preview_active: false,
+        })
+    }
+
+    #[inline]
+    fn clear_frames(&mut self) {
+        self.source_active_mask = 0;
+        self.preview_active = false;
+    }
 }
 
 /// Clamp automation lookup position to the final arrangement step when
@@ -190,6 +220,7 @@ pub(super) struct VoicePool {
     held_notes: Box<[HeldNotes]>,
     mono_last_pitch: Box<[MonoPitchSlot]>,
     mono_pitch_cursor: usize,
+    controls_dirty: bool,
 }
 
 impl VoicePool {
@@ -210,6 +241,7 @@ impl VoicePool {
             held_notes,
             mono_last_pitch,
             mono_pitch_cursor: 0,
+            controls_dirty: true,
         }
     }
 
@@ -259,6 +291,7 @@ impl VoicePool {
 
     /// Re-index active voices and prune held-note stacks after a live score update.
     pub(super) fn remap_tracks(&mut self, project: &ScoreWindow) {
+        self.controls_dirty = true;
         for &slot_u16 in &self.active_voices[..self.active_voice_count] {
             let voice = &mut self.voices[slot_u16 as usize];
             if !voice.active || voice.track == PREVIEW_TRACK {
@@ -1001,6 +1034,38 @@ impl VoicePool {
     /// Apply continuous (non-Step) Rack, Zone, Module, and Cable modulation lanes
     /// to every active voice while respecting trigger-time parameter lock bitmasks.
     pub(super) fn update_continuous_controls(&mut self, project: &ScoreWindow, auto_pos: f64) {
+        let dirty = self.controls_dirty;
+        self.controls_dirty = false;
+        if self.active_voice_count == 0 {
+            return;
+        }
+
+        let mut active_tracks_mask = 0u32;
+        for &slot_u16 in &self.active_voices[..self.active_voice_count] {
+            let voice = &self.voices[slot_u16 as usize];
+            if voice.active && (voice.track as usize) < MAX_INSTRUMENTS {
+                active_tracks_mask |= 1u32 << voice.track;
+            }
+        }
+        if active_tracks_mask == 0 {
+            return;
+        }
+
+        let mut mod_tracks_mask = 0u32;
+        for lane in &project.mod_lanes {
+            if (lane.inst_idx as usize) < MAX_INSTRUMENTS {
+                mod_tracks_mask |= 1u32 << lane.inst_idx;
+            }
+        }
+        let mut update_mask = if dirty {
+            active_tracks_mask
+        } else {
+            active_tracks_mask & mod_tracks_mask
+        };
+        if update_mask == 0 {
+            return;
+        }
+
         let rack_gain_bit = 1u8 << RackParam::Gain.id();
         let rack_pan_bit = 1u8 << RackParam::Pan.id();
         let rack_tune_bit = 1u8 << RackParam::Tune.id();
@@ -1009,17 +1074,33 @@ impl VoicePool {
         let zone_gain_bit = 1u8 << (ZoneParam::Gain as u8);
         let zone_pan_bit = 1u8 << (ZoneParam::Pan as u8);
 
-        for (inst_idx, inst) in project.instruments.iter().take(MAX_INSTRUMENTS).enumerate() {
+        while update_mask != 0 {
+            let inst_idx = update_mask.trailing_zeros() as usize;
+            update_mask &= update_mask - 1;
+            let Some(inst) = project.instruments.get(inst_idx) else {
+                continue;
+            };
             let idx_u8 = inst_idx as u8;
+            let has_mod = mod_tracks_mask & (1u32 << inst_idx) != 0;
             let rack = &inst.rack;
             let mut rack_bus = RackBusState::from_rack(rack);
+            let mut has_rack_or_zone_mod = false;
 
-            for lane in &project.mod_lanes {
-                if lane.inst_idx != idx_u8 {
-                    continue;
-                }
-                if let InstrumentParam::Rack { param } = lane.target {
-                    rack_bus.apply_norm(param, lane.evaluate(auto_pos));
+            if has_mod {
+                for lane in &project.mod_lanes {
+                    if lane.inst_idx != idx_u8 {
+                        continue;
+                    }
+                    match lane.target {
+                        InstrumentParam::Rack { param } => {
+                            rack_bus.apply_norm(param, lane.evaluate(auto_pos));
+                            has_rack_or_zone_mod = true;
+                        }
+                        InstrumentParam::Zone { .. } => {
+                            has_rack_or_zone_mod = true;
+                        }
+                        _ => {}
+                    }
                 }
             }
 
@@ -1029,102 +1110,114 @@ impl VoicePool {
                     continue;
                 }
 
-                let eff_rack_gain = if voice.rack_locks & rack_gain_bit != 0 {
-                    voice.rack_gain_db
-                } else {
-                    rack_bus.gain_db
-                };
-                let eff_rack_pan = if voice.rack_locks & rack_pan_bit != 0 {
-                    voice.rack_pan
-                } else {
-                    rack_bus.pan
-                };
-                let eff_rack_tune = if voice.rack_locks & rack_tune_bit != 0 {
-                    voice.rack_tune
-                } else {
-                    rack_bus.tune
-                };
-                let eff_rack_cutoff = if voice.rack_locks & rack_cut_bit != 0 {
-                    voice.rack_cutoff_hz
-                } else {
-                    rack_bus.cutoff
-                };
-                let eff_rack_res = if voice.rack_locks & rack_res_bit != 0 {
-                    voice.rack_resonance
-                } else {
-                    rack_bus.resonance
-                };
+                if dirty || has_rack_or_zone_mod {
+                    let eff_rack_gain = if voice.rack_locks & rack_gain_bit != 0 {
+                        voice.rack_gain_db
+                    } else {
+                        rack_bus.gain_db
+                    };
+                    let eff_rack_pan = if voice.rack_locks & rack_pan_bit != 0 {
+                        voice.rack_pan
+                    } else {
+                        rack_bus.pan
+                    };
+                    let eff_rack_tune = if voice.rack_locks & rack_tune_bit != 0 {
+                        voice.rack_tune
+                    } else {
+                        rack_bus.tune
+                    };
+                    let eff_rack_cutoff = if voice.rack_locks & rack_cut_bit != 0 {
+                        voice.rack_cutoff_hz
+                    } else {
+                        rack_bus.cutoff
+                    };
+                    let eff_rack_res = if voice.rack_locks & rack_res_bit != 0 {
+                        voice.rack_resonance
+                    } else {
+                        rack_bus.resonance
+                    };
 
-                let base_zone = rack.zone(voice.zone_id);
-                let mut z_gain_db = if voice.zone_locks & zone_gain_bit != 0 {
-                    voice.zone_gain_db
-                } else {
-                    base_zone.map_or(voice.zone_gain_db, |z| z.gain_db)
-                };
-                let mut z_pan = if voice.zone_locks & zone_pan_bit != 0 {
-                    voice.zone_pan
-                } else {
-                    base_zone.map_or(voice.zone_pan, |z| z.pan)
-                };
+                    let base_zone = rack.zone(voice.zone_id);
+                    let mut z_gain_db = if voice.zone_locks & zone_gain_bit != 0 {
+                        voice.zone_gain_db
+                    } else {
+                        base_zone.map_or(voice.zone_gain_db, |z| z.gain_db)
+                    };
+                    let mut z_pan = if voice.zone_locks & zone_pan_bit != 0 {
+                        voice.zone_pan
+                    } else {
+                        base_zone.map_or(voice.zone_pan, |z| z.pan)
+                    };
 
-                for lane in &project.mod_lanes {
-                    if lane.inst_idx != idx_u8 {
-                        continue;
+                    if has_mod {
+                        for lane in &project.mod_lanes {
+                            if lane.inst_idx != idx_u8 {
+                                continue;
+                            }
+                            if let InstrumentParam::Zone { zone, param } = lane.target {
+                                if zone != voice.zone_id {
+                                    continue;
+                                }
+                                match param {
+                                    ZoneParam::Gain if voice.zone_locks & zone_gain_bit == 0 => {
+                                        z_gain_db = param.denormalize(lane.evaluate(auto_pos));
+                                    }
+                                    ZoneParam::Pan if voice.zone_locks & zone_pan_bit == 0 => {
+                                        z_pan = param.denormalize(lane.evaluate(auto_pos));
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
                     }
-                    if let InstrumentParam::Zone { zone, param } = lane.target {
-                        if zone != voice.zone_id {
+
+                    voice.set_rack_bus_targets(
+                        db_to_lin(eff_rack_gain + z_gain_db),
+                        eff_rack_pan,
+                        eff_rack_cutoff,
+                        eff_rack_res,
+                    );
+
+                    if dirty {
+                        if let Some(zone) = base_zone {
+                            voice.modular.update_continuous_from_zone(
+                                zone,
+                                z_pan,
+                                eff_rack_tune,
+                                project.bpm,
+                            );
+                        }
+                    } else {
+                        voice
+                            .modular
+                            .set_continuous_zone_pan_and_tune(z_pan, eff_rack_tune);
+                    }
+                }
+
+                if has_mod {
+                    for lane in &project.mod_lanes {
+                        if lane.inst_idx != idx_u8 {
                             continue;
                         }
-                        match param {
-                            ZoneParam::Gain if voice.zone_locks & zone_gain_bit == 0 => {
-                                z_gain_db = param.denormalize(lane.evaluate(auto_pos));
+                        match lane.target {
+                            InstrumentParam::Module {
+                                zone,
+                                module,
+                                param,
+                            } if zone == voice.zone_id => {
+                                voice.modular.apply_continuous_module_param(
+                                    module,
+                                    param,
+                                    lane.evaluate(auto_pos),
+                                );
                             }
-                            ZoneParam::Pan if voice.zone_locks & zone_pan_bit == 0 => {
-                                z_pan = param.denormalize(lane.evaluate(auto_pos));
+                            InstrumentParam::Cable { zone, cable } if zone == voice.zone_id => {
+                                voice
+                                    .modular
+                                    .apply_continuous_cable_norm(cable, lane.evaluate(auto_pos));
                             }
                             _ => {}
                         }
-                    }
-                }
-
-                voice.set_rack_bus_targets(
-                    db_to_lin(eff_rack_gain + z_gain_db),
-                    eff_rack_pan,
-                    eff_rack_cutoff,
-                    eff_rack_res,
-                );
-
-                if let Some(zone) = base_zone {
-                    voice.modular.update_continuous_from_zone(
-                        zone,
-                        z_pan,
-                        eff_rack_tune,
-                        project.bpm,
-                    );
-                }
-
-                for lane in &project.mod_lanes {
-                    if lane.inst_idx != idx_u8 {
-                        continue;
-                    }
-                    match lane.target {
-                        InstrumentParam::Module {
-                            zone,
-                            module,
-                            param,
-                        } if zone == voice.zone_id => {
-                            voice.modular.apply_continuous_module_param(
-                                module,
-                                param,
-                                lane.evaluate(auto_pos),
-                            );
-                        }
-                        InstrumentParam::Cable { zone, cable } if zone == voice.zone_id => {
-                            voice
-                                .modular
-                                .apply_continuous_cable_norm(cable, lane.evaluate(auto_pos));
-                        }
-                        _ => {}
                     }
                 }
             }
@@ -1133,16 +1226,41 @@ impl VoicePool {
 
     /// Render one stereo frame across all active voices (compacting finished
     /// slots in O(1)) and sum any active voice-steal micro-fade tails.
+    #[cfg(test)]
     pub(super) fn render_frame(
         &mut self,
         samples: &SampleBank,
         preview_ref: Option<&Arc<SampleData>>,
     ) -> VoiceFrameOut {
-        let mut out = VoiceFrameOut {
-            sources: [[0.0_f32; 2]; MAX_INSTRUMENTS],
-            preview: [0.0_f32; 2],
-            track_scope: [0.0_f32; MAX_INSTRUMENTS],
-        };
+        let mut block = VoiceBlockOut::new_boxed();
+        self.render_block(samples, preview_ref, 1, &mut block);
+        let mut sources = [[0.0_f32; 2]; MAX_INSTRUMENTS];
+        let mut track_scope = [0.0_f32; MAX_INSTRUMENTS];
+        for track in 0..MAX_INSTRUMENTS {
+            sources[track] = block.sources[track][0];
+            track_scope[track] = block.track_scope[track][0];
+        }
+        VoiceFrameOut {
+            sources,
+            track_scope,
+        }
+    }
+
+    /// Render an event-free sub-block (`1..=AUDIO_SUB_BLOCK_FRAMES`) across all active
+    /// voices (one full sub-block per voice for L1D cache locality) and sum any active
+    /// voice-steal micro-fade tails into `out`.
+    pub(super) fn render_block(
+        &mut self,
+        samples: &SampleBank,
+        preview_ref: Option<&Arc<SampleData>>,
+        frames: usize,
+        out: &mut VoiceBlockOut,
+    ) {
+        let n = frames.min(AUDIO_SUB_BLOCK_FRAMES);
+        out.clear_frames();
+        if n == 0 {
+            return;
+        }
 
         let mut active_idx = 0usize;
         while active_idx < self.active_voice_count {
@@ -1153,15 +1271,26 @@ impl VoicePool {
                 self.active_voices[active_idx] = self.active_voices[self.active_voice_count];
                 continue;
             }
-            let [left, right] = voice.next_stereo(samples, preview_ref);
             let track = voice.track as usize;
             if track < MAX_INSTRUMENTS {
-                out.track_scope[track] += stereo_mid_f32([left, right]);
-                out.sources[track][0] += left;
-                out.sources[track][1] += right;
+                let bit = 1u32 << track;
+                if out.source_active_mask & bit == 0 {
+                    out.sources[track][..n].fill([0.0; 2]);
+                    out.track_scope[track][..n].fill(0.0);
+                    out.source_active_mask |= bit;
+                }
+                voice.render_block(
+                    samples,
+                    preview_ref,
+                    &mut out.sources[track][..n],
+                    Some(&mut out.track_scope[track][..n]),
+                );
             } else {
-                out.preview[0] += left;
-                out.preview[1] += right;
+                if !out.preview_active {
+                    out.preview[..n].fill([0.0; 2]);
+                    out.preview_active = true;
+                }
+                voice.render_block(samples, preview_ref, &mut out.preview[..n], None);
             }
             let retired_mono = if !voice.active {
                 (voice.track != PREVIEW_TRACK && voice.modular.is_mono()).then(|| {
@@ -1190,22 +1319,38 @@ impl VoicePool {
             if fade.remaining == 0 {
                 continue;
             }
-            let gain = f32::from(fade.remaining) / f32::from(fade.total.max(1));
-            let l = fade.sample[0] * gain;
-            let r = fade.sample[1] * gain;
+            let inv_total = 1.0 / f32::from(fade.total.max(1));
+            let steps = n.min(usize::from(fade.remaining));
             let track = fade.track as usize;
             if track < MAX_INSTRUMENTS {
-                out.track_scope[track] += stereo_mid_f32([l, r]);
-                out.sources[track][0] += l;
-                out.sources[track][1] += r;
+                let bit = 1u32 << track;
+                if out.source_active_mask & bit == 0 {
+                    out.sources[track][..n].fill([0.0; 2]);
+                    out.track_scope[track][..n].fill(0.0);
+                    out.source_active_mask |= bit;
+                }
+                for i in 0..steps {
+                    let gain = f32::from(fade.remaining) * inv_total;
+                    let l = fade.sample[0] * gain;
+                    let r = fade.sample[1] * gain;
+                    out.track_scope[track][i] += stereo_mid_f32([l, r]);
+                    out.sources[track][i][0] += l;
+                    out.sources[track][i][1] += r;
+                    fade.remaining -= 1;
+                }
             } else {
-                out.preview[0] += l;
-                out.preview[1] += r;
+                if !out.preview_active {
+                    out.preview[..n].fill([0.0; 2]);
+                    out.preview_active = true;
+                }
+                for dst in &mut out.preview[..steps] {
+                    let gain = f32::from(fade.remaining) * inv_total;
+                    dst[0] += fade.sample[0] * gain;
+                    dst[1] += fade.sample[1] * gain;
+                    fade.remaining -= 1;
+                }
             }
-            fade.remaining -= 1;
         }
-
-        out
     }
 }
 

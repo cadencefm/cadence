@@ -7,10 +7,10 @@
 
 use crate::dsp::biquad::{DcBlocker, TptOnePoleLpf};
 use crate::dsp::math::{
-    clamp_freq_hz, control_stride_mask, db_to_lin, db_to_lin_f64, flush_denormal_f64,
-    mix_stereo_f64, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame, sanitize_sample,
-    sanitize_sample_f64, sanitize_sample_rate, BypassFader, BypassStep, LogSmoother, Smoother,
-    LIN_FLOOR_F64, NYQUIST_SAFE_RATIO,
+    clamp_freq_hz, control_stride_last_tick, control_stride_mask, db_to_lin, db_to_lin_f64,
+    flush_denormal_f64, mix_stereo_f64, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame,
+    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, BypassFader, BypassStep,
+    LogSmoother, Smoother, LIN_FLOOR_F64, NYQUIST_SAFE_RATIO,
 };
 use crate::mixer::{DriveMode, DrivePatch};
 
@@ -746,17 +746,58 @@ impl Drive {
         }
     }
 
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        self.drive.advance_silent(frames);
+        self.asymmetry.advance_silent(frames);
+        self.output_gain.advance_silent(frames);
+        self.mix.advance_silent(frames);
+        self.mode_xfade.advance_silent(frames);
+        if let Some(last_tick) = control_stride_last_tick(self.ctrl_count, self.ctrl_mask, frames) {
+            self.tone_hz.advance_silent(self.tone_coeff, last_tick + 1);
+            let tone = self.tone_hz.current();
+            let tone_bits = tone.to_bits();
+            if tone_bits != self.cached_tone_bits {
+                self.cached_tone_bits = tone_bits;
+                self.tone_lpf.set_cutoff(self.sample_rate, tone);
+            }
+            let rem = frames - 1 - last_tick;
+            if rem > 0 {
+                self.tone_hz.advance_silent(self.tone_coeff, rem);
+            }
+        } else {
+            self.tone_hz.advance_silent(self.tone_coeff, frames);
+        }
+        self.ctrl_count = self.ctrl_count.wrapping_add(frames as u32) & self.ctrl_mask;
+        let drv = self.drive.current();
+        let asym = self.asymmetry.current();
+        let key = (drv.to_bits(), asym.to_bits(), self.mode);
+        if key != self.cached_shaper_key {
+            self.cached_shaper_key = key;
+            self.cached_shaper = DriveShaperCoeffs::new(drv, asym, self.mode);
+        }
+    }
+
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
         let bypass_w = match self.bypass.step(bypassed) {
-            BypassStep::Idle => return dry,
+            BypassStep::Idle => {
+                self.advance_silent_frames(1, true);
+                return dry;
+            }
             BypassStep::SettledBypass => {
                 self.os.reset();
                 self.dry_align.reset();
                 self.tone_lpf.reset();
                 self.dc_blocker.reset();
                 self.bypass.mark_idle();
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::Active(w) => w,
@@ -815,8 +856,41 @@ impl crate::dsp::StereoEffect for Drive {
     }
 
     #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        if buf.is_empty() {
+            return;
+        }
+        self.has_processed = true;
+        if self.bypass.check_idle_bypass(bypassed) {
+            self.advance_silent_frames(buf.len(), true);
+            for frame in buf.iter_mut() {
+                *frame = sanitize_frame(*frame);
+            }
+            return;
+        }
+        for frame in buf.iter_mut() {
+            *frame = Drive::process(self, *frame, bypassed);
+        }
+    }
+
+    #[inline]
     fn reset(&mut self) {
         Drive::reset(self);
+    }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.bypass.is_settled_for(bypassed)
+            && (bypassed
+                || (self.os.quiet()
+                    && self.dry_align.quiet()
+                    && self.tone_lpf.quiet()
+                    && self.dc_blocker.quiet()))
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        Drive::advance_silent_frames(self, frames, bypassed);
     }
 }
 
@@ -1422,49 +1496,6 @@ mod tests {
             DriveShaperCoeffs::new(f64::NAN, 0.5, DriveMode::Tape).shape(0.5),
             0.5
         );
-    }
-
-    #[test]
-    fn drive_insert_parameter_sweeps_mode_crossfade_and_reset_stay_coherent() {
-        let sr = 48_000.0;
-        let mut drv = Drive::new(sr);
-        let p_tape = DrivePatch {
-            mode: DriveMode::Tape,
-            drive: 0.65,
-            asymmetry: 0.3,
-            tone_hz: 6_000.0,
-            output_db: -2.0,
-            mix: 1.0,
-        };
-        let p_fold = DrivePatch {
-            mode: DriveMode::Fold,
-            drive: 0.8,
-            asymmetry: -0.4,
-            tone_hz: 12_000.0,
-            output_db: 1.0,
-            mix: 1.0,
-        };
-        drv.set_parameters(p_tape);
-        for i in 0..512 {
-            let s = (std::f64::consts::TAU * 330.0 * i as f64 / sr).sin() as f32 * 0.6;
-            let out = drv.process([s, -s], false);
-            assert!(out[0].is_finite() && out[1].is_finite());
-        }
-        // Switch mode + parameters mid-stream (exercises mode crossfade and cache refresh).
-        drv.set_parameters(p_fold);
-        for i in 512..3072 {
-            let s = (std::f64::consts::TAU * 330.0 * i as f64 / sr).sin() as f32 * 0.6;
-            let out = drv.process([s, -s], false);
-            assert!(out[0].is_finite() && out[1].is_finite());
-        }
-        // After reset + fresh init at p_fold, steady-state outputs must match bit-for-bit.
-        drv.reset();
-        let mut fresh = Drive::new(sr);
-        fresh.set_parameters(p_fold);
-        for i in 0..256 {
-            let s = (std::f64::consts::TAU * 440.0 * i as f64 / sr).sin() as f32 * 0.5;
-            assert_eq!(drv.process([s, s], false), fresh.process([s, s], false));
-        }
     }
 
     #[test]

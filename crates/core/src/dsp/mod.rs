@@ -22,6 +22,9 @@ pub mod reverb;
 pub mod sampler_voice;
 pub mod saturate;
 
+#[cfg(test)]
+mod contract_tests;
+
 pub use biquad::{
     eq_response_db, BiquadCoeffs, DcBlocker, Eq, StereoBiquad, TptOnePoleHpf, TptOnePoleLpf,
 };
@@ -54,16 +57,16 @@ pub use lofi::{
     LOFI_MAX_BITS, LOFI_MAX_RATE_HZ, LOFI_MIN_BITS, LOFI_MIN_RATE_HZ,
 };
 pub use math::{
-    clamp_freq_hz, control_stride_mask, db_to_lin, db_to_lin_f64, decay_coeff_60db_ms,
-    flush_denormal_f32, flush_denormal_f64, glide_coeff_ms, hann_fade_in, hann_fade_out,
-    hermite4_f32, hermite4_f64, lin_to_db, lin_to_db_f64, log_to_norm, midi_to_hz, mix_stereo_f32,
-    mix_stereo_f64, norm_to_log, octaves_to_ratio_f32, octaves_to_ratio_f64, one_pole_coeff_ms,
-    one_pole_decay_ms, sanitize_clamp_f32, sanitize_clamp_f64, sanitize_frame, sanitize_sample,
-    sanitize_sample_f64, sanitize_sample_rate, semitones_to_ratio_f32, semitones_to_ratio_f64,
-    smooth_step_f32, smooth_step_f64, BypassFader, BypassStep, LogSmoother, PeakHold, Smoother,
-    BYPASS_FADE_MS, BYPASS_SETTLE_EPS, CHOKE_MS, DECAY_LN_60DB, FAST_RELEASE_MS, LN_100,
-    NYQUIST_SAFE_RATIO, SMOOTH_SETTLE_EPS_F32, SMOOTH_SETTLE_EPS_F64, TAIL_SILENCE_FLOOR_F32,
-    TAIL_SILENCE_FLOOR_F64,
+    clamp_freq_hz, control_stride_last_tick, control_stride_mask, db_to_lin, db_to_lin_f64,
+    decay_coeff_60db_ms, flush_denormal_f32, flush_denormal_f64, glide_coeff_ms, hann_fade_in,
+    hann_fade_out, hermite4_f32, hermite4_f64, lin_to_db, lin_to_db_f64, log_to_norm, midi_to_hz,
+    mix_stereo_f32, mix_stereo_f64, norm_to_log, octaves_to_ratio_f32, octaves_to_ratio_f64,
+    one_pole_coeff_ms, one_pole_decay_ms, sanitize_clamp_f32, sanitize_clamp_f64, sanitize_frame,
+    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, semitones_to_ratio_f32,
+    semitones_to_ratio_f64, smooth_step_f32, smooth_step_f64, BypassFader, BypassStep, LogSmoother,
+    PeakHold, Smoother, AUDIO_SUB_BLOCK_FRAMES, BYPASS_FADE_MS, BYPASS_SETTLE_EPS, CHOKE_MS,
+    DECAY_LN_60DB, FAST_RELEASE_MS, LN_100, NYQUIST_SAFE_RATIO, SMOOTH_SETTLE_EPS_F32,
+    SMOOTH_SETTLE_EPS_F64, TAIL_SILENCE_FLOOR_F32, TAIL_SILENCE_FLOOR_F64,
 };
 pub use noise::{
     mix_seed, NoiseGen, PinkFilter, XorShift32, GOLDEN_RATIO_32, NOISE_REF_SAMPLE_RATE,
@@ -100,6 +103,31 @@ pub trait StereoEffect {
     /// with click-free crossfade and consistent delay/tail handling.
     fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2];
 
+    /// Process a contiguous stereo sub-block in place with bit-exact parity to
+    /// frame-by-frame [`StereoEffect::process`].
+    #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        for frame in buf.iter_mut() {
+            *frame = self.process(*frame, bypassed);
+        }
+    }
+
+    /// Process a contiguous stereo sub-block in place, additionally writing per-frame
+    /// instantaneous gain reduction in dB into `gr_out` for dynamics processors.
+    ///
+    /// Returns `true` if this effect produces dynamics gain-reduction telemetry
+    /// (`Compressor`, `Limiter`), or `false` otherwise.
+    #[inline]
+    fn process_block_with_gr(
+        &mut self,
+        buf: &mut [[f32; 2]],
+        bypassed: bool,
+        _gr_out: &mut [f32],
+    ) -> bool {
+        self.process_block(buf, bypassed);
+        false
+    }
+
     /// Clear internal filter/delay/envelope state without heap allocation.
     fn reset(&mut self);
 
@@ -112,70 +140,14 @@ pub trait StereoEffect {
     fn gain_reduction_db(&self) -> Option<f32> {
         None
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+    /// True when internal delay/reverb/filter/envelope/lookahead state is completely
+    /// drained and bypass crossfade is settled for `bypassed`, so feeding `[0.0, 0.0]`
+    /// produces `[0.0, 0.0]` with no ringing tail or state drift.
+    fn is_quiet(&self, bypassed: bool) -> bool;
 
-    fn run_stereo_effect<E: StereoEffect>(
-        effect: &mut E,
-        input: [f32; 2],
-        bypassed: bool,
-    ) -> [f32; 2] {
-        effect.process(input, bypassed)
-    }
-
-    #[test]
-    fn stereo_effect_trait_dispatches_across_all_eight_studio_effects() {
-        let sr = 48_000.0;
-        let sr_u32 = 48_000_u32;
-
-        let mut eq = Eq::new(sr);
-        let mut filter = RhythmicFilter::new(sr);
-        let mut compressor = Compressor::new(sr);
-        let mut limiter = Limiter::new(sr);
-        let mut drive = Drive::new(sr);
-        let mut chorus = Chorus::new(sr);
-        let mut delay = Delay::with_max_seconds(sr_u32, 1.0);
-        let mut reverb = Reverb::new(sr_u32);
-
-        let effects: [&mut dyn StereoEffect; 8] = [
-            &mut eq,
-            &mut filter,
-            &mut compressor,
-            &mut limiter,
-            &mut drive,
-            &mut chorus,
-            &mut delay,
-            &mut reverb,
-        ];
-
-        for (idx, effect) in effects.into_iter().enumerate() {
-            let expected_latency = if idx == 3 {
-                limiter_lookahead_frames(sr)
-            } else {
-                0
-            };
-            assert_eq!(effect.latency_frames(), expected_latency);
-
-            let expects_gr = idx == 2 || idx == 3;
-            assert_eq!(effect.gain_reduction_db().is_some(), expects_gr);
-
-            let out = effect.process([0.5, -0.25], false);
-            assert!(out[0].is_finite() && out[1].is_finite());
-            effect.reset();
-        }
-
-        // Verify static generic dispatch alongside dynamic dispatch.
-        let out = run_stereo_effect(&mut eq, [0.25, -0.5], true);
-        assert_eq!(out, [0.25, -0.5]);
-        assert_eq!(
-            StereoEffect::latency_frames(&limiter),
-            limiter_lookahead_frames(sr)
-        );
-        assert_eq!(StereoEffect::gain_reduction_db(&compressor), Some(0.0));
-        assert_eq!(StereoEffect::gain_reduction_db(&limiter), Some(0.0));
-        assert_eq!(StereoEffect::gain_reduction_db(&eq), None);
-    }
+    /// Advance parameter smoothers, control-rate coefficient caches, and free-running
+    /// clocks/LFOs across `frames` silent or idle-bypassed samples without running the
+    /// audio processing path.
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool);
 }

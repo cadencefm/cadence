@@ -135,17 +135,19 @@ fn wait_until(pred: impl Fn() -> bool) {
 
 #[test]
 fn offline_render_is_deterministic_and_produces_non_silent_wav() {
-    let score = Project::demo().compile().unwrap();
-    let (r1, pcm1) = render_schedule_pcm(&[(0, &score)], 0, 2 * 16, Vec::new(), 24_000).unwrap();
-    let (r2, pcm2) = render_schedule_pcm(&[(0, &score)], 0, 2 * 16, Vec::new(), 24_000).unwrap();
+    let fx = crate::test_fixtures::kitchen_sink_fixture(24_000);
+    let (r1, pcm1) =
+        render_schedule_pcm(&[(0, &fx.score)], 0, 2 * 16, fx.samples.clone(), 24_000).unwrap();
+    let (r2, pcm2) =
+        render_schedule_pcm(&[(0, &fx.score)], 0, 2 * 16, fx.samples.clone(), 24_000).unwrap();
     assert_eq!(pcm1, pcm2);
     assert_eq!(r1, r2);
     assert!(r1.output.peak[0] > 0.05);
     assert!(r1.output.rms[0] > 0.01);
 
     let dir = tempfile::tempdir().unwrap();
-    let wav = dir.path().join("demo.wav");
-    render_wav_with_samples(&score, Vec::new(), &wav, 1, 24_000).unwrap();
+    let wav = dir.path().join("kitchen_sink.wav");
+    render_wav_with_samples(&fx.score, fx.samples, &wav, 1, 24_000).unwrap();
     let reader = hound::WavReader::open(&wav).unwrap();
     assert_eq!(reader.spec().sample_rate, 24_000);
     assert_eq!(reader.spec().channels, 2);
@@ -844,28 +846,76 @@ fn acid_303_accent_and_drumkit_rack_with_hat_choke_render_cleanly() {
 
 #[test]
 fn per_channel_stem_export_writes_master_and_isolated_audio_stems() {
-    let dir = tempfile::tempdir().unwrap();
-    let project = Project::demo();
+    let dir1 = tempfile::tempdir().unwrap();
+    let dir2 = tempfile::tempdir().unwrap();
+    let fx = crate::test_fixtures::kitchen_sink_fixture(24_000);
     let flags = cadence_core::mixer::LiveFlags::default();
-    let expected_audio_channels = project
+    let expected_audio_channels = fx
+        .project
         .mixer
         .channels
         .iter()
         .filter(|c| c.kind == ChannelKind::Audio)
         .count();
-    let summary =
-        render_stems_with_samples_report(&project, &flags, Vec::new(), dir.path(), 0, 16, 24_000)
-            .unwrap();
-    assert!(summary.master_path.is_file());
-    assert_eq!(summary.stem_paths.len(), expected_audio_channels);
-    for stem in &summary.stem_paths {
-        assert!(stem.is_file(), "Missing stem {}", stem.display());
-        let reader = hound::WavReader::open(stem).unwrap();
+    let summary1 = render_stems_with_samples_report(
+        &fx.project,
+        &flags,
+        fx.samples.clone(),
+        dir1.path(),
+        0,
+        16,
+        24_000,
+    )
+    .unwrap();
+    let summary2 = render_stems_with_samples_report(
+        &fx.project,
+        &flags,
+        fx.samples,
+        dir2.path(),
+        0,
+        16,
+        24_000,
+    )
+    .unwrap();
+
+    assert!(summary1.master_path.is_file());
+    assert_eq!(summary1.stem_paths.len(), expected_audio_channels);
+    assert_eq!(summary1.master_report, summary2.master_report);
+    assert_eq!(
+        std::fs::read(&summary1.master_path).unwrap(),
+        std::fs::read(&summary2.master_path).unwrap(),
+        "parallel stem export Master WAV must be bit-identical across runs"
+    );
+    for (idx, (stem1, stem2)) in summary1
+        .stem_paths
+        .iter()
+        .zip(summary2.stem_paths.iter())
+        .enumerate()
+    {
+        assert!(stem1.is_file(), "Missing stem {}", stem1.display());
+        assert_eq!(stem1.file_name(), stem2.file_name());
+        let expected_prefix = format!("{:02}-", idx + 1);
+        assert!(
+            stem1
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&expected_prefix),
+            "stem {idx} filename order mismatch: {}",
+            stem1.display()
+        );
+        let reader = hound::WavReader::open(stem1).unwrap();
         assert_eq!(reader.spec().channels, 2);
         assert_eq!(reader.spec().sample_rate, 24_000);
         assert!(reader.len() > 0);
+        assert_eq!(
+            std::fs::read(stem1).unwrap(),
+            std::fs::read(stem2).unwrap(),
+            "parallel stem export {} must be bit-identical across runs",
+            stem1.display()
+        );
     }
-    assert!(summary.master_report.output.peak[0] > 0.05);
+    assert!(summary1.master_report.output.peak[0] > 0.05);
 }
 
 #[test]
@@ -1604,8 +1654,8 @@ fn render_report_records_float_channel_headroom_and_compressor_limiter_gr_stats(
 
 #[test]
 fn silent_runtime_audio_tap_ring_captures_live_stereo_and_stops_cleanly() {
-    let score = Project::demo().compile().unwrap();
-    let rt = AudioRuntime::start(score, true).unwrap();
+    let fx = crate::test_fixtures::kitchen_sink_fixture(48_000);
+    let rt = AudioRuntime::start(fx.score, true).unwrap();
     assert_eq!(rt.sample_rate(), 48_000);
 
     let tap = rt.tap_handle();
@@ -1953,23 +2003,6 @@ fn plock_vs_modlane_precedence_across_module_cable_zone_and_rack_params() {
         }
         other => panic!("expected Out params, got {other:?}"),
     }
-}
-
-#[test]
-fn audio_engine_next_frame_is_strictly_zero_heap_alloc_under_triggers_chokes_and_modlanes() {
-    // Combine Project::demo() (multi-track modular synth + bass + drum kit with chokes + ModLanes)
-    // and verify Engine::next_frame() performs ZERO heap allocations / frees / reallocs!
-    let score = Project::demo().compile().unwrap();
-    let shared = Shared::new_arc();
-    shared.playing.store(true, Ordering::Release);
-    let mut engine = Engine::new(score, Vec::new(), 24_000, shared);
-
-    crate::mix_engine::tests::assert_no_heap_operations(|| {
-        for _ in 0..8_000 {
-            let frame = engine.next_frame();
-            assert!(frame[0].is_finite() && frame[1].is_finite());
-        }
-    });
 }
 
 #[test]
@@ -4135,4 +4168,411 @@ fn voice_steal_micro_fade_contributes_to_track_scope() {
     let after_remove = pool.render_frame(&samples, None);
     assert_eq!(after_remove.sources[1], [0.0, 0.0]);
     assert_eq!(after_remove.track_scope[1], 0.0);
+}
+
+#[test]
+fn kitchen_sink_render_block_matches_next_frame_bit_exact_and_is_zero_alloc() {
+    let sr = 24_000u32;
+    let fx = crate::test_fixtures::kitchen_sink_fixture(sr);
+    let total_frames = 6_144usize;
+
+    let mut reference = vec![[0.0_f32; 2]; total_frames];
+    {
+        let shared = Shared::new_arc();
+        shared.playing.store(true, Ordering::Release);
+        let mut engine = Engine::new(fx.score.clone(), fx.samples.clone(), sr, shared);
+        crate::mix_engine::tests::assert_no_heap_operations(|| {
+            for dst in &mut reference {
+                let frame = engine.next_frame();
+                assert!(frame[0].is_finite() && frame[1].is_finite());
+                *dst = frame;
+            }
+        });
+    }
+
+    assert!(
+        reference
+            .iter()
+            .any(|&[l, r]| l.abs() > 0.1 || r.abs() > 0.1),
+        "kitchen-sink reference render must produce audible output"
+    );
+
+    for &block_size in &[1usize, 7, 31, 64, 128, 256, 512] {
+        let shared = Shared::new_arc();
+        shared.playing.store(true, Ordering::Release);
+        let mut engine = Engine::new(fx.score.clone(), fx.samples.clone(), sr, shared);
+        let mut rendered = vec![[0.0_f32; 2]; total_frames];
+        crate::mix_engine::tests::assert_no_heap_operations(|| {
+            for chunk in rendered.chunks_mut(block_size) {
+                engine.render_block(chunk);
+            }
+        });
+        for (i, (&got, &want)) in rendered.iter().zip(reference.iter()).enumerate() {
+            assert_eq!(
+                [got[0].to_bits(), got[1].to_bits()],
+                [want[0].to_bits(), want[1].to_bits()],
+                "kitchen-sink block_size={block_size} diverged at frame {i}: got={got:?}, want={want:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn kitchen_sink_sleeping_matches_always_awake_across_audio_meters_and_gr() {
+    let sr = 24_000u32;
+    let fx = crate::test_fixtures::kitchen_sink_fixture(sr);
+    let hotswap_score = crate::test_fixtures::kitchen_sink_hotswap_variant(&fx.project);
+
+    // Render all 4 bars (64 steps) with a mid-stream live score hot-swap at step 40.
+    let total_steps = 64u64;
+    let swap_step = 40u64;
+
+    let run_engine = |disable_sleep: bool| {
+        let shared = Shared::new_arc();
+        shared.playing.store(true, Ordering::Release);
+        let mut engine = Engine::new(fx.score.clone(), fx.samples.clone(), sr, shared);
+        engine.set_disable_sleep(disable_sleep);
+
+        let mut swapped = false;
+        let mut audio = Vec::with_capacity(sr as usize * 8);
+        let mut chunk = [[0.0_f32; 2]; 64];
+
+        // Pre-allocate outer Vec outside RT assertion; render steady-state blocks zero-alloc.
+        let mut guard_blocks = 0usize;
+        while engine.play_step() < total_steps && guard_blocks < 4096 {
+            if !swapped && engine.play_step() >= swap_step {
+                engine.publish_score_update(hotswap_score.clone());
+                swapped = true;
+            }
+            if !disable_sleep {
+                crate::mix_engine::tests::assert_no_heap_operations(|| {
+                    engine.render_block(&mut chunk);
+                });
+            } else {
+                engine.render_block(&mut chunk);
+            }
+            audio.extend_from_slice(&chunk);
+            guard_blocks += 1;
+        }
+        assert!(swapped, "hot-swap must have triggered during 4-bar render");
+        assert!(
+            engine.play_step() >= total_steps,
+            "engine failed to reach step {total_steps}"
+        );
+        let (channels, effects) = engine.collect_render_telemetry();
+        (audio, channels, effects)
+    };
+
+    let (sleep_audio, sleep_ch, sleep_fx) = run_engine(false);
+    let (awake_audio, awake_ch, awake_fx) = run_engine(true);
+
+    assert_eq!(sleep_audio.len(), awake_audio.len());
+    let mut peak = 0.0_f32;
+    for (i, (&s, &a)) in sleep_audio.iter().zip(awake_audio.iter()).enumerate() {
+        assert!(s[0].is_finite() && s[1].is_finite());
+        let err = (s[0] - a[0]).abs().max((s[1] - a[1]).abs());
+        peak = peak.max(s[0].abs()).max(s[1].abs());
+        assert!(
+            err < 1e-5,
+            "sleeping vs awake audio diverged at frame {i}: sleep={s:?}, awake={a:?}, err={err}"
+        );
+    }
+    assert!(
+        peak > 0.15,
+        "kitchen-sink oracle must render audible signal (peak={peak})"
+    );
+
+    // Verify channel metering parity (including muted channels' live pre-insert input metering).
+    assert_eq!(sleep_ch.len(), awake_ch.len());
+    assert!(sleep_ch.len() >= 10);
+    for (s, a) in sleep_ch.iter().zip(awake_ch.iter()) {
+        assert_eq!(s.channel, a.channel);
+        assert_eq!(s.name, a.name);
+        assert_eq!(s.hot, a.hot, "channel {} hot mismatch", s.name);
+        assert_eq!(s.clipped, a.clipped, "channel {} clipped mismatch", s.name);
+        for c in 0..2 {
+            assert!(
+                (s.input_peak_hold[c] - a.input_peak_hold[c]).abs() < 1e-4,
+                "channel {} ch{c} input_peak_hold mismatch: sleep={} awake={}",
+                s.name,
+                s.input_peak_hold[c],
+                a.input_peak_hold[c]
+            );
+            assert!(
+                (s.output_peak_hold[c] - a.output_peak_hold[c]).abs() < 1e-4,
+                "channel {} ch{c} output_peak_hold mismatch: sleep={} awake={}",
+                s.name,
+                s.output_peak_hold[c],
+                a.output_peak_hold[c]
+            );
+        }
+    }
+
+    // Verify dynamics gain-reduction telemetry parity across all Compressor & Limiter inserts.
+    assert_eq!(sleep_fx.len(), awake_fx.len());
+    assert!(
+        sleep_fx.len() >= 5,
+        "expected >= 5 dynamics devices in kitchen-sink rig, got {}",
+        sleep_fx.len()
+    );
+    for (s, a) in sleep_fx.iter().zip(awake_fx.iter()) {
+        assert_eq!(s.device_id, a.device_id);
+        assert!(
+            (s.max_gr_db - a.max_gr_db).abs() < 1e-3,
+            "device {} max_gr_db mismatch: sleep={} awake={}",
+            s.device_id,
+            s.max_gr_db,
+            a.max_gr_db
+        );
+        assert!(
+            (s.avg_gr_db - a.avg_gr_db).abs() < 1e-3,
+            "device {} avg_gr_db mismatch: sleep={} awake={}",
+            s.device_id,
+            s.avg_gr_db,
+            a.avg_gr_db
+        );
+    }
+}
+
+#[test]
+fn runtime_replace_project_coalesces_rapid_effect_adds_kind_swaps_and_boundary_reloads() {
+    use cadence_core::dsp::limiter_lookahead_frames;
+    use cadence_core::mixer::{
+        ChorusPatch, CompressorPatch, DelayPatch, DrivePatch, EffectKind, EqPatch, FilterPatch,
+        LimiterPatch, ReverbPatch,
+    };
+
+    let base_proj = rack_project(vec![note(1); 16], RackPatch::default_synth());
+    let base_score = base_proj.compile().unwrap();
+    let rt = AudioRuntime::start(base_score, true).unwrap();
+    let sr = rt.sample_rate();
+    assert_eq!(rt.snapshot().health.pdc_latency_frames, 0);
+    assert!(rt.transport(TransportIntent::Play { playing: true }));
+    wait_until(|| rt.snapshot().peak > 0.02);
+
+    // Rapidly publish two non-boundary edits back-to-back so publish_merged coalesces them:
+    // Edit 1 adds Delay(10) + Limiter(11); Edit 2 swaps 10 -> Chorus(10), keeps Limiter(11),
+    // and adds Reverb(12) + Compressor(13).
+    let mut edit1 = base_proj.clone();
+    edit1.mixer.channels[0].inserts = vec![
+        EffectDevice {
+            id: 10,
+            name: "Delay".into(),
+            bypassed: false,
+            kind: EffectKind::Delay(DelayPatch::default()),
+        },
+        EffectDevice {
+            id: 11,
+            name: "Lim".into(),
+            bypassed: false,
+            kind: EffectKind::Limiter(LimiterPatch {
+                ceiling_db: -6.0,
+                input_drive_db: 9.0,
+                release_ms: 40.0,
+                mix: 1.0,
+            }),
+        },
+    ];
+    let mut edit2 = edit1.clone();
+    edit2.mixer.channels[0].inserts[0] = EffectDevice {
+        id: 10,
+        name: "Chorus".into(),
+        bypassed: false,
+        kind: EffectKind::Chorus(ChorusPatch::default()),
+    };
+    edit2.mixer.channels[0].inserts.push(EffectDevice {
+        id: 12,
+        name: "Verb".into(),
+        bypassed: false,
+        kind: EffectKind::Reverb(ReverbPatch::default()),
+    });
+    edit2.mixer.master.inserts.push(EffectDevice {
+        id: 13,
+        name: "Comp".into(),
+        bypassed: false,
+        kind: EffectKind::Compressor(CompressorPatch {
+            threshold_db: -24.0,
+            ratio: 6.0,
+            ..CompressorPatch::default()
+        }),
+    });
+
+    rt.replace_project_with_assets(edit1.compile().unwrap(), None, false)
+        .unwrap();
+    rt.replace_project_with_assets(edit2.compile().unwrap(), None, false)
+        .unwrap();
+
+    let expected_pdc = limiter_lookahead_frames(f64::from(sr)) as u32;
+    wait_until(|| {
+        let snap = rt.snapshot();
+        snap.health.pdc_latency_frames == expected_pdc
+            && snap.effect_meters.iter().any(|m| m.device_id == 11)
+            && snap.effect_meters.iter().any(|m| m.device_id == 13)
+            && snap.peak > 0.01
+    });
+
+    // Rapid boundary project reload followed immediately by a non-boundary knob edit while
+    // the boundary load may still be queued: must carry forward both sample bank and fresh FX!
+    let mut reload_proj = rack_project(vec![note(1); 16], RackPatch::default_sampler());
+    {
+        let smp = sampler_mut(&mut reload_proj.instruments[0].rack);
+        smp.path = Some("./test.wav".into());
+        smp.sample_start = 0;
+        smp.sample_end = 4_800;
+        smp.loop_mode = SampleLoopMode::Forward;
+        smp.loop_start = 100;
+        smp.loop_end = 4_400;
+        smp.one_shot = false;
+    }
+    reload_proj.mixer.channels[0].inserts = vec![
+        EffectDevice {
+            id: 20,
+            name: "Eq".into(),
+            bypassed: false,
+            kind: EffectKind::Eq(EqPatch {
+                hpf_hz: 80.0,
+                high_db: 2.0,
+                ..EqPatch::default()
+            }),
+        },
+        EffectDevice {
+            id: 21,
+            name: "Drive".into(),
+            bypassed: false,
+            kind: EffectKind::Drive(DrivePatch::default()),
+        },
+        EffectDevice {
+            id: 22,
+            name: "Filter".into(),
+            bypassed: false,
+            kind: EffectKind::Filter(FilterPatch::default()),
+        },
+    ];
+    reload_proj.mixer.master.inserts = vec![EffectDevice {
+        id: 23,
+        name: "MasterLim".into(),
+        bypassed: false,
+        kind: EffectKind::Limiter(LimiterPatch {
+            ceiling_db: -3.0,
+            input_drive_db: 6.0,
+            release_ms: 40.0,
+            mix: 1.0,
+        }),
+    }];
+    let mut reload_tweak = reload_proj.clone();
+    reload_tweak.bpm = 132.0;
+
+    let sample = synthetic_sample(4_800, sr, 440.0);
+    let bank = vec![(module_sample_key(1, 1, 1), sample)];
+
+    rt.replace_project_with_assets(reload_proj.compile().unwrap(), Some(bank), true)
+        .unwrap();
+    rt.replace_project_with_assets(reload_tweak.compile().unwrap(), None, false)
+        .unwrap();
+
+    wait_until(|| {
+        let snap = rt.snapshot();
+        snap.health.pdc_latency_frames == expected_pdc
+            && snap.effect_meters.iter().any(|m| m.device_id == 23)
+            && !snap.effect_meters.iter().any(|m| m.device_id == 11)
+            && snap.peak > 0.01
+    });
+    assert!(rt.snapshot().peak.is_finite());
+}
+
+#[test]
+fn reconfigure_preserves_transport_step_inside_live_window_and_resumes_audible_playback() {
+    use crate::audio::engine::resolve_reconfigure_start_step;
+    use crate::audio::shared::unpack_step_position;
+    use cadence_core::live::Performance;
+    use cadence_core::material::LIVE_RING_STEPS;
+    use cadence_core::mixer::LiveFlags;
+
+    let proj = rack_project(vec![note(1); 16], RackPatch::default_synth());
+    let flags = LiveFlags::default();
+    let mut perf = Performance::new(&proj);
+
+    // Advance past half the live ring so `live_window.start >= LIVE_RING_STEPS / 2` (512).
+    let paused_step = LIVE_RING_STEPS / 2 + 28;
+    perf.next_step = paused_step;
+    let live_score = perf.compile(&proj, &flags, None).unwrap();
+    let window = live_score.live_window.expect("live score must have window");
+    assert!(window.start >= LIVE_RING_STEPS / 2);
+    assert!(window.contains(paused_step));
+
+    // Simulate a 48 kHz -> 44.1 kHz output device switch while paused at `paused_step`.
+    let shared = Shared::new_arc();
+    shared.sample_rate.store(48_000, Ordering::Release);
+    shared.next_step.store(paused_step, Ordering::Release);
+    let preserved = shared.next_step.load(Ordering::Acquire);
+    let start_step = resolve_reconfigure_start_step(&live_score, preserved);
+    assert_eq!(start_step, paused_step);
+
+    shared.reset_for_reconfigure(start_step);
+    assert_eq!(shared.next_step.load(Ordering::Acquire), paused_step);
+    assert_eq!(
+        unpack_step_position(shared.step_position.load(Ordering::Acquire)),
+        (paused_step, 0.0)
+    );
+
+    let mut engine = Engine::new_at_step(
+        live_score.clone(),
+        Vec::new(),
+        44_100,
+        start_step,
+        Arc::clone(&shared),
+    );
+    assert_eq!(engine.play_step(), paused_step);
+
+    // Pressing Play immediately produces audible output at 44.1 kHz without waiting for step 0 -> 512.
+    assert!(shared.push_transport(TransportIntent::Play { playing: true }));
+    engine.poll_controls();
+    let mut buf = [[0.0_f32; 2]; 64];
+    let mut peak = 0.0_f32;
+    for _ in 0..16 {
+        engine.render_block(&mut buf);
+        for &[l, r] in &buf {
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+    }
+    assert!(
+        peak > 0.05,
+        "playback after 48k -> 44.1k reconfigure must produce immediate audio, got peak={peak}"
+    );
+    assert!(
+        engine.play_step() > paused_step,
+        "play_step must advance from preserved step {paused_step}, got {}",
+        engine.play_step()
+    );
+
+    // Out-of-window fallback: if `preserved_step` lies outside a freshly rewound `live_window`
+    // (e.g., user pressed Home while a failed stream couldn't consume Seek(0)), clamp to `window.start`.
+    perf.next_step = 0;
+    let rewound_score = perf.compile(&proj, &flags, None).unwrap();
+    let rewound_window = rewound_score.live_window.expect("rewound live window");
+    assert_eq!(rewound_window.start, 0);
+    let clamped = resolve_reconfigure_start_step(&rewound_score, LIVE_RING_STEPS + 500);
+    assert_eq!(clamped, rewound_window.start);
+
+    shared.reset_for_reconfigure(clamped);
+    let mut rewound_engine = Engine::new_at_step(
+        rewound_score,
+        Vec::new(),
+        44_100,
+        clamped,
+        Arc::clone(&shared),
+    );
+    assert!(shared.push_transport(TransportIntent::Play { playing: true }));
+    rewound_engine.poll_controls();
+    let mut rewound_peak = 0.0_f32;
+    for _ in 0..16 {
+        rewound_engine.render_block(&mut buf);
+        for &[l, r] in &buf {
+            rewound_peak = rewound_peak.max(l.abs()).max(r.abs());
+        }
+    }
+    assert!(
+        rewound_peak > 0.05,
+        "clamped start_step must also produce immediate audio, got peak={rewound_peak}"
+    );
 }

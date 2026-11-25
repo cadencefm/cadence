@@ -10,9 +10,10 @@
 use crate::dsp::biquad::TptOnePoleLpf;
 use crate::dsp::gain::stereo_ms_width_uncorrelated;
 use crate::dsp::math::{
-    clamp_freq_hz, control_stride_mask, flush_denormal_f32, hann_fade_in, log_to_norm,
-    mix_stereo_f32, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame, sanitize_sample_rate,
-    BypassFader, BypassStep, LogSmoother, Smoother, NYQUIST_SAFE_RATIO, TAIL_SILENCE_FLOOR_F32,
+    clamp_freq_hz, control_stride_last_tick, control_stride_mask, flush_denormal_f32, hann_fade_in,
+    log_to_norm, mix_stereo_f32, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame,
+    sanitize_sample_rate, BypassFader, BypassStep, LogSmoother, Smoother, NYQUIST_SAFE_RATIO,
+    TAIL_SILENCE_FLOOR_F32,
 };
 use crate::mixer::ReverbPatch;
 
@@ -210,7 +211,8 @@ pub struct Reverb {
     target: ReverbPatch,
     ctrl_count: u32,
     ctrl_mask: u32,
-    silent_bypass_frames: u32,
+    tail_silent_frames: u32,
+    tail_quiet: bool,
     has_processed: bool,
 }
 
@@ -260,7 +262,8 @@ impl Reverb {
             target: default,
             ctrl_count: 0,
             ctrl_mask: control_stride_mask(sr, 3_000.0),
-            silent_bypass_frames: 0,
+            tail_silent_frames: 0,
+            tail_quiet: true,
             has_processed: false,
         };
         effect.set_parameters(default);
@@ -318,7 +321,8 @@ impl Reverb {
         self.width.snap(self.width.target());
         self.bypass.reset();
         self.ctrl_count = 0;
-        self.silent_bypass_frames = 0;
+        self.tail_silent_frames = 0;
+        self.tail_quiet = true;
         self.has_processed = false;
         self.set_parameters(self.target);
     }
@@ -390,7 +394,11 @@ impl Reverb {
             self.mix.snap(mix);
             self.width.snap(width);
         } else {
-            if self.size_xfade >= 1.0 && new_lengths != self.lengths_a {
+            if self.tail_quiet {
+                self.lengths_a = new_lengths;
+                self.lengths_b = new_lengths;
+                self.size_xfade = 1.0;
+            } else if self.size_xfade >= 1.0 && new_lengths != self.lengths_a {
                 self.lengths_b = new_lengths;
                 self.size_xfade = 0.0;
             }
@@ -404,21 +412,53 @@ impl Reverb {
         }
     }
 
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        if let Some(last_tick) = control_stride_last_tick(self.ctrl_count, self.ctrl_mask, frames) {
+            self.damping_hz
+                .advance_silent(self.damping_coeff, last_tick + 1);
+            let damp = self.damping_hz.current();
+            let damp_bits = damp.to_bits();
+            if damp_bits != self.cached_damping_bits {
+                self.cached_damping_bits = damp_bits;
+                for lpf in &mut self.damping_lpf {
+                    lpf.set_cutoff(self.sample_rate, damp);
+                }
+            }
+            let rem = frames - 1 - last_tick;
+            if rem > 0 {
+                self.damping_hz.advance_silent(self.damping_coeff, rem);
+            }
+        } else {
+            self.damping_hz.advance_silent(self.damping_coeff, frames);
+        }
+        self.ctrl_count = self.ctrl_count.wrapping_add(frames as u32) & self.ctrl_mask;
+        self.predelay_frames.advance_silent(frames);
+        self.mix.advance_silent(frames);
+        self.width.advance_silent(frames);
+        for fb in &mut self.feedback {
+            fb.advance_silent(frames);
+        }
+        self.lengths_a = self.target_lengths;
+        self.lengths_b = self.target_lengths;
+        self.size_xfade = 1.0;
+    }
+
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
         let (bypass_w, bypass_settled) = match self.bypass.step(bypassed) {
             BypassStep::Idle => {
-                self.lengths_a = self.target_lengths;
-                self.lengths_b = self.target_lengths;
-                self.size_xfade = 1.0;
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::SettledBypass => (0.0, true),
-            BypassStep::Active(w) => {
-                self.silent_bypass_frames = 0;
-                (w, false)
-            }
+            BypassStep::Active(w) => (w, false),
         };
 
         let damp = self.damping_hz.step(self.damping_coeff);
@@ -439,6 +479,12 @@ impl Reverb {
 
         // Age reverb tails naturally when bypassed by feeding silence into the network.
         let feed = if bypassed { [0.0; 2] } else { dry };
+        let feed_silent =
+            feed[0].abs() < TAIL_SILENCE_FLOOR_F32 && feed[1].abs() < TAIL_SILENCE_FLOOR_F32;
+        if !feed_silent {
+            self.tail_quiet = false;
+            self.tail_silent_frames = 0;
+        }
         let mut diffuse = [0.0_f32; 2];
         for ch in 0..2 {
             let predelayed = if predelay_frames < 1.0 {
@@ -507,11 +553,11 @@ impl Reverb {
             self.lines[i].write(written);
         }
 
-        if bypass_settled {
+        if !self.tail_quiet && feed_silent {
             if max_tail_abs < TAIL_SILENCE_FLOOR_F32
                 && self.damping_lpf.iter().all(TptOnePoleLpf::quiet)
             {
-                self.silent_bypass_frames = self.silent_bypass_frames.saturating_add(1);
+                self.tail_silent_frames = self.tail_silent_frames.saturating_add(1);
                 let max_predelay = predelay_frames.max(self.predelay_frames.target());
                 let max_diff = (self.diffuser_lengths[0] + self.diffuser_lengths[1])
                     .max(self.diffuser_lengths[2] + self.diffuser_lengths[3]);
@@ -527,8 +573,8 @@ impl Reverb {
                     .saturating_add(max_diff)
                     .saturating_add(max_fdn)
                     .saturating_add(4) as u32;
-                if self.silent_bypass_frames >= drain_frames {
-                    // O(1) ring resets (zero memset on RT thread) guarantee zero stale tails on un-bypass.
+                if self.tail_silent_frames >= drain_frames {
+                    // O(1) ring resets (zero memset on RT thread) guarantee zero stale tails.
                     for ring in self
                         .lines
                         .iter_mut()
@@ -543,11 +589,19 @@ impl Reverb {
                     self.lengths_a = self.target_lengths;
                     self.lengths_b = self.target_lengths;
                     self.size_xfade = 1.0;
-                    self.silent_bypass_frames = 0;
-                    self.bypass.mark_idle();
+                    self.tail_silent_frames = 0;
+                    self.tail_quiet = true;
                 }
             } else {
-                self.silent_bypass_frames = 0;
+                self.tail_silent_frames = 0;
+            }
+        }
+        if bypass_settled {
+            if self.tail_quiet {
+                self.lengths_a = self.target_lengths;
+                self.lengths_b = self.target_lengths;
+                self.size_xfade = 1.0;
+                self.bypass.mark_idle();
             }
             return dry;
         }
@@ -564,8 +618,36 @@ impl crate::dsp::StereoEffect for Reverb {
     }
 
     #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        if buf.is_empty() {
+            return;
+        }
+        self.has_processed = true;
+        if self.bypass.check_idle_bypass(bypassed) {
+            self.advance_silent_frames(buf.len(), true);
+            for frame in buf.iter_mut() {
+                *frame = sanitize_frame(*frame);
+            }
+            return;
+        }
+        for frame in buf.iter_mut() {
+            *frame = Reverb::process(self, *frame, bypassed);
+        }
+    }
+
+    #[inline]
     fn reset(&mut self) {
         Reverb::reset(self);
+    }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.tail_quiet && self.bypass.is_settled_for(bypassed)
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        Reverb::advance_silent_frames(self, frames, bypassed);
     }
 }
 

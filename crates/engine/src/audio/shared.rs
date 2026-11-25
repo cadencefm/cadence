@@ -1,7 +1,7 @@
 //! Lock-free shared audio state, command mailboxes, and atomic score publication.
 use super::*;
-use cadence_core::dsp::Delay;
-use cadence_core::mixer::MAX_EFFECT_DEVICES;
+use crate::mix_engine::{score_effect_specs, ActiveEffect, PreparedEffect};
+use cadence_core::mixer::{EffectKindTag, MAX_EFFECT_DEVICES};
 use cadence_core::rack::{CompiledZoneGraph, RackPatch, RackZone};
 use cadence_core::runtime::{
     AudioErrorCode, AudioHealth, AudioInputMode, AudioInputStatus, AudioInputTelemetry,
@@ -146,7 +146,7 @@ impl<T> AtomicBoxSlot<T> {
     }
 
     /// Off-RT only: drop pending and retired values while no audio callback is running.
-    #[cfg(feature = "audio")]
+    #[cfg(any(feature = "audio", test))]
     pub(super) fn clear(&self) {
         for slot in std::iter::once(&self.pending).chain(self.retired.iter()) {
             let ptr = slot.swap(ptr::null_mut(), Ordering::AcqRel);
@@ -199,14 +199,46 @@ pub(super) struct LiveEvent {
 }
 
 /// The identity boundary travels with the score; coalescing publications cannot
-/// lose it and the callback retires the replaced score on the control thread.
+/// lose it and the callback retires the replaced score and evicted effects on the
+/// control thread.
 pub(super) struct ProjectPublication {
     pub(super) project: Option<Box<ScoreWindow>>,
     pub(super) samples: Option<Box<SampleBank>>,
-    /// Control-thread pre-allocated `Delay` instances handed into `MixerEngine` via
-    /// zero-alloc/zero-drop swap.
-    pub(super) extra_delays: Vec<Delay>,
+    /// Control-thread pre-allocated insert effects handed into `MixerEngine::adopt_prepared`
+    /// with zero RT allocations and zero RT drops.
+    pub(super) prepared_effects: Vec<PreparedEffect>,
+    /// Pre-sized (`capacity >= MAX_EFFECT_DEVICES`) retirement sink filled by the RT thread
+    /// with evicted [`ActiveEffect`] instances and dropped off-RT via `AtomicBoxSlot::reclaim`.
+    pub(super) retired_effects: Vec<ActiveEffect>,
     pub(super) generation: u64,
+}
+
+impl ProjectPublication {
+    /// Merge an unadopted previous publication into `self` off the RT thread,
+    /// carrying forward any sample bank and still-needed prepared effects.
+    pub(super) fn merge_from_previous(&mut self, previous: &mut Self) {
+        if self.samples.is_none() && self.generation == previous.generation {
+            self.samples = previous.samples.take();
+        }
+        if !previous.prepared_effects.is_empty() {
+            if let Some(score) = self.project.as_deref() {
+                let wanted = crate::mix_engine::score_effect_specs(score);
+                for mut item in previous.prepared_effects.drain(..) {
+                    if item.effect.is_some()
+                        && wanted.contains(&(item.id, item.tag))
+                        && !self
+                            .prepared_effects
+                            .iter()
+                            .any(|p| p.id == item.id && p.tag == item.tag)
+                    {
+                        self.prepared_effects.push(item);
+                    } else {
+                        let _ = item.effect.take();
+                    }
+                }
+            }
+        }
+    }
 }
 
 pub(super) struct SharedChannelMeter {
@@ -315,37 +347,44 @@ impl SharedEffectMeter {
     }
 }
 
+/// Apple Silicon L1/L2 cache line size (also provides 2× isolation on 64-byte x86-64 lines).
+const CACHE_LINE_BYTES: usize = 128;
+
+/// Zero-sized 128-byte alignment boundary used inside `#[repr(C)]` [`Shared`] to
+/// isolate hot thread-owned atomic groups and SPSC producer/consumer cursors.
+#[repr(align(128))]
+pub(super) struct CacheLineAlign;
+
+#[repr(C)]
 pub(super) struct Shared {
+    // ── Control-thread written & cold configuration / heap pointers ──
     pub(super) playing: AtomicBool,
     pub(super) alive: AtomicBool,
     pub(super) failed: AtomicBool,
-    pub(super) step_position: AtomicU64,
-    pub(super) next_step: AtomicU64,
-    pub(super) transport_events: [AtomicU64; TRANSPORT_MAILBOXES],
+    pub(super) is_silent: AtomicBool,
+    pub(super) clear_all_meters: AtomicBool,
+    pub(super) release_all_requested: AtomicBool,
+    pub(super) tap_enabled: AtomicBool,
+    pub(super) sample_format_is_float: AtomicBool,
+    pub(super) channels: AtomicU16,
+    pub(super) bit_depth: AtomicU16,
+    pub(super) sample_rate: AtomicU32,
+    pub(super) input_mode: AtomicU8,
+    pub(super) input_monitor_mode: AtomicU8,
+    pub(super) capture_phase: AtomicU8,
+    pub(super) capture_quantized: AtomicBool,
+    pub(super) capture_has_punch_out: AtomicBool,
+    pub(super) capture_tail_frames: AtomicU32,
+    pub(super) capture_punch_in_step: AtomicU64,
+    pub(super) capture_punch_out_step: AtomicU64,
+    pub(super) input_generation: AtomicU64,
+    pub(super) event_sequence: AtomicU64,
     pub(super) transport_pending: AtomicUsize,
+    pub(super) input_track_count: AtomicUsize,
+    pub(super) input_track_ids: [AtomicU64; MAX_INSTRUMENTS],
+    pub(super) transport_events: [AtomicU64; TRANSPORT_MAILBOXES],
     pub(super) transport_sequences: [AtomicU64; TRANSPORT_MAILBOXES],
     pub(super) transport_generations: [AtomicU64; TRANSPORT_MAILBOXES],
-    pub(super) mixer_meter_generation: AtomicU64,
-    pub(super) mixer_meters: Box<[SharedChannelMeter]>,
-    pub(super) effect_meters: Box<[SharedEffectMeter]>,
-    pub(super) clear_all_meters: AtomicBool,
-    pub(super) peak: AtomicU32,
-    pub(super) peak_left: AtomicU32,
-    pub(super) peak_right: AtomicU32,
-    pub(super) sample_rate: AtomicU32,
-    pub(super) prepared_delays: AtomicUsize,
-    pub(super) track_ids: [AtomicU64; MAX_INSTRUMENTS],
-    pub(super) track_count: AtomicUsize,
-    pub(super) scope_generation: AtomicU64,
-    pub(super) track_waveform: Box<[[AtomicU32; SCOPE_BUFFER_SAMPLES]]>,
-    pub(super) scope_page: AtomicUsize,
-    pub(super) scope_sequence: AtomicU64,
-    pub(super) input_track_ids: [AtomicU64; MAX_INSTRUMENTS],
-    pub(super) input_track_count: AtomicUsize,
-    pub(super) note_owners: Box<[[AtomicU64; 128]]>,
-    pub(super) note_owned: Box<[[AtomicBool; 128]]>,
-    pub(super) waveform: Box<[AtomicU32]>,
-    pub(super) wave_write: AtomicUsize,
     /// Packed live event mailboxes:
     /// tag 1 = finite one-shot audition
     /// tag 2 = live Jam Key NoteOn (sustains until NoteOff)
@@ -355,19 +394,41 @@ pub(super) struct Shared {
     pub(super) event_bindings: [AtomicU64; MAILBOXES],
     pub(super) event_sequences: [AtomicU64; MAILBOXES],
     pub(super) event_generations: [AtomicU64; MAILBOXES],
-    pub(super) event_sequence: AtomicU64,
-    pub(super) event_overflows: AtomicU64,
-    pub(super) release_all_requested: AtomicBool,
-    pub(super) input_generation: AtomicU64,
+    pub(super) track_ids: [AtomicU64; MAX_INSTRUMENTS],
+    pub(super) mixer_meters: Box<[SharedChannelMeter]>,
+    pub(super) effect_meters: Box<[SharedEffectMeter]>,
+    pub(super) track_waveform: Box<[[AtomicU32; SCOPE_BUFFER_SAMPLES]]>,
+    pub(super) note_owners: Box<[[AtomicU64; 128]]>,
+    pub(super) note_owned: Box<[[AtomicBool; 128]]>,
+    pub(super) waveform: Box<[AtomicU32]>,
+    pub(super) audio_tap: Box<[[AtomicU32; 2]]>,
+    pub(super) capture_ring: Box<[[AtomicU32; 2]]>,
+    pub(super) monitor_ring: Box<[[AtomicU32; 2]]>,
     pub(super) project_slot: AtomicBoxSlot<ProjectPublication>,
     pub(super) audition_slot: AtomicBoxSlot<Option<AuditionRequest>>,
-    /// Lock-free SPSC stereo audio tap ring for live speaker capture (`listen --live`).
-    pub(super) tap_enabled: AtomicBool,
-    pub(super) tap_write: AtomicU64,
-    pub(super) tap_read: AtomicU64,
-    pub(super) tap_dropped: AtomicU64,
-    pub(super) audio_tap: Box<[[AtomicU32; 2]]>,
-    /// Lock-free callback budget & stream health telemetry (RT-written, off-RT-read).
+    /// Off-RT-only diagnostic message (CPAL error callback or open/restart error).
+    /// NEVER touched from the audio render callback thread.
+    pub(super) last_error: Mutex<Option<String>>,
+    /// Off-RT-only diagnostic message for the audio input stream.
+    pub(super) input_last_error: Mutex<Option<String>>,
+    /// Off-RT-only mirror of `(sample_rate, [(device_id, tag)])` currently prepared for
+    /// the live `MixerEngine`. NEVER touched from the audio render callback thread.
+    pub(super) prepared_effects_state: Mutex<(u32, Vec<(u64, EffectKindTag)>)>,
+
+    // ── Output-RT written telemetry & transport counters ──
+    _pad_output_rt: CacheLineAlign,
+    pub(super) step_position: AtomicU64,
+    pub(super) next_step: AtomicU64,
+    pub(super) wave_write: AtomicUsize,
+    pub(super) peak: AtomicU32,
+    pub(super) peak_left: AtomicU32,
+    pub(super) peak_right: AtomicU32,
+    pub(super) mixer_meter_generation: AtomicU64,
+    pub(super) track_count: AtomicUsize,
+    pub(super) scope_generation: AtomicU64,
+    pub(super) scope_page: AtomicUsize,
+    pub(super) scope_sequence: AtomicU64,
+    pub(super) event_overflows: AtomicU64,
     pub(super) cpu_load_permille: AtomicU32,
     pub(super) peak_cpu_permille: AtomicU32,
     pub(super) xrun_count: AtomicU64,
@@ -375,49 +436,81 @@ pub(super) struct Shared {
     pub(super) error_code: AtomicU8,
     pub(super) buffer_frames: AtomicU32,
     pub(super) pdc_latency_frames: AtomicU32,
-    pub(super) channels: AtomicU16,
-    pub(super) bit_depth: AtomicU16,
-    pub(super) sample_format_is_float: AtomicBool,
-    pub(super) is_silent: AtomicBool,
-    /// Off-RT-only diagnostic message (CPAL error callback or open/restart error).
-    /// NEVER touched from the audio render callback thread.
-    pub(super) last_error: Mutex<Option<String>>,
-
-    /// Lock-free hardware audio input status, metering, capture gate, and SPSC rings.
-    pub(super) input_status: AtomicU8,
-    pub(super) input_sample_rate: AtomicU32,
-    pub(super) input_channels: AtomicU16,
-    pub(super) input_buffer_frames: AtomicU32,
-    pub(super) input_mode: AtomicU8,
-    pub(super) input_monitor_mode: AtomicU8,
-    pub(super) input_monitoring_active: AtomicBool,
-    pub(super) input_peak: [AtomicU32; 2],
-    pub(super) input_peak_hold: [AtomicU32; 2],
-    pub(super) input_clipped: AtomicBool,
-    pub(super) input_clear_meters: AtomicBool,
-    pub(super) input_frames_seen: AtomicU64,
-    pub(super) input_nonzero_seen: AtomicBool,
-    /// Off-RT-only diagnostic message for the audio input stream.
-    pub(super) input_last_error: Mutex<Option<String>>,
-    /// Transport-synchronized capture gate state (`CapturePhase`).
-    pub(super) capture_phase: AtomicU8,
-    pub(super) capture_quantized: AtomicBool,
-    pub(super) capture_punch_in_step: AtomicU64,
-    pub(super) capture_has_punch_out: AtomicBool,
-    pub(super) capture_punch_out_step: AtomicU64,
     pub(super) capture_start_step: AtomicU64,
     pub(super) capture_end_step: AtomicU64,
-    pub(super) capture_tail_frames: AtomicU32,
+
+    // ── Audio Tap SPSC producer (Output-RT) vs consumer (Tap thread) ──
+    _pad_tap_write: CacheLineAlign,
+    pub(super) tap_write: AtomicU64,
+    pub(super) tap_dropped: AtomicU64,
+    _pad_tap_read: CacheLineAlign,
+    pub(super) tap_read: AtomicU64,
+
+    // ── Input-RT written status & live input metering ──
+    _pad_input_rt: CacheLineAlign,
+    pub(super) input_status: AtomicU8,
+    pub(super) input_monitoring_active: AtomicBool,
+    pub(super) input_clipped: AtomicBool,
+    pub(super) input_clear_meters: AtomicBool,
+    pub(super) input_nonzero_seen: AtomicBool,
+    pub(super) input_channels: AtomicU16,
+    pub(super) input_sample_rate: AtomicU32,
+    pub(super) input_buffer_frames: AtomicU32,
+    pub(super) input_peak: [AtomicU32; 2],
+    pub(super) input_peak_hold: [AtomicU32; 2],
+    pub(super) input_frames_seen: AtomicU64,
+
+    // ── Capture SPSC producer (Input-RT) vs consumer (Capture writer thread) ──
+    _pad_capture_write: CacheLineAlign,
     pub(super) capture_write: AtomicU64,
-    pub(super) capture_read: AtomicU64,
     pub(super) capture_dropped: AtomicU64,
     pub(super) capture_frames_written: AtomicU64,
-    pub(super) capture_ring: Box<[[AtomicU32; 2]]>,
-    /// Lock-free SPSC stereo ring feeding input monitoring into the output `Engine`.
+    _pad_capture_read: CacheLineAlign,
+    pub(super) capture_read: AtomicU64,
+
+    // ── Monitor SPSC producer (Input-RT) vs consumer (Output-RT) ──
+    _pad_monitor_write: CacheLineAlign,
     pub(super) monitor_write: AtomicU64,
+    _pad_monitor_read: CacheLineAlign,
     pub(super) monitor_read: AtomicU64,
-    pub(super) monitor_ring: Box<[[AtomicU32; 2]]>,
+    _pad_tail: CacheLineAlign,
 }
+
+const _: () = {
+    assert!(std::mem::align_of::<Shared>() >= CACHE_LINE_BYTES);
+    assert!(
+        std::mem::offset_of!(Shared, step_position) / CACHE_LINE_BYTES
+            != std::mem::offset_of!(Shared, playing) / CACHE_LINE_BYTES
+    );
+    assert!(
+        std::mem::offset_of!(Shared, tap_write) / CACHE_LINE_BYTES
+            != std::mem::offset_of!(Shared, tap_read) / CACHE_LINE_BYTES
+    );
+    assert!(
+        std::mem::offset_of!(Shared, capture_write) / CACHE_LINE_BYTES
+            != std::mem::offset_of!(Shared, capture_read) / CACHE_LINE_BYTES
+    );
+    assert!(
+        std::mem::offset_of!(Shared, monitor_write) / CACHE_LINE_BYTES
+            != std::mem::offset_of!(Shared, monitor_read) / CACHE_LINE_BYTES
+    );
+    assert!(
+        std::mem::offset_of!(Shared, input_status) / CACHE_LINE_BYTES
+            != std::mem::offset_of!(Shared, step_position) / CACHE_LINE_BYTES
+    );
+    assert!(
+        std::mem::offset_of!(Shared, input_monitoring_active) / CACHE_LINE_BYTES
+            != std::mem::offset_of!(Shared, playing) / CACHE_LINE_BYTES
+    );
+    assert!(
+        std::mem::offset_of!(Shared, input_status) / CACHE_LINE_BYTES
+            != std::mem::offset_of!(Shared, monitor_write) / CACHE_LINE_BYTES
+    );
+    assert!(
+        std::mem::offset_of!(Shared, monitor_read) / CACHE_LINE_BYTES
+            != std::mem::offset_of!(Shared, step_position) / CACHE_LINE_BYTES
+    );
+};
 
 impl Shared {
     /// Allocate `Shared` directly on the heap with boxed inner arrays so debug
@@ -464,49 +557,63 @@ impl Shared {
             playing: AtomicBool::new(false),
             alive: AtomicBool::new(true),
             failed: AtomicBool::new(false),
-            step_position: AtomicU64::new(0),
-            next_step: AtomicU64::new(0),
-            transport_events: std::array::from_fn(|_| AtomicU64::new(0)),
+            is_silent: AtomicBool::new(false),
+            clear_all_meters: AtomicBool::new(false),
+            release_all_requested: AtomicBool::new(false),
+            tap_enabled: AtomicBool::new(false),
+            sample_format_is_float: AtomicBool::new(false),
+            channels: AtomicU16::new(0),
+            bit_depth: AtomicU16::new(0),
+            sample_rate: AtomicU32::new(SILENT_RATE),
+            input_mode: AtomicU8::new(AudioInputMode::Stereo.to_u8()),
+            input_monitor_mode: AtomicU8::new(InputMonitorMode::Off.to_u8()),
+            capture_phase: AtomicU8::new(CapturePhase::Idle as u8),
+            capture_quantized: AtomicBool::new(true),
+            capture_has_punch_out: AtomicBool::new(false),
+            capture_tail_frames: AtomicU32::new(0),
+            capture_punch_in_step: AtomicU64::new(0),
+            capture_punch_out_step: AtomicU64::new(0),
+            input_generation: AtomicU64::new(0),
+            event_sequence: AtomicU64::new(0),
             transport_pending: AtomicUsize::new(0),
+            input_track_count: AtomicUsize::new(0),
+            input_track_ids: std::array::from_fn(|_| AtomicU64::new(0)),
+            transport_events: std::array::from_fn(|_| AtomicU64::new(0)),
             transport_sequences: std::array::from_fn(|_| AtomicU64::new(0)),
             transport_generations: std::array::from_fn(|_| AtomicU64::new(0)),
-            mixer_meter_generation: AtomicU64::new(0),
-            mixer_meters,
-            effect_meters,
-            clear_all_meters: AtomicBool::new(false),
-            peak: AtomicU32::new(0.0_f32.to_bits()),
-            peak_left: AtomicU32::new(0.0_f32.to_bits()),
-            peak_right: AtomicU32::new(0.0_f32.to_bits()),
-            sample_rate: AtomicU32::new(SILENT_RATE),
-            prepared_delays: AtomicUsize::new(0),
-            track_ids: std::array::from_fn(|_| AtomicU64::new(0)),
-            track_count: AtomicUsize::new(0),
-            scope_generation: AtomicU64::new(0),
-            track_waveform,
-            scope_page: AtomicUsize::new(0),
-            scope_sequence: AtomicU64::new(0),
-            input_track_ids: std::array::from_fn(|_| AtomicU64::new(0)),
-            input_track_count: AtomicUsize::new(0),
-            note_owners,
-            note_owned,
-            waveform,
-            wave_write: AtomicUsize::new(0),
             events: std::array::from_fn(|_| AtomicU64::new(0)),
             event_track_ids: std::array::from_fn(|_| AtomicU64::new(0)),
             event_bindings: std::array::from_fn(|_| AtomicU64::new(0)),
             event_sequences: std::array::from_fn(|_| AtomicU64::new(0)),
             event_generations: std::array::from_fn(|_| AtomicU64::new(0)),
-            event_sequence: AtomicU64::new(0),
-            event_overflows: AtomicU64::new(0),
-            release_all_requested: AtomicBool::new(false),
-            input_generation: AtomicU64::new(0),
+            track_ids: std::array::from_fn(|_| AtomicU64::new(0)),
+            mixer_meters,
+            effect_meters,
+            track_waveform,
+            note_owners,
+            note_owned,
+            waveform,
+            audio_tap,
+            capture_ring,
+            monitor_ring,
             project_slot: AtomicBoxSlot::new(),
             audition_slot: AtomicBoxSlot::new(),
-            tap_enabled: AtomicBool::new(false),
-            tap_write: AtomicU64::new(0),
-            tap_read: AtomicU64::new(0),
-            tap_dropped: AtomicU64::new(0),
-            audio_tap,
+            last_error: Mutex::new(None),
+            input_last_error: Mutex::new(None),
+            prepared_effects_state: Mutex::new((0, Vec::new())),
+            _pad_output_rt: CacheLineAlign,
+            step_position: AtomicU64::new(0),
+            next_step: AtomicU64::new(0),
+            wave_write: AtomicUsize::new(0),
+            peak: AtomicU32::new(0.0_f32.to_bits()),
+            peak_left: AtomicU32::new(0.0_f32.to_bits()),
+            peak_right: AtomicU32::new(0.0_f32.to_bits()),
+            mixer_meter_generation: AtomicU64::new(0),
+            track_count: AtomicUsize::new(0),
+            scope_generation: AtomicU64::new(0),
+            scope_page: AtomicUsize::new(0),
+            scope_sequence: AtomicU64::new(0),
+            event_overflows: AtomicU64::new(0),
             cpu_load_permille: AtomicU32::new(0),
             peak_cpu_permille: AtomicU32::new(0),
             xrun_count: AtomicU64::new(0),
@@ -514,41 +621,36 @@ impl Shared {
             error_code: AtomicU8::new(AudioErrorCode::None as u8),
             buffer_frames: AtomicU32::new(0),
             pdc_latency_frames: AtomicU32::new(0),
-            channels: AtomicU16::new(0),
-            bit_depth: AtomicU16::new(0),
-            sample_format_is_float: AtomicBool::new(false),
-            is_silent: AtomicBool::new(false),
-            last_error: Mutex::new(None),
-            input_status: AtomicU8::new(AudioInputStatus::Inactive as u8),
-            input_sample_rate: AtomicU32::new(0),
-            input_channels: AtomicU16::new(0),
-            input_buffer_frames: AtomicU32::new(0),
-            input_mode: AtomicU8::new(AudioInputMode::Stereo.to_u8()),
-            input_monitor_mode: AtomicU8::new(InputMonitorMode::Off.to_u8()),
-            input_monitoring_active: AtomicBool::new(false),
-            input_peak: std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())),
-            input_peak_hold: std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())),
-            input_clipped: AtomicBool::new(false),
-            input_clear_meters: AtomicBool::new(false),
-            input_frames_seen: AtomicU64::new(0),
-            input_nonzero_seen: AtomicBool::new(false),
-            input_last_error: Mutex::new(None),
-            capture_phase: AtomicU8::new(CapturePhase::Idle as u8),
-            capture_quantized: AtomicBool::new(true),
-            capture_punch_in_step: AtomicU64::new(0),
-            capture_has_punch_out: AtomicBool::new(false),
-            capture_punch_out_step: AtomicU64::new(0),
             capture_start_step: AtomicU64::new(0),
             capture_end_step: AtomicU64::new(0),
-            capture_tail_frames: AtomicU32::new(0),
+            _pad_tap_write: CacheLineAlign,
+            tap_write: AtomicU64::new(0),
+            tap_dropped: AtomicU64::new(0),
+            _pad_tap_read: CacheLineAlign,
+            tap_read: AtomicU64::new(0),
+            _pad_input_rt: CacheLineAlign,
+            input_status: AtomicU8::new(AudioInputStatus::Inactive as u8),
+            input_monitoring_active: AtomicBool::new(false),
+            input_clipped: AtomicBool::new(false),
+            input_clear_meters: AtomicBool::new(false),
+            input_nonzero_seen: AtomicBool::new(false),
+            input_channels: AtomicU16::new(0),
+            input_sample_rate: AtomicU32::new(0),
+            input_buffer_frames: AtomicU32::new(0),
+            input_peak: std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())),
+            input_peak_hold: std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())),
+            input_frames_seen: AtomicU64::new(0),
+            _pad_capture_write: CacheLineAlign,
             capture_write: AtomicU64::new(0),
-            capture_read: AtomicU64::new(0),
             capture_dropped: AtomicU64::new(0),
             capture_frames_written: AtomicU64::new(0),
-            capture_ring,
+            _pad_capture_read: CacheLineAlign,
+            capture_read: AtomicU64::new(0),
+            _pad_monitor_write: CacheLineAlign,
             monitor_write: AtomicU64::new(0),
+            _pad_monitor_read: CacheLineAlign,
             monitor_read: AtomicU64::new(0),
-            monitor_ring,
+            _pad_tail: CacheLineAlign,
         })
     }
 
@@ -714,9 +816,10 @@ impl Shared {
         }
     }
 
-    /// Off-RT only: drain pending mailboxes and publication slots while no callback is active.
-    #[cfg(feature = "audio")]
-    pub(super) fn reset_for_reconfigure(&self) {
+    /// Off-RT only: drain pending mailboxes and publication slots while no callback is active,
+    /// preserving the resolved transport step across stream rebuilds and failed retries.
+    #[cfg(any(feature = "audio", test))]
+    pub(super) fn reset_for_reconfigure(&self, start_step: u64) {
         for slot in &self.events {
             slot.store(0, Ordering::Release);
         }
@@ -733,6 +836,14 @@ impl Shared {
         }
         self.project_slot.clear();
         self.audition_slot.clear();
+        {
+            let mut guard = self
+                .prepared_effects_state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            guard.0 = 0;
+            guard.1.clear();
+        }
         self.cpu_load_permille.store(0, Ordering::Relaxed);
         self.peak_cpu_permille.store(0, Ordering::Relaxed);
         self.xrun_count.store(0, Ordering::Relaxed);
@@ -743,7 +854,9 @@ impl Shared {
         for sample in self.waveform.iter() {
             sample.store(0.0_f32.to_bits(), Ordering::Relaxed);
         }
-        self.next_step.store(0, Ordering::Release);
+        self.step_position
+            .store(pack_step_position(start_step, 0.0), Ordering::Release);
+        self.next_step.store(start_step, Ordering::Release);
         self.overload_tripped.store(false, Ordering::Release);
         self.failed.store(false, Ordering::Release);
         self.error_code
@@ -753,32 +866,41 @@ impl Shared {
         self.set_last_error(None);
     }
 
-    /// Off-RT helper: pre-allocate any additional `Delay` buffers needed by `project`
-    /// beyond what has already been prepared for this engine.
-    pub(super) fn prepare_extra_delays(&self, project: &ScoreWindow) -> Vec<Delay> {
-        let needed = crate::mix_engine::count_delay_devices(project);
+    /// Off-RT helper: record the initial `(sample_rate, effect_specs)` installed by `Engine::new`.
+    pub(super) fn sync_prepared_effects(&self, project: &ScoreWindow, sample_rate: u32) {
+        let mut guard = self
+            .prepared_effects_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        guard.0 = sample_rate;
+        guard.1 = score_effect_specs(project);
+    }
+
+    /// Off-RT helper: allocate [`PreparedEffect`] instances for every insert device in `project`
+    /// that is newly added, kind-swapped, or replaced across a project/sample-rate boundary.
+    pub(super) fn prepare_effects(
+        &self,
+        project: &ScoreWindow,
+        boundary: bool,
+    ) -> Vec<PreparedEffect> {
         let sr = self
             .sample_rate
             .load(Ordering::Acquire)
             .clamp(MIN_AUDIO_SAMPLE_RATE, MAX_AUDIO_SAMPLE_RATE);
-        let mut prev = self.prepared_delays.load(Ordering::Acquire);
-        loop {
-            if needed <= prev {
-                return Vec::new();
-            }
-            match self.prepared_delays.compare_exchange_weak(
-                prev,
-                needed,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    let count = needed - prev;
-                    return (0..count).map(|_| Delay::new(sr)).collect();
-                }
-                Err(actual) => prev = actual,
-            }
-        }
+        let wanted = score_effect_specs(project);
+        let mut guard = self
+            .prepared_effects_state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let force_all = boundary || guard.0 != sr;
+        let prepared: Vec<PreparedEffect> = wanted
+            .iter()
+            .filter(|&&(id, tag)| force_all || !guard.1.contains(&(id, tag)))
+            .map(|&(id, tag)| PreparedEffect::new(id, tag, sr))
+            .collect();
+        guard.0 = sr;
+        guard.1 = wanted;
+        prepared
     }
 
     pub(super) fn reclaim_all(&self) {

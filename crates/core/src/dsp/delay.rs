@@ -1,9 +1,8 @@
 //! Zero-allocation stereo [`DelayLine`] (integer, linear, and cubic Hermite reads)
 //! and Cadence's multi-mode [`Delay`] insert processor (`PingPong` & `Stereo`).
 //!
-//! Supports lazy `new_unallocated` / `allocate` (0 heap bytes for unused slots),
-//! mono-seeded L→R→L ping-pong bounce, independent stereo dual-delay mode with
-//! smooth click-free feedback-matrix blending, crossfaded time changes without
+//! Supports mono-seeded L→R→L ping-pong bounce, independent stereo dual-delay mode
+//! with smooth click-free feedback-matrix blending, crossfaded time changes without
 //! pitch chirp, `.max(20.0)` BPM guard, TPT feedback damping, and click-free
 //! bypass crossfade.
 
@@ -36,34 +35,10 @@ impl DelayLine {
         }
     }
 
-    /// Create an unallocated placeholder (0 bytes heap usage until [`allocate`] is called).
-    pub fn unallocated() -> Self {
-        Self {
-            data: Box::new([]),
-            write: 0,
-            valid: 0,
-        }
-    }
-
-    #[inline]
-    pub fn is_allocated(&self) -> bool {
-        !self.data.is_empty()
-    }
-
-    /// Maximum usable delay length in frames (`0` when unallocated).
+    /// Maximum usable delay length in frames.
     #[inline]
     pub fn capacity(&self) -> usize {
         self.data.len().saturating_sub(4)
-    }
-
-    /// Allocate (or reallocate) off the real-time audio thread.
-    pub fn allocate(&mut self, capacity_frames: usize) {
-        let len = capacity_frames.max(4).saturating_add(4);
-        if self.data.len() != len {
-            self.data = vec![[0.0; 2]; len].into_boxed_slice();
-        }
-        self.write = 0;
-        self.valid = 0;
     }
 
     /// O(1) reset: marks historical frames unreadable without zeroing megabytes on the RT thread.
@@ -196,7 +171,8 @@ pub struct Delay {
     bypass: BypassFader,
     damp_lpf: TptOnePoleLpf,
     last_params: Option<(DelayPatch, f64)>,
-    silent_bypass_frames: u32,
+    tail_silent_frames: u32,
+    tail_quiet: bool,
     has_processed: bool,
 }
 
@@ -214,20 +190,9 @@ impl Delay {
         let sr = sanitize_sample_rate(f64::from(sample_rate));
         let secs = sanitize_clamp_f64(max_seconds, 0.1, MAX_DELAY_SECONDS, MAX_DELAY_SECONDS);
         let cap = (sr * secs).ceil() as usize;
-        Self::from_line(sr, DelayLine::new(cap))
-    }
-
-    /// Construct an unallocated delay slot (`0` heap bytes until [`allocate`] is called off-RT),
-    /// keeping unused `MixerEngine` slots memory-free.
-    pub fn new_unallocated(sample_rate: u32) -> Self {
-        let sr = sanitize_sample_rate(f64::from(sample_rate));
-        Self::from_line(sr, DelayLine::unallocated())
-    }
-
-    fn from_line(sr: f64, line: DelayLine) -> Self {
         let xfade_frames = (sr * Self::XFADE_SEC).max(16.0);
         Self {
-            line,
+            line: DelayLine::new(cap),
             sample_rate: sr,
             time_a: 1.0,
             time_b: 1.0,
@@ -240,7 +205,8 @@ impl Delay {
             bypass: BypassFader::new(sr),
             damp_lpf: TptOnePoleLpf::new(sr, Self::DAMP_HZ),
             last_params: None,
-            silent_bypass_frames: 0,
+            tail_silent_frames: 0,
+            tail_quiet: true,
             has_processed: false,
         }
     }
@@ -248,19 +214,6 @@ impl Delay {
     #[cfg(test)]
     pub(crate) fn is_idle(&self) -> bool {
         self.bypass.is_idle()
-    }
-
-    /// Allocate (or resize) the delay buffer off the real-time audio thread.
-    pub fn allocate(&mut self, max_seconds: f64) {
-        let secs = sanitize_clamp_f64(max_seconds, 0.1, MAX_DELAY_SECONDS, MAX_DELAY_SECONDS);
-        let cap = (self.sample_rate * secs).ceil() as usize;
-        self.line.allocate(cap);
-        self.has_processed = false;
-    }
-
-    #[inline]
-    pub fn is_allocated(&self) -> bool {
-        self.line.is_allocated()
     }
 
     pub fn reset(&mut self) {
@@ -273,7 +226,8 @@ impl Delay {
         self.mix.snap(self.mix.target());
         self.ping_pong_blend.snap(self.ping_pong_blend.target());
         self.bypass.reset();
-        self.silent_bypass_frames = 0;
+        self.tail_silent_frames = 0;
+        self.tail_quiet = true;
         self.has_processed = false;
     }
 
@@ -321,32 +275,43 @@ impl Delay {
             self.feedback.set_target(fb);
             self.mix.set_target(mix);
             self.ping_pong_blend.set_target(pp);
-            if self.xfade >= 1.0 && (target_time - self.time_a).abs() > 0.5 {
+            if self.tail_quiet {
+                self.time_a = target_time;
+                self.time_b = target_time;
+                self.xfade = 1.0;
+            } else if self.xfade >= 1.0 && (target_time - self.time_a).abs() > 0.5 {
                 self.time_b = target_time;
                 self.xfade = 0.0;
             }
         }
     }
 
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        self.feedback.advance_silent(frames);
+        self.mix.advance_silent(frames);
+        self.ping_pong_blend.advance_silent(frames);
+        self.time_a = self.target_time;
+        self.time_b = self.target_time;
+        self.xfade = 1.0;
+    }
+
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
-        if !self.line.is_allocated() {
-            return dry;
-        }
 
         let (bypass_w, bypass_settled) = match self.bypass.step(bypassed) {
             BypassStep::Idle => {
-                self.time_a = self.target_time;
-                self.time_b = self.target_time;
-                self.xfade = 1.0;
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::SettledBypass => (0.0, true),
-            BypassStep::Active(w) => {
-                self.silent_bypass_frames = 0;
-                (w, false)
-            }
+            BypassStep::Active(w) => (w, false),
         };
 
         let fb = self.feedback.next();
@@ -378,6 +343,12 @@ impl Delay {
 
         // Feed [0, 0] while bypassed so the delay tail ages out cleanly and never resurfaces.
         let feed = if bypassed { [0.0; 2] } else { dry };
+        let feed_silent =
+            feed[0].abs() < TAIL_SILENCE_FLOOR_F32 && feed[1].abs() < TAIL_SILENCE_FLOOR_F32;
+        if !feed_silent {
+            self.tail_quiet = false;
+            self.tail_silent_frames = 0;
+        }
         let damped = self
             .damp_lpf
             .process_stereo([f64::from(delayed[0]), f64::from(delayed[1])]);
@@ -394,32 +365,40 @@ impl Delay {
         let next_r = (st * st_r + pp * pp_r) as f32;
         self.line.write([next_l, next_r]);
 
-        if bypass_settled {
+        if !self.tail_quiet && feed_silent {
             let tail_peak = delayed[0]
                 .abs()
                 .max(delayed[1].abs())
                 .max(next_l.abs())
                 .max(next_r.abs());
             if tail_peak < TAIL_SILENCE_FLOOR_F32 && self.damp_lpf.quiet() {
-                self.silent_bypass_frames = self.silent_bypass_frames.saturating_add(1);
+                self.tail_silent_frames = self.tail_silent_frames.saturating_add(1);
                 let active_delay = if self.xfade < 1.0 {
                     self.time_a.max(self.time_b).max(self.target_time)
                 } else {
                     self.time_a.max(self.target_time)
                 };
                 let drain_frames = (active_delay.ceil() as u32).saturating_add(4);
-                if self.silent_bypass_frames >= drain_frames {
+                if self.tail_silent_frames >= drain_frames {
                     // O(1) validity reset (zero memset on RT thread) clears any longer stale history.
                     self.line.reset();
                     self.damp_lpf.reset();
                     self.time_a = self.target_time;
                     self.time_b = self.target_time;
                     self.xfade = 1.0;
-                    self.silent_bypass_frames = 0;
-                    self.bypass.mark_idle();
+                    self.tail_silent_frames = 0;
+                    self.tail_quiet = true;
                 }
             } else {
-                self.silent_bypass_frames = 0;
+                self.tail_silent_frames = 0;
+            }
+        }
+        if bypass_settled {
+            if self.tail_quiet {
+                self.time_a = self.target_time;
+                self.time_b = self.target_time;
+                self.xfade = 1.0;
+                self.bypass.mark_idle();
             }
             return dry;
         }
@@ -434,8 +413,36 @@ impl crate::dsp::StereoEffect for Delay {
     }
 
     #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        if buf.is_empty() {
+            return;
+        }
+        self.has_processed = true;
+        if self.bypass.check_idle_bypass(bypassed) {
+            self.advance_silent_frames(buf.len(), true);
+            for frame in buf.iter_mut() {
+                *frame = sanitize_frame(*frame);
+            }
+            return;
+        }
+        for frame in buf.iter_mut() {
+            *frame = Delay::process(self, *frame, bypassed);
+        }
+    }
+
+    #[inline]
     fn reset(&mut self) {
         Delay::reset(self);
+    }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.tail_quiet && self.bypass.is_settled_for(bypassed)
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        Delay::advance_silent_frames(self, frames, bypassed);
     }
 }
 
@@ -508,26 +515,21 @@ mod tests {
     }
 
     #[test]
-    fn unallocated_delay_uses_zero_storage_and_allocates_cleanly() {
-        let mut delay = Delay::new_unallocated(48_000);
-        assert!(!delay.is_allocated());
-        assert_eq!(delay.process([0.5, -0.5], false), [0.5, -0.5]);
-        delay.allocate(1.0);
-        assert!(delay.is_allocated());
-        delay.set_parameters(
-            DelayPatch {
-                mode: DelayMode::PingPong,
-                steps: 0.5,
-                feedback: 0.0,
-                mix: 1.0,
-            },
-            300.0,
-        );
-        // BPM guard protects against bpm = 0.0 / negative / NaN.
-        delay.set_parameters(DelayPatch::default(), 0.0);
-        delay.set_parameters(DelayPatch::default(), f64::NAN);
-        let y = delay.process([0.5, 0.5], false);
-        assert!(y[0].is_finite() && y[1].is_finite());
+    fn delay_guards_invalid_and_extreme_bpm_values() {
+        let mut delay = Delay::with_max_seconds(48_000, 1.0);
+        for bpm in [300.0, 0.0, -40.0, f64::NAN, f64::INFINITY] {
+            delay.set_parameters(
+                DelayPatch {
+                    mode: DelayMode::PingPong,
+                    steps: 0.5,
+                    feedback: 0.3,
+                    mix: 1.0,
+                },
+                bpm,
+            );
+            let y = delay.process([0.5, -0.5], false);
+            assert!(y[0].is_finite() && y[1].is_finite(), "bpm={bpm}: y={y:?}");
+        }
     }
 
     #[test]
@@ -828,10 +830,10 @@ mod tests {
     fn delay_line_read_cubic_channel_matches_read_cubic_across_sample_rates() {
         use std::f64::consts::TAU;
 
-        let empty = DelayLine::unallocated();
-        assert_eq!(empty.read_cubic_channel(4.5, 0), 0.0);
-        assert_eq!(empty.read_cubic_channel(4.5, 1), 0.0);
-        assert_eq!(empty.read_cubic_channel(4.5, 2), 0.0);
+        let fresh = DelayLine::new(16);
+        assert_eq!(fresh.read_cubic_channel(4.5, 0), 0.0);
+        assert_eq!(fresh.read_cubic_channel(4.5, 1), 0.0);
+        assert_eq!(fresh.read_cubic_channel(4.5, 2), 0.0);
 
         for sr in [44_100.0_f64, 48_000.0, 96_000.0, 192_000.0] {
             let cap = (sr * 0.02).ceil() as usize;

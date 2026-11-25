@@ -416,13 +416,13 @@ fn limiter_insert_processes_zero_alloc_enforces_ceiling_and_reports_gr_meter() {
 }
 
 #[test]
-fn lazy_delay_allocation_topological_groups_muted_return_solo_preview_and_pdc() {
-    // 1. Zero Delay devices -> 0 allocated Delay buffers.
+fn prepared_effect_handoff_topological_groups_muted_return_solo_preview_and_pdc() {
+    // 1. Empty project -> 0 allocated effect instances (zero idle FX memory across all 24 slots).
     let mut score = stereo_score();
     let mut mix = MixerEngine::new(&score, RATE);
-    assert_eq!(mix.allocated_delay_count(), 0);
+    assert_eq!(mix.allocated_effect_count(), 0);
 
-    // Off-RT delay handoff installs buffer with ZERO heap operations on RT thread!
+    // Off-RT effect handoff installs a prepared Delay with ZERO heap operations on the RT thread!
     let mut delay = EffectDevice::delay(99);
     delay.kind = EffectKind::Delay(DelayPatch {
         steps: 1.0,
@@ -431,15 +431,17 @@ fn lazy_delay_allocation_topological_groups_muted_return_solo_preview_and_pdc() 
         ..DelayPatch::default()
     });
     score.mixer.channel_mut(4).unwrap().inserts.push(delay);
-    let mut incoming = [Delay::new(RATE)];
+    let mut prepared = prepare_effects_for_score(&score, RATE);
+    let mut retired = Vec::with_capacity(MAX_EFFECT_DEVICES);
     assert_no_heap_operations(|| {
-        mix.install_delay_buffers(&mut incoming);
-        mix.adopt(&score, false);
+        mix.adopt_prepared(&score, false, &mut prepared, &mut retired);
         mix.update_controls(&score, 0.0, 0.0);
     });
-    assert_eq!(mix.allocated_delay_count(), 1);
-    // Drop the unallocated shell off-RT after the zero-alloc block.
-    drop(incoming);
+    assert_eq!(mix.allocated_effect_count(), 1);
+    assert!(retired.is_empty());
+    // Drop the emptied Vec off-RT after the zero-alloc block.
+    drop(prepared);
+    drop(retired);
 
     // 2. Reverse-ordered chained groups (Group B before Group A: Audio -> A -> B -> Master).
     let mut chained = stereo_score();
@@ -999,10 +1001,20 @@ fn fader_headroom_boost_channel_gain_scale_and_automated_macro_sweep() {
 
     // 3. Automated Project Macro targeting ChannelParam::Gain compiles and sweeps 0.0 -> +6.02 dB
     //    with zero RT allocations!
-    let mut proj = Project::demo();
-    let target_ch = proj.mixer.channels[0].id;
-    let ch_ref = ChannelRef::Channel(target_ch);
+    let mut proj = Project::empty();
+    proj.bars = 1;
     proj.mixer.master.strip.gain = 1.0;
+    proj.mixer
+        .channels
+        .push(Channel::new(1, ChannelKind::Audio, "Lead"));
+    proj.instruments.push(InstrumentInstance {
+        id: 1,
+        name: "Lead".into(),
+        rack: RackPatch::default_synth(),
+        channel: 1,
+    });
+    let target_ch = 1;
+    let ch_ref = ChannelRef::Channel(target_ch);
     let ramp_id = proj.max_id() + 1;
     proj.patterns.push(Pattern {
         id: ramp_id,
@@ -1143,10 +1155,11 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
         .inserts
         .push(EffectDevice::delay(device_id));
     let mut mix = MixerEngine::new(&base, RATE);
-    assert_eq!(mix.allocated_delay_count(), 1);
+    assert_eq!(mix.allocated_effect_count(), 1);
 
-    // Pre-build one ScoreWindow per EffectKindTag off the RT thread.
-    let scores: Vec<ScoreWindow> = EffectKindTag::ALL
+    // Pre-build one ScoreWindow, one PreparedEffect, and one pre-sized retirement queue
+    // per EffectKindTag strictly off the RT thread.
+    let mut swaps: Vec<(ScoreWindow, Vec<PreparedEffect>, Vec<ActiveEffect>)> = EffectKindTag::ALL
         .iter()
         .map(|&tag| {
             let mut s = stereo_score();
@@ -1155,7 +1168,8 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
                 .unwrap()
                 .inserts
                 .push(tag.default_device(device_id));
-            s
+            let prep = prepare_effects_for_score(&s, RATE);
+            (s, prep, Vec::with_capacity(MAX_EFFECT_DEVICES))
         })
         .collect();
 
@@ -1163,8 +1177,8 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
     sources[0] = [0.4, -0.3];
 
     assert_no_heap_operations(|| {
-        for score in &scores {
-            mix.adopt(score, false);
+        for (score, prepared, retired) in &mut swaps {
+            mix.adopt_prepared(score, false, prepared, retired);
             mix.update_controls(score, 0.0, 0.0);
             for _ in 0..128 {
                 let y = mix.process(&sources, [0.0; 2], [0.0; 2]);
@@ -1172,6 +1186,12 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
             }
         }
     });
+    assert_eq!(mix.allocated_effect_count(), 1);
+    // Every swap with a freshly prepared replacement retired the previous effect off-RT.
+    let total_retired: usize = swaps.iter().map(|(_, _, r)| r.len()).sum();
+    assert_eq!(total_retired, EffectKindTag::ALL.len());
+    // Drop retired effects off-RT.
+    drop(swaps);
 }
 
 #[test]
@@ -1685,5 +1705,296 @@ fn master_metering_observes_final_output_with_preview_monitor_and_mute() {
     assert!(
         m_lim.clipped && m_lim.output_peak[0] > 1.15,
         "Master clip metering must catch limited strip + monitor > 1.0: {m_lim:?}"
+    );
+}
+
+#[test]
+fn muted_channel_preserves_input_metering_drains_inserts_and_wakes_cleanly() {
+    use cadence_core::mixer::{DelayMode, DelayPatch};
+    let mut score = stereo_score();
+    score.mixer.channel_mut(1).unwrap().inserts = vec![
+        EffectDevice {
+            id: 801,
+            name: "Delay".into(),
+            bypassed: false,
+            kind: EffectKind::Delay(DelayPatch {
+                mode: DelayMode::Stereo,
+                steps: 0.25,
+                feedback: 0.5,
+                mix: 1.0,
+            }),
+        },
+        EffectDevice {
+            id: 802,
+            name: "Reverb".into(),
+            bypassed: false,
+            kind: EffectKind::Reverb(ReverbPatch {
+                decay_seconds: 0.4,
+                mix: 0.6,
+                ..ReverbPatch::default()
+            }),
+        },
+    ];
+    score
+        .mixer
+        .flags
+        .set_channel_muted(ChannelRef::Channel(1), true)
+        .unwrap();
+
+    let mut mix = MixerEngine::new(&score, RATE);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.snap_smoothers();
+
+    // 1. Muted channel receiving signal still reports live input meter peaks while outputting 0.0.
+    let mut src_block = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    src_block[0].fill([0.6, -0.4]);
+    let mut out = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+    mix.process_block(&src_block, 1, &[], &[], &mut out);
+    assert!(
+        out.iter().all(|&f| f == [0.0, 0.0]),
+        "muted channel must output silence"
+    );
+    let m = meter(&mix, ChannelRef::Channel(1));
+    assert!(
+        m.input_peak[0] > 0.55 && m.input_peak[1] > 0.35 && m.output_peak == [0.0, 0.0],
+        "muted channel must preserve live input metering: {m:?}"
+    );
+
+    // 2. Un-mute, excite Delay+Reverb, then mute and let inserts drain silently to quiet;
+    //    un-muting again must produce zero stale audio burst.
+    score
+        .mixer
+        .flags
+        .set_channel_muted(ChannelRef::Channel(1), false)
+        .unwrap();
+    mix.adopt(&score, false);
+    mix.update_controls(&score, 0.0, 0.0);
+    for _ in 0..8 {
+        mix.process_block(&src_block, 1, &[], &[], &mut out);
+    }
+
+    score
+        .mixer
+        .flags
+        .set_channel_muted(ChannelRef::Channel(1), true)
+        .unwrap();
+    mix.adopt(&score, false);
+    mix.update_controls(&score, 0.0, 0.0);
+    // Drain ~4s while muted (more than enough for 0.4s reverb + 0.5-fb delay).
+    let silent = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    for _ in 0..((RATE as usize * 4) / AUDIO_SUB_BLOCK_FRAMES) {
+        mix.process_block(&src_block, 1, &[], &[], &mut out);
+        assert!(out.iter().all(|&f| f == [0.0, 0.0]));
+    }
+
+    // Un-mute with silent input: inserts must be fully drained (zero stale tail burst).
+    score
+        .mixer
+        .flags
+        .set_channel_muted(ChannelRef::Channel(1), false)
+        .unwrap();
+    mix.adopt(&score, false);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.process_block(&silent, 0, &[], &[], &mut out);
+    let max_stale = out
+        .iter()
+        .fold(0.0_f32, |acc, &[l, r]| acc.max(l.abs()).max(r.abs()));
+    assert!(
+        max_stale < 1e-6,
+        "muted insert draining must prevent stale bursts on un-mute, got {max_stale}"
+    );
+}
+
+#[test]
+fn silent_channel_sleeping_preserves_delay_reverb_limiter_tails_and_gr_stats() {
+    use cadence_core::mixer::{DelayMode, DelayPatch, LimiterPatch};
+    let mut score = stereo_score();
+    score.mixer.channel_mut(1).unwrap().inserts = vec![
+        EffectDevice {
+            id: 811,
+            name: "Delay".into(),
+            bypassed: false,
+            kind: EffectKind::Delay(DelayPatch {
+                mode: DelayMode::Stereo,
+                steps: 0.5, // 62.5 ms @ 120 BPM (~3000 frames @ 48 kHz)
+                feedback: 0.6,
+                mix: 0.5,
+            }),
+        },
+        EffectDevice {
+            id: 812,
+            name: "Reverb".into(),
+            bypassed: false,
+            kind: EffectKind::Reverb(ReverbPatch {
+                decay_seconds: 0.5,
+                mix: 0.4,
+                ..ReverbPatch::default()
+            }),
+        },
+    ];
+    score.mixer.master.inserts.push(EffectDevice {
+        id: 813,
+        name: "Limiter".into(),
+        bypassed: false,
+        kind: EffectKind::Limiter(LimiterPatch {
+            ceiling_db: -6.0,
+            input_drive_db: 6.0,
+            release_ms: 40.0,
+            mix: 1.0,
+        }),
+    });
+
+    let mut mix = MixerEngine::new(&score, RATE);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.snap_smoothers();
+
+    // Feed a short loud burst on channel 1, then feed silence for 5 seconds.
+    let mut burst = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    for (i, dst) in burst[0].iter_mut().enumerate() {
+        let x = (i as f32 * 0.2).sin() * 0.9;
+        *dst = [x, -x];
+    }
+    let silent = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    let mut out = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+
+    mix.process_block(&burst, 1, &[], &[], &mut out);
+
+    // Confirm delayed echoes & reverb tail remain audible well past the 62.5 ms first echo.
+    let mut echo_peak = 0.0_f32;
+    let total_silent_blocks = (RATE as usize * 5) / AUDIO_SUB_BLOCK_FRAMES;
+    for blk in 0..total_silent_blocks {
+        mix.process_block(&silent, 0, &[], &[], &mut out);
+        if (40..120).contains(&blk) {
+            for &[l, r] in &out {
+                echo_peak = echo_peak.max(l.abs()).max(r.abs());
+            }
+        }
+    }
+    assert!(
+        echo_peak > 0.05,
+        "silent sleeping must NOT truncate Delay/Reverb tails (echo_peak={echo_peak})"
+    );
+    // After 5 seconds of silence, tail must be fully settled and Limiter GR stats must stay accurate.
+    assert!(
+        out.iter().all(|&[l, r]| l.abs() < 1e-6 && r.abs() < 1e-6),
+        "tail must settle cleanly after 5s"
+    );
+    let (_, max_gr, avg_gr) = mix
+        .render_effect_stats()
+        .find(|(id, _, _)| *id == 813)
+        .expect("limiter render stats");
+    let lim_slot = mix
+        .effects
+        .iter()
+        .find(|s| s.id == Some(813))
+        .expect("limiter slot");
+    assert_eq!(
+        lim_slot.render_gr_frames,
+        ((1 + total_silent_blocks) * AUDIO_SUB_BLOCK_FRAMES) as u64,
+        "sleeping silent blocks must still advance Limiter render_gr_frames for exact avg_gr_db"
+    );
+    assert!(
+        max_gr > 0.5 && avg_gr > 0.0 && avg_gr < max_gr,
+        "Limiter stats must reflect active GR and silent-block averaging: max={max_gr}, avg={avg_gr}"
+    );
+}
+
+#[test]
+fn adopt_prepared_replaces_live_effect_on_non_boundary_fresh_preparation() {
+    use cadence_core::mixer::{DelayMode, DelayPatch};
+
+    let mut score = stereo_score();
+    score.mixer.channel_mut(1).unwrap().inserts = vec![EffectDevice {
+        id: 902,
+        name: "Reverb".into(),
+        bypassed: false,
+        kind: EffectKind::Reverb(ReverbPatch {
+            decay_seconds: 1.5,
+            mix: 0.8,
+            ..ReverbPatch::default()
+        }),
+    }];
+    score.mixer.channel_mut(2).unwrap().inserts = vec![EffectDevice {
+        id: 901,
+        name: "Delay".into(),
+        bypassed: false,
+        kind: EffectKind::Delay(DelayPatch {
+            mode: DelayMode::Stereo,
+            steps: 0.25, // ~1500 frames @ 48 kHz, 120 BPM
+            feedback: 0.6,
+            mix: 1.0,
+        }),
+    }];
+
+    let mut mix = MixerEngine::new(&score, RATE);
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.snap_smoothers();
+
+    // Excite Reverb (Ch1) and Delay (Ch2) so both carry active tails.
+    let mut burst = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    burst[0].fill([0.8, -0.8]);
+    burst[1].fill([0.8, -0.8]);
+    let silent = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+    let mut out = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+    for _ in 0..4 {
+        mix.process_block(&burst, 0b11, &[], &[], &mut out);
+    }
+
+    // Supply a freshly prepared replacement ONLY for Reverb (902) with `boundary = false`
+    // (as produced by coalesced remove+re-add or sample-rate rebuilds).
+    let mut prepared = vec![PreparedEffect::new(902, EffectKindTag::Reverb, RATE)];
+    let mut retired = Vec::with_capacity(MAX_EFFECT_DEVICES);
+    assert_no_heap_operations(|| {
+        mix.adopt_prepared(&score, false, &mut prepared, &mut retired);
+    });
+    assert!(
+        prepared[0].effect.is_none(),
+        "fresh non-boundary PreparedEffect must be consumed by adopt_prepared"
+    );
+    assert_eq!(
+        retired.len(),
+        1,
+        "replaced live effect must be moved into pre-sized retired sink"
+    );
+
+    mix.update_controls(&score, 0.0, 0.0);
+    mix.clear_meters(None);
+
+    let rev_slot = mix
+        .effects
+        .iter()
+        .find(|s| s.id == Some(902))
+        .expect("reverb slot");
+    assert!(
+        rev_slot.is_quiet(),
+        "freshly replaced Reverb slot must be quiet immediately after non-boundary swap"
+    );
+    let delay_slot = mix
+        .effects
+        .iter()
+        .find(|s| s.id == Some(901))
+        .expect("delay slot");
+    assert!(
+        !delay_slot.is_quiet(),
+        "unchanged Delay slot must preserve live tail across non-boundary swap"
+    );
+
+    // Feed silence: replaced Reverb (Ch1) must emit zero stale tail while untouched Delay (Ch2)
+    // continues emitting its scheduled echoes cleanly.
+    let mut echo_peak = 0.0_f32;
+    for _ in 0..64 {
+        mix.process_block(&silent, 0, &[], &[], &mut out);
+        for &[l, r] in &out {
+            echo_peak = echo_peak.max(l.abs()).max(r.abs());
+        }
+    }
+    let ch1_meter = meter(&mix, ChannelRef::Channel(1));
+    assert!(
+        ch1_meter.output_peak_hold[0] == 0.0 && ch1_meter.output_peak_hold[1] == 0.0,
+        "replaced Reverb channel must emit zero stale tail, got {ch1_meter:?}"
+    );
+    assert!(
+        echo_peak > 0.05,
+        "untouched Delay must still emit echoes after sibling replacement (peak={echo_peak})"
     );
 }

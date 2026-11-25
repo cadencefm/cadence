@@ -208,6 +208,15 @@ impl StereoBiquad {
         self.current = self.target;
     }
 
+    /// Whether both stereo biquad delay registers have decayed below silence (`1e-7`).
+    #[inline]
+    pub fn quiet(&self) -> bool {
+        self.z1
+            .iter()
+            .chain(self.z2.iter())
+            .all(|v| v.abs() < TAIL_SILENCE_FLOOR_F64)
+    }
+
     /// Snap coefficients immediately (for initialization or reset).
     pub fn snap_coeffs(&mut self, coeffs: BiquadCoeffs) {
         self.current = coeffs;
@@ -222,6 +231,42 @@ impl StereoBiquad {
     /// stable 2nd-order denominators preserves strict BIBO stability).
     pub fn set_coeffs(&mut self, target: BiquadCoeffs) {
         self.target = target;
+    }
+
+    /// Advance coefficient interpolation across `frames` silent or idle-bypassed samples.
+    ///
+    /// Costs O(1) when coefficients are already settled, and matches per-frame
+    /// coefficient interpolation identically while slewing.
+    #[inline]
+    pub fn advance_silent(&mut self, frames: usize) {
+        if frames == 0 {
+            return;
+        }
+        if self.current == self.target {
+            if !self.current.active {
+                self.z1 = [0.0; 2];
+                self.z2 = [0.0; 2];
+            }
+            return;
+        }
+        let a = self.smooth_coeff;
+        for _ in 0..frames {
+            let diff = self.current.max_diff(self.target);
+            if diff <= SMOOTH_SETTLE_EPS_F64 {
+                self.current = self.target;
+                if !self.current.active {
+                    self.z1 = [0.0; 2];
+                    self.z2 = [0.0; 2];
+                }
+                break;
+            }
+            self.current.b0 += (self.target.b0 - self.current.b0) * a;
+            self.current.b1 += (self.target.b1 - self.current.b1) * a;
+            self.current.b2 += (self.target.b2 - self.current.b2) * a;
+            self.current.a1 += (self.target.a1 - self.current.a1) * a;
+            self.current.a2 += (self.target.a2 - self.current.a2) * a;
+            self.current.active = true;
+        }
     }
 
     /// Process one stereo `f64` frame.
@@ -586,11 +631,27 @@ impl Eq {
         }
     }
 
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        self.hpf.advance_silent(frames);
+        self.low.advance_silent(frames);
+        self.mid.advance_silent(frames);
+        self.high.advance_silent(frames);
+    }
+
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
         let wet_mix = match self.bypass.step(bypassed) {
-            BypassStep::Idle => return dry,
+            BypassStep::Idle => {
+                self.advance_silent_frames(1, true);
+                return dry;
+            }
             BypassStep::SettledBypass => {
                 self.hpf.reset();
                 self.low.reset();
@@ -621,8 +682,38 @@ impl crate::dsp::StereoEffect for Eq {
     }
 
     #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        if buf.is_empty() {
+            return;
+        }
+        self.has_processed = true;
+        if self.bypass.check_idle_bypass(bypassed) {
+            self.advance_silent_frames(buf.len(), true);
+            for frame in buf.iter_mut() {
+                *frame = sanitize_frame(*frame);
+            }
+            return;
+        }
+        for frame in buf.iter_mut() {
+            *frame = Eq::process(self, *frame, bypassed);
+        }
+    }
+
+    #[inline]
     fn reset(&mut self) {
         Eq::reset(self);
+    }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.bypass.is_settled_for(bypassed)
+            && (bypassed
+                || (self.hpf.quiet() && self.low.quiet() && self.mid.quiet() && self.high.quiet()))
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        Eq::advance_silent_frames(self, frames, bypassed);
     }
 }
 

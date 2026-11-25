@@ -3,13 +3,15 @@
 use super::input::InputMonitorDrain;
 use super::scheduler::{StepAction, StepScheduler};
 use super::shared::*;
-use super::voice_pool::{automation_position, LiveNote, TriggerRequest, VoicePool, ZoneTriggerCtx};
+use super::voice_pool::{
+    automation_position, LiveNote, TriggerRequest, VoiceBlockOut, VoicePool, ZoneTriggerCtx,
+};
 #[cfg(test)]
 use super::voices::Voice;
 use super::*;
 use crate::mix_engine::MixerEngine;
-use cadence_core::dsp::{control_stride_mask, stereo_mid_f32};
-use cadence_core::mixer::ChannelRef;
+use cadence_core::dsp::{control_stride_mask, stereo_mid_f32, AUDIO_SUB_BLOCK_FRAMES};
+use cadence_core::mixer::{ChannelRef, MAX_EFFECT_DEVICES};
 use cadence_core::runtime::{AudioInputStatus, CapturePhase};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
 use std::sync::atomic::{fence, Ordering};
@@ -50,6 +52,7 @@ pub(super) struct Engine {
     shared: Arc<Shared>,
     sample_rate: f64,
     voice_pool: VoicePool,
+    voice_block: Box<VoiceBlockOut>,
     scheduler: StepScheduler,
     control_counter: u32,
     control_mask: u32,
@@ -65,6 +68,19 @@ pub(super) struct Engine {
     monitor_drain: InputMonitorDrain,
 }
 
+/// Resolve the initial transport step when rebuilding [`Engine`] across an audio
+/// device, sample-rate, or buffer-size reconfiguration: preserve the live transport
+/// cursor whenever it lies inside `project.live_window`, or fall back cleanly to
+/// `window.start` so the rebuilt engine never starts in a dead zone before the ring.
+#[cfg(any(feature = "audio", test))]
+#[inline]
+pub(super) fn resolve_reconfigure_start_step(project: &ScoreWindow, preserved_step: u64) -> u64 {
+    match project.live_window {
+        Some(window) if !window.contains(preserved_step) => window.start,
+        _ => preserved_step,
+    }
+}
+
 impl Engine {
     pub(super) fn new(
         project: ScoreWindow,
@@ -72,12 +88,20 @@ impl Engine {
         sample_rate: u32,
         shared: Arc<Shared>,
     ) -> Self {
+        Self::new_at_step(project, samples, sample_rate, 0, shared)
+    }
+
+    pub(super) fn new_at_step(
+        project: ScoreWindow,
+        samples: SampleBank,
+        sample_rate: u32,
+        start_step: u64,
+        shared: Arc<Shared>,
+    ) -> Self {
         let mixer = MixerEngine::new(&project, sample_rate);
         shared.publish_input_tracks(&project);
         shared.sample_rate.store(sample_rate, Ordering::Release);
-        shared
-            .prepared_delays
-            .store(mixer.allocated_delay_count(), Ordering::Release);
+        shared.sync_prepared_effects(&project, sample_rate);
         shared.pdc_latency_frames.store(
             mixer.total_output_latency_frames().min(u32::MAX as usize) as u32,
             Ordering::Release,
@@ -89,7 +113,8 @@ impl Engine {
             publication: Box::new(ProjectPublication {
                 project: None,
                 samples: None,
-                extra_delays: Vec::new(),
+                prepared_effects: Vec::new(),
+                retired_effects: Vec::with_capacity(MAX_EFFECT_DEVICES),
                 generation: project_generation,
             }),
             project_generation,
@@ -101,12 +126,13 @@ impl Engine {
             shared,
             sample_rate: sr,
             voice_pool: VoicePool::new(sr),
+            voice_block: VoiceBlockOut::new_boxed(),
             scheduler: StepScheduler::new(),
             control_counter: 0,
             control_mask: control_stride_mask(sr, CONTROL_TARGET_HZ),
             mixer,
             rendered_frames: 0,
-            play_step: 0,
+            play_step: start_step,
             wave_counter: 0,
             wave_mask: control_stride_mask(sr, WAVE_DOWNSAMPLE_TARGET_HZ),
             wave_peak: 0.0,
@@ -115,6 +141,14 @@ impl Engine {
             audition_serial: 0,
             monitor_drain: InputMonitorDrain::new(),
         };
+        if start_step > 0 {
+            engine.scheduler.seek(start_step);
+        }
+        engine
+            .shared
+            .step_position
+            .store(pack_step_position(start_step, 0.0), Ordering::Release);
+        engine.shared.next_step.store(start_step, Ordering::Release);
         engine.publish_scope_tracks(true);
         engine.publish_mixer_meters();
         engine.update_control_block(false);
@@ -129,6 +163,12 @@ impl Engine {
         self.voice_pool.voices()
     }
 
+    #[cfg(test)]
+    #[inline]
+    pub(super) fn set_disable_sleep(&mut self, disable: bool) {
+        self.mixer.set_disable_sleep(disable);
+    }
+
     #[inline]
     pub(super) fn play_step(&self) -> u64 {
         self.play_step
@@ -136,13 +176,17 @@ impl Engine {
 
     /// Stage a score update into the lock-free publication slot for the current generation.
     pub(super) fn publish_score_update(&self, score: ScoreWindow) {
-        let extra_delays = self.shared.prepare_extra_delays(&score);
-        self.shared.project_slot.publish(ProjectPublication {
-            project: Some(Box::new(score)),
-            samples: None,
-            extra_delays,
-            generation: self.project_generation,
-        });
+        let prepared_effects = self.shared.prepare_effects(&score, false);
+        self.shared.project_slot.publish_merged(
+            ProjectPublication {
+                project: Some(Box::new(score)),
+                samples: None,
+                prepared_effects,
+                retired_effects: Vec::with_capacity(MAX_EFFECT_DEVICES),
+                generation: self.project_generation,
+            },
+            ProjectPublication::merge_from_previous,
+        );
     }
 
     /// Collect whole-render channel and effect telemetry against the active score.
@@ -191,12 +235,13 @@ impl Engine {
             if let Some(samples) = self.publication.samples.take() {
                 self.publication.samples = Some(std::mem::replace(&mut self.samples, samples));
             }
-            if !self.publication.extra_delays.is_empty() {
-                self.mixer
-                    .install_delay_buffers(&mut self.publication.extra_delays);
-            }
             let boundary = self.project_generation != self.publication.generation;
-            self.mixer.adopt(&self.project, boundary);
+            self.mixer.adopt_prepared(
+                &self.project,
+                boundary,
+                &mut self.publication.prepared_effects,
+                &mut self.publication.retired_effects,
+            );
             self.shared.pdc_latency_frames.store(
                 self.mixer
                     .total_output_latency_frames()
@@ -663,7 +708,13 @@ impl Engine {
         });
     }
 
-    pub(super) fn next_frame(&mut self) -> [f32; 2] {
+    /// Render one event-free sub-block (`1..=out.len().min(AUDIO_SUB_BLOCK_FRAMES)`)
+    /// into `out`, splitting cleanly on step boundaries, sub-step offset events, and
+    /// control-rate boundaries so timing matches frame-by-frame execution exactly.
+    pub(super) fn render_sub_block(&mut self, out: &mut [[f32; 2]]) -> usize {
+        if out.is_empty() {
+            return 0;
+        }
         self.rendered_frames = self.rendered_frames.wrapping_add(1);
         let mut playing = self.shared.playing.load(Ordering::Relaxed);
         if playing {
@@ -679,11 +730,24 @@ impl Engine {
         if self.control_counter == 0 {
             self.update_control_block(playing);
         }
-        self.control_counter = self.control_counter.wrapping_add(1) & self.control_mask;
-        if playing {
-            self.scheduler
-                .advance_frame(self.project.step_seconds(), self.sample_rate);
-        }
+        let frames_until_control =
+            (self.control_mask as usize + 1) - (self.control_counter as usize);
+        let mut limit = out
+            .len()
+            .min(AUDIO_SUB_BLOCK_FRAMES)
+            .min(frames_until_control);
+        let n = if playing {
+            limit = limit.min(self.scheduler.frames_until_sub_event(limit));
+            self.scheduler.advance_until_step_due(
+                limit,
+                self.project.step_seconds(),
+                self.sample_rate,
+            )
+        } else {
+            limit
+        };
+        self.rendered_frames = self.rendered_frames.wrapping_add((n - 1) as u64);
+        self.control_counter = self.control_counter.wrapping_add(n as u32) & self.control_mask;
 
         let preview_ref = self
             .audition
@@ -693,66 +757,107 @@ impl Engine {
                 AuditionKind::Sample { sample, .. } => Some(sample),
                 _ => None,
             });
-        let frame_out = self.voice_pool.render_frame(&self.samples, preview_ref);
-        let mon = self
-            .monitor_drain
-            .next_frame(&self.shared, self.sample_rate);
+        self.voice_pool
+            .render_block(&self.samples, preview_ref, n, &mut self.voice_block);
+        let mut mon_buf = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+        let monitor_active =
+            self.monitor_drain
+                .render_block(&self.shared, self.sample_rate, &mut mon_buf[..n]);
+        let preview_slice: &[[f32; 2]] = if self.voice_block.preview_active {
+            &self.voice_block.preview[..n]
+        } else {
+            &[]
+        };
+        let mon_slice: &[[f32; 2]] = if monitor_active { &mon_buf[..n] } else { &[] };
         // Unclipped 32-bit float Master output (clamping happens only at final DAC / WAV boundaries).
-        let out = self
-            .mixer
-            .process(&frame_out.sources, frame_out.preview, mon);
+        self.mixer.process_block(
+            &self.voice_block.sources,
+            self.voice_block.source_active_mask,
+            preview_slice,
+            mon_slice,
+            &mut out[..n],
+        );
 
-        let scope_index = self.scope_write_page * WAVE_SAMPLES + self.scope_offset;
         let inst_count = self.project.instruments.len().min(MAX_INSTRUMENTS);
-        for (slot, value) in self.shared.track_waveform[..inst_count]
-            .iter()
-            .zip(&frame_out.track_scope[..inst_count])
-        {
-            slot[scope_index].store(value.to_bits(), Ordering::Relaxed);
-        }
-        self.scope_offset += 1;
-        if self.scope_offset == WAVE_SAMPLES {
-            self.shared
-                .scope_page
-                .store(self.scope_write_page, Ordering::Release);
-            self.shared.scope_sequence.fetch_add(1, Ordering::Release);
-            self.scope_write_page ^= 1;
-            self.scope_offset = 0;
+        let active_mask = self.voice_block.source_active_mask;
+        let zero_bits = 0.0_f32.to_bits();
+        let mut src_pos = 0usize;
+        while src_pos < n {
+            let chunk = (n - src_pos).min(WAVE_SAMPLES - self.scope_offset);
+            let dst_base = self.scope_write_page * WAVE_SAMPLES + self.scope_offset;
+            for track in 0..inst_count {
+                let dst = &self.shared.track_waveform[track][dst_base..dst_base + chunk];
+                if active_mask & (1u32 << track) != 0 {
+                    let src = &self.voice_block.track_scope[track][src_pos..src_pos + chunk];
+                    for (slot, &value) in dst.iter().zip(src.iter()) {
+                        slot.store(value.to_bits(), Ordering::Relaxed);
+                    }
+                } else {
+                    for slot in dst {
+                        slot.store(zero_bits, Ordering::Relaxed);
+                    }
+                }
+            }
+            self.scope_offset += chunk;
+            src_pos += chunk;
+            if self.scope_offset == WAVE_SAMPLES {
+                self.shared
+                    .scope_page
+                    .store(self.scope_write_page, Ordering::Release);
+                self.shared.scope_sequence.fetch_add(1, Ordering::Release);
+                self.scope_write_page ^= 1;
+                self.scope_offset = 0;
+            }
         }
 
         // Lock-free SPSC stereo tap ring (zero overhead when disabled).
         if self.shared.tap_enabled.load(Ordering::Relaxed) {
-            let write = self.shared.tap_write.load(Ordering::Relaxed);
+            let mut write = self.shared.tap_write.load(Ordering::Relaxed);
             let read = self.shared.tap_read.load(Ordering::Acquire);
-            if write.wrapping_sub(read) < AUDIO_TAP_CAPACITY as u64 {
+            let free =
+                (AUDIO_TAP_CAPACITY as u64).saturating_sub(write.wrapping_sub(read)) as usize;
+            let to_write = n.min(free);
+            for &[l, r] in &out[..to_write] {
                 let slot = (write as usize) & AUDIO_TAP_MASK;
-                self.shared.audio_tap[slot][0].store(out[0].to_bits(), Ordering::Relaxed);
-                self.shared.audio_tap[slot][1].store(out[1].to_bits(), Ordering::Relaxed);
+                self.shared.audio_tap[slot][0].store(l.to_bits(), Ordering::Relaxed);
+                self.shared.audio_tap[slot][1].store(r.to_bits(), Ordering::Relaxed);
+                write = write.wrapping_add(1);
+            }
+            if to_write > 0 {
+                self.shared.tap_write.store(write, Ordering::Release);
+            }
+            if to_write < n {
                 self.shared
-                    .tap_write
-                    .store(write.wrapping_add(1), Ordering::Release);
-            } else {
-                self.shared.tap_dropped.fetch_add(1, Ordering::Relaxed);
+                    .tap_dropped
+                    .fetch_add((n - to_write) as u64, Ordering::Relaxed);
             }
         }
+
         // Peak-preserving signed-max waveform downsample at ~1_500 Hz across sample rates.
-        let mono_sample = stereo_mid_f32(out);
-        if mono_sample.abs() >= self.wave_peak.abs() {
-            self.wave_peak = mono_sample;
+        let mut wave_write = self.shared.wave_write.load(Ordering::Relaxed);
+        let mut wave_dirty = false;
+        for &frame in &out[..n] {
+            let mono_sample = stereo_mid_f32(frame);
+            if mono_sample.abs() >= self.wave_peak.abs() {
+                self.wave_peak = mono_sample;
+            }
+            self.wave_counter = self.wave_counter.wrapping_add(1) & self.wave_mask;
+            if self.wave_counter == 0 {
+                self.shared.waveform[wave_write].store(self.wave_peak.to_bits(), Ordering::Relaxed);
+                wave_write = (wave_write + 1) % WAVE_SAMPLES;
+                wave_dirty = true;
+                self.wave_peak = 0.0;
+            }
         }
-        self.wave_counter = self.wave_counter.wrapping_add(1) & self.wave_mask;
-        if self.wave_counter == 0 {
-            let index = self.shared.wave_write.load(Ordering::Relaxed);
-            self.shared.waveform[index].store(self.wave_peak.to_bits(), Ordering::Relaxed);
-            self.shared
-                .wave_write
-                .store((index + 1) % WAVE_SAMPLES, Ordering::Release);
-            self.wave_peak = 0.0;
+        if wave_dirty {
+            self.shared.wave_write.store(wave_write, Ordering::Release);
         }
 
         // Throttle mixer meter seqlock publication to ~187.5 Hz across sample rates.
-        self.meter_counter = self.meter_counter.wrapping_add(1) & self.meter_mask;
-        if self.meter_counter == 0 {
+        let stride = self.meter_mask as usize + 1;
+        let next_meter = self.meter_counter as usize + n;
+        self.meter_counter = (next_meter & (stride - 1)) as u32;
+        if next_meter >= stride {
             let [level_left, level_right] = self.mixer.master_output_peaks();
             let level = level_left.max(level_right);
             self.shared.peak.store(level.to_bits(), Ordering::Relaxed);
@@ -764,6 +869,24 @@ impl Engine {
                 .store(level_right.to_bits(), Ordering::Relaxed);
             self.publish_mixer_meters();
         }
-        out
+        n
+    }
+
+    /// Render an arbitrary-length stereo output slice by splitting cleanly on
+    /// control-block, sub-step event, and step boundaries (`<= AUDIO_SUB_BLOCK_FRAMES`).
+    pub(super) fn render_block(&mut self, out: &mut [[f32; 2]]) {
+        let mut pos = 0;
+        while pos < out.len() {
+            let n = self.render_sub_block(&mut out[pos..]);
+            debug_assert!(n > 0);
+            pos += n;
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn next_frame(&mut self) -> [f32; 2] {
+        let mut frame = [[0.0; 2]; 1];
+        self.render_block(&mut frame);
+        frame[0]
     }
 }

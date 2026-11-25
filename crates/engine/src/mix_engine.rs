@@ -5,24 +5,27 @@ use cadence_core::dsp::{
     apply_fader_gain, limiter_lookahead_frames, one_pole_coeff_ms, one_pole_decay_ms,
     pan_stereo_balance, sanitize_frame, sanitize_sample, smooth_step_f32, Chorus, Compressor,
     Delay, DelayLine, Drive, Eq, Limiter, PeakHold, Reverb, RhythmicFilter, StereoEffect,
+    AUDIO_SUB_BLOCK_FRAMES, TAIL_SILENCE_FLOOR_F32,
 };
 use cadence_core::mixer::{
     ChannelKind, ChannelParam, ChannelRef, EffectKind, EffectKindTag, MixerParamTarget,
-    MAX_CHANNELS, MAX_DELAY_SECONDS, MAX_DUCKS, MAX_EFFECT_DEVICES, MAX_INSERTS,
-    MAX_MIXER_CHANNELS, MAX_SENDS,
+    MAX_CHANNELS, MAX_DUCKS, MAX_EFFECT_DEVICES, MAX_INSERTS, MAX_MIXER_CHANNELS, MAX_SENDS,
 };
 use cadence_core::runtime::{ChannelMeter, EffectMeter};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
 
 const MASTER: usize = MAX_CHANNELS - 1;
+/// Gain-reduction meter hold snap floor in dB (`0.0001 dB`).
+const GR_HOLD_ZERO_FLOOR_DB: f32 = 1e-4;
 
 const _: () = {
     assert!(MAX_CHANNELS <= u8::MAX as usize);
     assert!(MAX_EFFECT_DEVICES <= u8::MAX as usize);
 };
 
-/// Count how many `Delay` insert devices exist in `score` (capped at `MAX_EFFECT_DEVICES`).
-pub(crate) fn count_delay_devices(score: &ScoreWindow) -> usize {
+/// Collect `(device_id, EffectKindTag)` pairs for every insert device in `score`
+/// (capped at [`MAX_EFFECT_DEVICES`]). Off-RT helper used for effect preparation.
+pub(crate) fn score_effect_specs(score: &ScoreWindow) -> Vec<(u64, EffectKindTag)> {
     score
         .mixer
         .channels
@@ -31,8 +34,19 @@ pub(crate) fn count_delay_devices(score: &ScoreWindow) -> usize {
         .flat_map(|c| c.inserts.iter())
         .chain(score.mixer.master.inserts.iter())
         .take(MAX_EFFECT_DEVICES)
-        .filter(|d| matches!(d.kind, EffectKind::Delay(_)))
-        .count()
+        .map(|d| (d.id, d.kind.tag()))
+        .collect()
+}
+
+/// Off-RT helper: construct a [`PreparedEffect`] for every insert device in `score`.
+pub(crate) fn prepare_effects_for_score(
+    score: &ScoreWindow,
+    sample_rate: u32,
+) -> Vec<PreparedEffect> {
+    score_effect_specs(score)
+        .into_iter()
+        .map(|(id, tag)| PreparedEffect::new(id, tag, sample_rate))
+        .collect()
 }
 
 #[derive(Clone, Copy, Default)]
@@ -71,8 +85,18 @@ impl MeterState {
             } else {
                 0.0
             };
-            self.input[channel] = (self.input[channel] * decay).max(before);
-            self.output[channel] = (self.output[channel] * decay).max(after);
+            let next_in = (self.input[channel] * decay).max(before);
+            self.input[channel] = if next_in < TAIL_SILENCE_FLOOR_F32 {
+                0.0
+            } else {
+                next_in
+            };
+            let next_out = (self.output[channel] * decay).max(after);
+            self.output[channel] = if next_out < TAIL_SILENCE_FLOOR_F32 {
+                0.0
+            } else {
+                next_out
+            };
 
             self.input_hold[channel].observe(
                 before,
@@ -93,6 +117,64 @@ impl MeterState {
             self.output_max[channel] = self.output_max[channel].max(after);
             self.hot |= before > 1.0 || after > 1.0;
             self.clipped |= !finite || (is_master && after > 1.0);
+        }
+    }
+
+    #[inline]
+    fn is_settled_zero(&self) -> bool {
+        self.input[0] == 0.0
+            && self.input[1] == 0.0
+            && self.output[0] == 0.0
+            && self.output[1] == 0.0
+            && self.input_hold[0].value() == 0.0
+            && self.input_hold[1].value() == 0.0
+            && self.output_hold[0].value() == 0.0
+            && self.output_hold[1].value() == 0.0
+    }
+
+    #[inline]
+    fn observe_silent_block(
+        &mut self,
+        frames: usize,
+        decay: f32,
+        hold_frames: u32,
+        hold_decay: f32,
+    ) {
+        if self.is_settled_zero() {
+            return;
+        }
+        for _ in 0..frames {
+            for channel in 0..2 {
+                let next_in = self.input[channel] * decay;
+                self.input[channel] = if next_in < TAIL_SILENCE_FLOOR_F32 {
+                    0.0
+                } else {
+                    next_in
+                };
+                let next_out = self.output[channel] * decay;
+                self.output[channel] = if next_out < TAIL_SILENCE_FLOOR_F32 {
+                    0.0
+                } else {
+                    next_out
+                };
+                self.input_hold[channel].observe(
+                    0.0,
+                    self.input[channel],
+                    hold_frames,
+                    hold_decay,
+                    PeakHold::DEFAULT_ZERO_FLOOR,
+                );
+                self.output_hold[channel].observe(
+                    0.0,
+                    self.output[channel],
+                    hold_frames,
+                    hold_decay,
+                    PeakHold::DEFAULT_ZERO_FLOOR,
+                );
+            }
+            if self.is_settled_zero() {
+                break;
+            }
         }
     }
 }
@@ -119,6 +201,7 @@ impl ChannelRole {
 struct SendPlan {
     /// Target Return channel index in `0..MAX_MIXER_CHANNELS`, or `None` when unused.
     target: Option<u8>,
+    target_channel_id: u64,
     amount: f32,
     target_amount: f32,
     pdc_delay: usize,
@@ -146,6 +229,7 @@ struct ChannelPlan {
     scale: f32,
     target_scale: f32,
     pdc_delay: usize,
+    max_pdc_delay: usize,
     meter: MeterState,
 }
 
@@ -169,6 +253,7 @@ impl Default for ChannelPlan {
             scale: 1.0,
             target_scale: 1.0,
             pdc_delay: 0,
+            max_pdc_delay: 0,
             meter: MeterState::default(),
         }
     }
@@ -189,12 +274,36 @@ impl ChannelPlan {
     }
 
     #[inline]
-    fn apply_cached_pan(self, input: [f32; 2]) -> [f32; 2] {
-        [
-            sanitize_sample(input[0]) * self.cached_pan_lr[0],
-            sanitize_sample(input[1]) * self.cached_pan_lr[1],
-        ]
+    fn has_smoothers_unsettled(&self) -> bool {
+        if self.gain != self.target_gain
+            || self.pan != self.target_pan
+            || self.scale != self.target_scale
+        {
+            return true;
+        }
+        for send in &self.sends {
+            if send.target.is_none() {
+                break;
+            }
+            if send.amount != send.target_amount {
+                return true;
+            }
+        }
+        false
     }
+
+    #[inline]
+    fn inserts_quiet(&self, effects: &[EffectSlot]) -> bool {
+        for &slot in self.inserts.iter().flatten() {
+            if let Some(effect) = effects.get(usize::from(slot)) {
+                if !effect.is_quiet() {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     #[inline]
     fn output_slot(self) -> Option<usize> {
         self.output.map(usize::from)
@@ -213,108 +322,158 @@ impl ChannelPlan {
     }
 }
 
-macro_rules! dispatch_effect_bank {
-    (&$bank:expr, $tag:expr, $method:ident ( $($arg:expr),* )) => {
-        dispatch_effect_bank!(@arm $bank, $tag, $method, [ $($arg),* ], [])
+macro_rules! dispatch_active_effect {
+    (&$eff:expr, $method:ident ( $($arg:expr),* )) => {
+        match &$eff {
+            ActiveEffect::Delay(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Reverb(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Eq(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Chorus(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Drive(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Filter(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Compressor(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Limiter(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+        }
     };
-    (&mut $bank:expr, $tag:expr, $method:ident ( $($arg:expr),* )) => {
-        dispatch_effect_bank!(@arm $bank, $tag, $method, [ $($arg),* ], [mut])
-    };
-    (@arm $bank:expr, $tag:expr, $method:ident, [ $($arg:expr),* ], [ $($m:tt)? ]) => {
-        match $tag {
-            EffectKindTag::Delay => StereoEffect::$method(& $($m)? $bank.delay, $($arg),*),
-            EffectKindTag::Reverb => StereoEffect::$method(& $($m)? $bank.reverb, $($arg),*),
-            EffectKindTag::Eq => StereoEffect::$method(& $($m)? $bank.eq, $($arg),*),
-            EffectKindTag::Chorus => StereoEffect::$method(& $($m)? $bank.chorus, $($arg),*),
-            EffectKindTag::Drive => StereoEffect::$method(& $($m)? $bank.drive, $($arg),*),
-            EffectKindTag::Filter => StereoEffect::$method(& $($m)? $bank.filter, $($arg),*),
-            EffectKindTag::Compressor => StereoEffect::$method(& $($m)? $bank.compressor, $($arg),*),
-            EffectKindTag::Limiter => StereoEffect::$method(& $($m)? $bank.limiter, $($arg),*),
+    (&mut $eff:expr, $method:ident ( $($arg:expr),* )) => {
+        match &mut $eff {
+            ActiveEffect::Delay(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Reverb(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Eq(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Chorus(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Drive(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Filter(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Compressor(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Limiter(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
         }
     };
 }
 
-/// Pre-allocated bank of all 8 native [`StereoEffect`] processors owned by one
-/// [`EffectSlot`]. Keeping every effect instance pre-allocated (with `Delay`
-/// buffers lazily supplied off-RT) allows `adopt()` to hot-swap slot effect
-/// kinds on the audio thread with zero allocations and zero drops.
-struct EffectBank {
-    delay: Delay,
-    reverb: Reverb,
-    eq: Eq,
-    chorus: Chorus,
-    drive: Drive,
-    filter: RhythmicFilter,
-    compressor: Compressor,
-    limiter: Limiter,
+/// Heap-boxed active stereo insert processor owned by one [`EffectSlot`].
+///
+/// Unused mixer slots hold `None` (`0` bytes of idle effect buffers across all
+/// `MAX_EFFECT_DEVICES` slots). Live additions and kind swaps construct new
+/// instances off the real-time thread as [`PreparedEffect`] and retire replaced
+/// instances into a pre-sized queue dropped off-RT, guaranteeing strictly zero
+/// RT allocations and zero RT drops.
+pub(crate) enum ActiveEffect {
+    Delay(Box<Delay>),
+    Reverb(Box<Reverb>),
+    Eq(Box<Eq>),
+    Chorus(Box<Chorus>),
+    Drive(Box<Drive>),
+    Filter(Box<RhythmicFilter>),
+    Compressor(Box<Compressor>),
+    Limiter(Box<Limiter>),
 }
 
-impl EffectBank {
-    fn new(sample_rate: u32) -> Self {
+impl ActiveEffect {
+    /// Off-RT constructor for a single boxed effect instance at `sample_rate` Hz.
+    pub(crate) fn new(tag: EffectKindTag, sample_rate: u32) -> Self {
         let sr = f64::from(sample_rate);
-        Self {
-            delay: Delay::new_unallocated(sample_rate),
-            reverb: Reverb::new(sample_rate),
-            eq: Eq::new(sr),
-            chorus: Chorus::new(sr),
-            drive: Drive::new(sr),
-            filter: RhythmicFilter::new(sr),
-            compressor: Compressor::new(sr),
-            limiter: Limiter::new(sr),
+        match tag {
+            EffectKindTag::Delay => Self::Delay(Box::new(Delay::new(sample_rate))),
+            EffectKindTag::Reverb => Self::Reverb(Box::new(Reverb::new(sample_rate))),
+            EffectKindTag::Eq => Self::Eq(Box::new(Eq::new(sr))),
+            EffectKindTag::Chorus => Self::Chorus(Box::new(Chorus::new(sr))),
+            EffectKindTag::Drive => Self::Drive(Box::new(Drive::new(sr))),
+            EffectKindTag::Filter => Self::Filter(Box::new(RhythmicFilter::new(sr))),
+            EffectKindTag::Compressor => Self::Compressor(Box::new(Compressor::new(sr))),
+            EffectKindTag::Limiter => Self::Limiter(Box::new(Limiter::new(sr))),
         }
     }
 
-    fn reset_all(&mut self) {
-        StereoEffect::reset(&mut self.delay);
-        StereoEffect::reset(&mut self.reverb);
-        StereoEffect::reset(&mut self.eq);
-        StereoEffect::reset(&mut self.chorus);
-        StereoEffect::reset(&mut self.drive);
-        StereoEffect::reset(&mut self.filter);
-        StereoEffect::reset(&mut self.compressor);
-        StereoEffect::reset(&mut self.limiter);
+    #[inline]
+    fn tag(&self) -> EffectKindTag {
+        match self {
+            Self::Delay(_) => EffectKindTag::Delay,
+            Self::Reverb(_) => EffectKindTag::Reverb,
+            Self::Eq(_) => EffectKindTag::Eq,
+            Self::Chorus(_) => EffectKindTag::Chorus,
+            Self::Drive(_) => EffectKindTag::Drive,
+            Self::Filter(_) => EffectKindTag::Filter,
+            Self::Compressor(_) => EffectKindTag::Compressor,
+            Self::Limiter(_) => EffectKindTag::Limiter,
+        }
     }
 
     #[inline]
-    fn process(&mut self, active: EffectKindTag, input: [f32; 2], bypassed: bool) -> [f32; 2] {
-        dispatch_effect_bank!(&mut self, active, process(input, bypassed))
+    fn reset(&mut self) {
+        dispatch_active_effect!(&mut *self, reset());
     }
 
     #[inline]
-    fn latency_frames(&self, active: EffectKindTag) -> usize {
-        dispatch_effect_bank!(&self, active, latency_frames())
+    fn process_block_with_gr(
+        &mut self,
+        buf: &mut [[f32; 2]],
+        bypassed: bool,
+        gr_out: &mut [f32],
+    ) -> bool {
+        dispatch_active_effect!(&mut *self, process_block_with_gr(buf, bypassed, gr_out))
     }
 
     #[inline]
-    fn gain_reduction_db(&self, active: EffectKindTag) -> Option<f32> {
-        dispatch_effect_bank!(&self, active, gain_reduction_db())
+    fn latency_frames(&self) -> usize {
+        dispatch_active_effect!(&*self, latency_frames())
+    }
+
+    #[inline]
+    fn gain_reduction_db(&self) -> Option<f32> {
+        dispatch_active_effect!(&*self, gain_reduction_db())
+    }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        dispatch_active_effect!(&*self, is_quiet(bypassed))
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        dispatch_active_effect!(&mut *self, advance_silent_frames(frames, bypassed));
     }
 
     fn set_parameters(&mut self, id: u64, kind: EffectKind, score: &ScoreWindow, clock_pos: f64) {
-        match kind {
-            EffectKind::Delay(patch) => self.delay.set_parameters(patch, score.bpm),
-            EffectKind::Reverb(patch) => self.reverb.set_parameters(patch),
-            EffectKind::Eq(patch) => self.eq.set_parameters(patch),
-            EffectKind::Chorus(patch) => self.chorus.set_parameters(patch),
-            EffectKind::Drive(patch) => self.drive.set_parameters(patch),
-            EffectKind::Filter(patch) => {
+        match (self, kind) {
+            (Self::Delay(fx), EffectKind::Delay(patch)) => fx.set_parameters(patch, score.bpm),
+            (Self::Reverb(fx), EffectKind::Reverb(patch)) => fx.set_parameters(patch),
+            (Self::Eq(fx), EffectKind::Eq(patch)) => fx.set_parameters(patch),
+            (Self::Chorus(fx), EffectKind::Chorus(patch)) => fx.set_parameters(patch),
+            (Self::Drive(fx), EffectKind::Drive(patch)) => fx.set_parameters(patch),
+            (Self::Filter(fx), EffectKind::Filter(patch)) => {
                 let compiled = patch
                     .env_pattern_id
                     .and_then(|_| score.mixer.filter_env_trigger(id))
                     .unwrap_or_else(|| score.mixer.resolve_filter_groove(patch.env_pattern));
-                self.filter
-                    .set_parameters_with_clock(patch, compiled, clock_pos, score.bpm);
+                fx.set_parameters_with_clock(patch, compiled, clock_pos, score.bpm);
             }
-            EffectKind::Compressor(patch) => self.compressor.set_parameters(patch),
-            EffectKind::Limiter(patch) => self.limiter.set_parameters(patch),
+            (Self::Compressor(fx), EffectKind::Compressor(patch)) => fx.set_parameters(patch),
+            (Self::Limiter(fx), EffectKind::Limiter(patch)) => fx.set_parameters(patch),
+            _ => {}
+        }
+    }
+}
+
+/// Control-thread pre-allocated effect awaiting zero-alloc/zero-drop RT handoff
+/// in [`MixerEngine::adopt_prepared`].
+pub(crate) struct PreparedEffect {
+    pub(crate) id: u64,
+    pub(crate) tag: EffectKindTag,
+    pub(crate) effect: Option<ActiveEffect>,
+}
+
+impl PreparedEffect {
+    pub(crate) fn new(id: u64, tag: EffectKindTag, sample_rate: u32) -> Self {
+        Self {
+            id,
+            tag,
+            effect: Some(ActiveEffect::new(tag, sample_rate)),
         }
     }
 }
 
 struct EffectSlot {
     id: Option<u64>,
-    bank: EffectBank,
-    active: EffectKindTag,
+    effect: Option<ActiveEffect>,
     bypassed: bool,
     gr_hold: PeakHold,
     render_gr_max_db: f32,
@@ -323,11 +482,10 @@ struct EffectSlot {
 }
 
 impl EffectSlot {
-    fn new(sample_rate: u32) -> Self {
+    fn empty() -> Self {
         Self {
             id: None,
-            bank: EffectBank::new(sample_rate),
-            active: EffectKindTag::Eq,
+            effect: None,
             bypassed: false,
             gr_hold: PeakHold::new(),
             render_gr_max_db: 0.0,
@@ -336,8 +494,15 @@ impl EffectSlot {
         }
     }
 
+    #[inline]
+    fn tag(&self) -> Option<EffectKindTag> {
+        self.effect.as_ref().map(ActiveEffect::tag)
+    }
+
     fn reset(&mut self) {
-        self.bank.reset_all();
+        if let Some(effect) = self.effect.as_mut() {
+            effect.reset();
+        }
         self.clear_gr_meters();
     }
 
@@ -351,30 +516,42 @@ impl EffectSlot {
     #[inline]
     fn latency_frames(&self) -> usize {
         if self.id.is_some() {
-            self.bank.latency_frames(self.active)
+            self.effect.as_ref().map_or(0, ActiveEffect::latency_frames)
         } else {
             0
         }
     }
 
-    fn process(&mut self, input: [f32; 2], hold_frames: u32, hold_decay: f32) -> [f32; 2] {
-        let out = self.bank.process(self.active, input, self.bypassed);
-        if let Some(raw_gr) = self.bank.gain_reduction_db(self.active) {
+    fn process_block(
+        &mut self,
+        buf: &mut [[f32; 2]],
+        hold_frames: u32,
+        hold_decay: f32,
+        gr_scratch: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+    ) {
+        let Some(effect) = self.effect.as_mut() else {
+            return;
+        };
+        let n = buf.len();
+        let has_gr = effect.process_block_with_gr(buf, self.bypassed, &mut gr_scratch[..n]);
+        if has_gr {
             if self.bypassed {
                 self.gr_hold.reset();
             } else {
-                let gr = if raw_gr.is_finite() {
-                    raw_gr.max(0.0)
-                } else {
-                    0.0
-                };
-                self.gr_hold.observe(gr, gr, hold_frames, hold_decay, 1e-4);
-                self.render_gr_max_db = self.render_gr_max_db.max(gr);
-                self.render_gr_sum_db += f64::from(gr);
-                self.render_gr_frames += 1;
+                for &raw_gr in &gr_scratch[..n] {
+                    let gr = if raw_gr.is_finite() {
+                        raw_gr.max(0.0)
+                    } else {
+                        0.0
+                    };
+                    self.gr_hold
+                        .observe(gr, gr, hold_frames, hold_decay, GR_HOLD_ZERO_FLOOR_DB);
+                    self.render_gr_max_db = self.render_gr_max_db.max(gr);
+                    self.render_gr_sum_db += f64::from(gr);
+                    self.render_gr_frames += 1;
+                }
             }
         }
-        out
     }
 
     #[inline]
@@ -382,7 +559,10 @@ impl EffectSlot {
         if self.bypassed {
             return 0.0;
         }
-        self.bank.gain_reduction_db(self.active).unwrap_or(0.0)
+        self.effect
+            .as_ref()
+            .and_then(ActiveEffect::gain_reduction_db)
+            .unwrap_or(0.0)
     }
 
     #[inline]
@@ -391,6 +571,41 @@ impl EffectSlot {
             0.0
         } else {
             self.gr_hold.value()
+        }
+    }
+
+    #[inline]
+    fn is_quiet(&self) -> bool {
+        self.id.is_none()
+            || self
+                .effect
+                .as_ref()
+                .is_none_or(|fx| fx.is_quiet(self.bypassed))
+    }
+
+    #[inline]
+    fn observe_silent_block(&mut self, frames: usize, hold_frames: u32, hold_decay: f32) {
+        let Some(effect) = self.effect.as_mut() else {
+            return;
+        };
+        if self.id.is_none() {
+            return;
+        }
+        effect.advance_silent_frames(frames, self.bypassed);
+        if self.bypassed {
+            return;
+        }
+        if effect.gain_reduction_db().is_some() {
+            if self.gr_hold.value() > 0.0 {
+                for _ in 0..frames {
+                    self.gr_hold
+                        .observe(0.0, 0.0, hold_frames, hold_decay, GR_HOLD_ZERO_FLOOR_DB);
+                    if self.gr_hold.value() == 0.0 {
+                        break;
+                    }
+                }
+            }
+            self.render_gr_frames += frames as u64;
         }
     }
 }
@@ -430,22 +645,72 @@ impl Default for DuckState {
     }
 }
 
+/// Heap-boxed sub-block scratch buffers owned by [`MixerEngine`] so debug stacks
+/// stay compact and block mixing performs strictly zero heap allocations.
+struct MixerBlockScratch {
+    buses: [[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+    returns: [[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+    master: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    work: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    post_fader: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    factors: [[f32; AUDIO_SUB_BLOCK_FRAMES]; MAX_CHANNELS],
+    gr_scratch: [f32; AUDIO_SUB_BLOCK_FRAMES],
+    gain_buf: [f32; AUDIO_SUB_BLOCK_FRAMES],
+    scale_buf: [f32; AUDIO_SUB_BLOCK_FRAMES],
+    pan_lr_buf: [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    send_amt_buf: [[f32; AUDIO_SUB_BLOCK_FRAMES]; MAX_SENDS],
+}
+
+impl MixerBlockScratch {
+    fn new_boxed() -> Box<Self> {
+        Box::new(Self {
+            buses: [[[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+            returns: [[[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+            master: [[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            work: [[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            post_fader: [[0.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            factors: [[1.0; AUDIO_SUB_BLOCK_FRAMES]; MAX_CHANNELS],
+            gr_scratch: [0.0; AUDIO_SUB_BLOCK_FRAMES],
+            gain_buf: [0.0; AUDIO_SUB_BLOCK_FRAMES],
+            scale_buf: [0.0; AUDIO_SUB_BLOCK_FRAMES],
+            pan_lr_buf: [[1.0; 2]; AUDIO_SUB_BLOCK_FRAMES],
+            send_amt_buf: [[0.0; AUDIO_SUB_BLOCK_FRAMES]; MAX_SENDS],
+        })
+    }
+}
+
 pub(crate) struct MixerEngine {
     channels: [ChannelPlan; MAX_CHANNELS],
     effects: Box<[EffectSlot]>,
     pdc_lines: Box<[DelayLine]>,
+    pdc_active_frames: [usize; MAX_MIXER_CHANNELS],
+    scratch: Box<MixerBlockScratch>,
+    active_audio: [usize; MAX_MIXER_CHANNELS],
+    active_audio_count: usize,
+    active_returns: [usize; MAX_MIXER_CHANNELS],
+    active_return_count: usize,
+    automated_mixer_slots: [usize; MAX_MIXER_CHANNELS + 1],
+    automated_mixer_slot_count: usize,
     group_order: [usize; MAX_MIXER_CHANNELS],
     group_count: usize,
     ducks: [DuckState; MAX_DUCKS],
+    active_ducks: [usize; MAX_DUCKS],
+    active_duck_count: usize,
+    active_effects: [usize; MAX_EFFECT_DEVICES],
+    active_effect_count: usize,
+    dynamic_effects: [usize; MAX_EFFECT_DEVICES],
+    dynamic_effect_count: usize,
+    controls_dirty: bool,
     total_output_latency: usize,
     sample_rate: f64,
     envelope_smoothing: f32,
-    factors: [f32; MAX_CHANNELS],
     wet_only: bool,
     smoothing: f32,
     meter_decay: f32,
     hold_frames: u32,
     hold_decay: f32,
+    #[cfg(test)]
+    disable_sleep: bool,
 }
 
 impl MixerEngine {
@@ -454,7 +719,7 @@ impl MixerEngine {
         // Accommodate stacked limiters across chained Group → Group → Master paths without truncating PDC.
         let pdc_cap = limiter_lookahead_frames(sr).saturating_mul(MAX_EFFECT_DEVICES);
         let effects = (0..MAX_EFFECT_DEVICES)
-            .map(|_| EffectSlot::new(sample_rate))
+            .map(|_| EffectSlot::empty())
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let pdc_lines = (0..MAX_MIXER_CHANNELS)
@@ -465,21 +730,38 @@ impl MixerEngine {
             channels: [ChannelPlan::default(); MAX_CHANNELS],
             effects,
             pdc_lines,
+            pdc_active_frames: [0; MAX_MIXER_CHANNELS],
+            scratch: MixerBlockScratch::new_boxed(),
+            active_audio: [0; MAX_MIXER_CHANNELS],
+            active_audio_count: 0,
+            active_returns: [0; MAX_MIXER_CHANNELS],
+            active_return_count: 0,
+            automated_mixer_slots: [0; MAX_MIXER_CHANNELS + 1],
+            automated_mixer_slot_count: 0,
             group_order: [0; MAX_MIXER_CHANNELS],
             group_count: 0,
             ducks: [DuckState::default(); MAX_DUCKS],
+            active_ducks: [0; MAX_DUCKS],
+            active_duck_count: 0,
+            active_effects: [0; MAX_EFFECT_DEVICES],
+            active_effect_count: 0,
+            dynamic_effects: [0; MAX_EFFECT_DEVICES],
+            dynamic_effect_count: 0,
+            controls_dirty: true,
             total_output_latency: 0,
             sample_rate: sr,
             envelope_smoothing: one_pole_coeff_ms(1.0, sr) as f32,
-            factors: [1.0; MAX_CHANNELS],
             wet_only: false,
             smoothing: one_pole_coeff_ms(10.0, sr) as f32,
             meter_decay: one_pole_decay_ms(300.0, sr) as f32,
             hold_frames: (1.5 * sr).round().max(1.0) as u32,
             hold_decay: one_pole_decay_ms(300.0, sr) as f32,
+            #[cfg(test)]
+            disable_sleep: false,
         });
-        mixer.prepare_delays(score);
-        mixer.adopt(score, true);
+        let mut prepared = prepare_effects_for_score(score, sample_rate);
+        let mut retired = Vec::new();
+        mixer.adopt_prepared(score, true, &mut prepared, &mut retired);
         mixer
     }
 
@@ -490,6 +772,29 @@ impl MixerEngine {
         self.total_output_latency
     }
 
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn set_disable_sleep(&mut self, disable: bool) {
+        self.disable_sleep = disable;
+    }
+
+    #[inline]
+    fn sleep_enabled(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.disable_sleep
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
+    #[inline]
+    fn channel_inserts_quiet(&self, slot: usize) -> bool {
+        self.sleep_enabled() && self.channels[slot].inserts_quiet(&self.effects)
+    }
+
     /// Current Master decayed stereo output peaks (300 ms release, observing the exact
     /// final summed DAC/WAV output including audition preview and software input monitor).
     #[inline]
@@ -497,48 +802,45 @@ impl MixerEngine {
         self.channels[MASTER].meter.output
     }
 
-    /// Number of effect slots that currently hold an allocated stereo `Delay` buffer.
-    pub(crate) fn allocated_delay_count(&self) -> usize {
-        self.effects
-            .iter()
-            .filter(|slot| slot.bank.delay.is_allocated())
-            .count()
+    /// Number of effect slots that currently own a live boxed [`ActiveEffect`].
+    #[cfg(test)]
+    pub(crate) fn allocated_effect_count(&self) -> usize {
+        self.effects.iter().filter(|s| s.effect.is_some()).count()
     }
 
-    /// Off-RT helper: ensure at least as many `Delay` buffers are allocated as `score` needs.
-    pub(crate) fn prepare_delays(&mut self, score: &ScoreWindow) {
-        let needed = count_delay_devices(score);
-        let mut have = self.allocated_delay_count();
-        for slot in self.effects.iter_mut() {
-            if have >= needed {
-                break;
-            }
-            if !slot.bank.delay.is_allocated() {
-                slot.bank.delay.allocate(MAX_DELAY_SECONDS);
-                have += 1;
-            }
-        }
-    }
-
-    /// Zero-alloc / zero-drop RT handoff: swap control-thread pre-allocated `Delay` buffers
-    /// into unallocated slots (leaving empty unallocated shells in `incoming` for off-RT drop).
-    pub(crate) fn install_delay_buffers(&mut self, incoming: &mut [Delay]) {
-        for delay in incoming.iter_mut() {
-            if !delay.is_allocated() {
-                continue;
-            }
-            if let Some(slot) = self
-                .effects
-                .iter_mut()
-                .find(|s| !s.bank.delay.is_allocated())
-            {
-                std::mem::swap(&mut slot.bank.delay, delay);
-                slot.bank.delay.reset();
-            }
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) fn adopt(&mut self, score: &ScoreWindow, boundary: bool) {
+        let evicting = self.effects.iter().any(|slot| {
+            slot.id.is_some_and(|id| {
+                !score
+                    .mixer
+                    .channels
+                    .iter()
+                    .take(MAX_MIXER_CHANNELS)
+                    .flat_map(|c| c.inserts.iter())
+                    .chain(score.mixer.master.inserts.iter())
+                    .any(|d| d.id == id && slot.tag() == Some(d.kind.tag()))
+            })
+        });
+        let mut retired = if evicting {
+            Vec::with_capacity(MAX_EFFECT_DEVICES)
+        } else {
+            Vec::new()
+        };
+        self.adopt_prepared(score, boundary, &mut [], &mut retired);
+    }
+
+    /// Zero-alloc, zero-drop RT adoption of a new `ScoreWindow`: keeps unchanged
+    /// live effects in place, moves newly prepared [`ActiveEffect`] instances out of
+    /// `prepared`, and pushes evicted instances into `retired` (pre-sized off-RT to
+    /// `>= MAX_EFFECT_DEVICES`) for off-RT deallocation.
+    pub(crate) fn adopt_prepared(
+        &mut self,
+        score: &ScoreWindow,
+        boundary: bool,
+        prepared: &mut [PreparedEffect],
+        retired: &mut Vec<ActiveEffect>,
+    ) {
         let mut wanted = [(None::<u64>, EffectKindTag::Eq); MAX_EFFECT_DEVICES];
         let mut wanted_count = 0usize;
         let devices = score
@@ -552,67 +854,62 @@ impl MixerEngine {
             wanted[wanted_count] = (Some(device.id), device.kind.tag());
             wanted_count += 1;
         }
+
+        // Pass 1: keep live matching `(id, tag)` slots unless a freshly prepared
+        // replacement is provided (resetting on boundary), and retire removed,
+        // re-typed, or freshly replaced slots.
         for slot in self.effects.iter_mut() {
-            let keep = !boundary
-                && slot.id.is_some()
-                && wanted[..wanted_count].iter().any(|(id, _)| *id == slot.id);
-            if !keep {
-                slot.id = None;
-                slot.reset();
-            }
-        }
-        for &(id_opt, active) in &wanted[..wanted_count] {
-            let Some(id) = id_opt else {
+            let Some(id) = slot.id else {
                 continue;
             };
-            if let Some(slot) = self.effects.iter_mut().find(|slot| slot.id == Some(id)) {
-                if slot.active != active {
+            let matches_wanted = wanted[..wanted_count]
+                .iter()
+                .any(|&(wid, wtag)| wid == Some(id) && slot.tag() == Some(wtag));
+            let has_fresh_replacement = slot.tag().is_some_and(|tag| {
+                prepared
+                    .iter()
+                    .any(|p| p.id == id && p.tag == tag && p.effect.is_some())
+            });
+            if matches_wanted && !has_fresh_replacement {
+                if boundary {
                     slot.reset();
-                    slot.active = active;
                 }
-                continue;
-            }
-            // Prefer an allocated Delay slot for Delay devices and unallocated slots for others.
-            let target_idx = if active == EffectKindTag::Delay {
-                self.effects
-                    .iter()
-                    .position(|s| s.id.is_none() && s.bank.delay.is_allocated())
-                    .or_else(|| self.effects.iter().position(|s| s.id.is_none()))
             } else {
-                self.effects
-                    .iter()
-                    .position(|s| s.id.is_none() && !s.bank.delay.is_allocated())
-                    .or_else(|| self.effects.iter().position(|s| s.id.is_none()))
-            };
-            if let Some(idx) = target_idx {
-                self.effects[idx].id = Some(id);
-                self.effects[idx].active = active;
-                self.effects[idx].reset();
+                if let Some(old) = slot.effect.take() {
+                    debug_assert!(
+                        retired.len() < retired.capacity(),
+                        "retired_effects must be pre-sized off-RT to >= MAX_EFFECT_DEVICES"
+                    );
+                    retired.push(old);
+                }
+                slot.id = None;
+                slot.bypassed = false;
+                slot.clear_gr_meters();
             }
         }
 
-        // Zero-alloc donor swap: ensure every active Delay device owns an allocated buffer
-        // whenever any free or non-Delay slot holds one.
-        for i in 0..self.effects.len() {
-            let needs_buf = self.effects[i].id.is_some()
-                && self.effects[i].active == EffectKindTag::Delay
-                && !self.effects[i].bank.delay.is_allocated();
-            if !needs_buf {
+        // Pass 2: install newly added, kind-swapped, or freshly replaced effects from `prepared`.
+        for &(id_opt, tag) in &wanted[..wanted_count] {
+            let Some(id) = id_opt else {
+                continue;
+            };
+            if self.effects.iter().any(|slot| slot.id == Some(id)) {
                 continue;
             }
-            let donor = self.effects.iter().position(|s| {
-                s.bank.delay.is_allocated() && (s.id.is_none() || s.active != EffectKindTag::Delay)
-            });
-            if let Some(j) = donor {
-                if i < j {
-                    let (left, right) = self.effects.split_at_mut(j);
-                    std::mem::swap(&mut left[i].bank.delay, &mut right[0].bank.delay);
-                } else if j < i {
-                    let (left, right) = self.effects.split_at_mut(i);
-                    std::mem::swap(&mut right[0].bank.delay, &mut left[j].bank.delay);
-                }
-                self.effects[i].bank.delay.reset();
-            }
+            let Some(prep) = prepared
+                .iter_mut()
+                .find(|p| p.id == id && p.tag == tag && p.effect.is_some())
+            else {
+                continue;
+            };
+            let Some(idx) = self.effects.iter().position(|s| s.id.is_none()) else {
+                break;
+            };
+            let slot = &mut self.effects[idx];
+            slot.id = Some(id);
+            slot.effect = prep.effect.take();
+            slot.bypassed = false;
+            slot.clear_gr_meters();
         }
 
         let previous = self.channels;
@@ -862,17 +1159,25 @@ impl MixerEngine {
             }
             let max_cap = self.pdc_lines[c_idx].capacity();
             self.channels[c_slot].pdc_delay = self.channels[c_slot].pdc_delay.min(max_cap);
-            let any_send_pdc = self.channels[c_slot]
-                .sends
-                .iter()
-                .any(|s| s.target.is_some() && s.pdc_delay > 0);
+            let mut max_pdc = self.channels[c_slot].pdc_delay;
+            for send in &self.channels[c_slot].sends {
+                if send.target.is_some() {
+                    max_pdc = max_pdc.max(send.pdc_delay);
+                }
+            }
+            self.channels[c_slot].max_pdc_delay = max_pdc;
             let slot_changed = previous[c_slot].channel != self.channels[c_slot].channel;
-            if boundary || slot_changed || (self.channels[c_slot].pdc_delay == 0 && !any_send_pdc) {
+            if boundary || slot_changed || max_pdc == 0 {
                 self.pdc_lines[c_idx].reset();
+                self.pdc_active_frames[c_idx] = 0;
+            } else if max_pdc > previous[c_slot].max_pdc_delay {
+                // Conservatively drain existing PDC history when delay grows without a reset.
+                self.pdc_active_frames[c_idx] = self.pdc_active_frames[c_idx].max(max_pdc);
             }
         }
-        for line in self.pdc_lines.iter_mut().skip(chan_count) {
+        for (c_idx, line) in self.pdc_lines.iter_mut().enumerate().skip(chan_count) {
             line.reset();
+            self.pdc_active_frames[c_idx] = 0;
         }
         let mut master_insert_lat = 0usize;
         for &eff_slot in self.channels[MASTER].inserts.iter().flatten() {
@@ -884,6 +1189,7 @@ impl MixerEngine {
 
         let previous_ducks = self.ducks;
         self.ducks.fill(DuckState::default());
+        self.active_duck_count = 0;
         for (index, definition) in score.mixer.ducks.iter().take(MAX_DUCKS).enumerate() {
             let Some(target) = self
                 .channels
@@ -918,13 +1224,95 @@ impl MixerEngine {
                 }
             }
             self.ducks[index] = state;
+            self.active_ducks[self.active_duck_count] = index;
+            self.active_duck_count += 1;
         }
+
+        // Pre-build dense active channel, return, automation, and effect index lists so
+        // real-time processing and control updates never scan unused fixed-capacity slots.
+        self.active_audio_count = 0;
+        self.active_return_count = 0;
+        self.automated_mixer_slot_count = 0;
+        for index in 0..chan_count {
+            let slot = MAX_INSTRUMENTS + index;
+            match self.channels[slot].role {
+                ChannelRole::Audio => {
+                    self.active_audio[self.active_audio_count] = index;
+                    self.active_audio_count += 1;
+                }
+                ChannelRole::Return => {
+                    self.active_returns[self.active_return_count] = index;
+                    self.active_return_count += 1;
+                }
+                _ => {}
+            }
+            if Self::channel_has_automation(&self.channels[slot], score) {
+                self.automated_mixer_slots[self.automated_mixer_slot_count] = slot;
+                self.automated_mixer_slot_count += 1;
+            }
+        }
+        if Self::channel_has_automation(&self.channels[MASTER], score) {
+            self.automated_mixer_slots[self.automated_mixer_slot_count] = MASTER;
+            self.automated_mixer_slot_count += 1;
+        }
+
+        self.active_effect_count = 0;
+        self.dynamic_effect_count = 0;
+        for (slot_idx, slot) in self.effects.iter().enumerate() {
+            let Some(id) = slot.id else {
+                continue;
+            };
+            self.active_effects[self.active_effect_count] = slot_idx;
+            self.active_effect_count += 1;
+            let is_dynamic = score.find_device(id).is_some_and(|(_, device)| {
+                matches!(device.kind, EffectKind::Filter(_))
+                    || device.params().iter().any(|&param| {
+                        score.has_mixer_automation(MixerParamTarget::Device {
+                            device_id: id,
+                            param,
+                        })
+                    })
+            });
+            if is_dynamic {
+                self.dynamic_effects[self.dynamic_effect_count] = slot_idx;
+                self.dynamic_effect_count += 1;
+            }
+        }
+        self.controls_dirty = true;
 
         // Ignore muted returns when deciding whether soloed returns isolate wet-only monitoring.
         self.wet_only = visible_channels.iter().any(|c| {
             let cref = ChannelRef::Channel(c.id);
             c.kind == ChannelKind::Return && flags.channel_solo(cref) && !flags.channel_muted(cref)
         });
+    }
+
+    fn channel_has_automation(plan: &ChannelPlan, score: &ScoreWindow) -> bool {
+        let Some(channel) = plan.channel else {
+            return false;
+        };
+        if score.has_mixer_automation(MixerParamTarget::Channel {
+            channel,
+            param: ChannelParam::Gain,
+        }) || score.has_mixer_automation(MixerParamTarget::Channel {
+            channel,
+            param: ChannelParam::Pan,
+        }) || score.has_mixer_automation(MixerParamTarget::ChannelGainScale { channel })
+        {
+            return true;
+        }
+        for send in &plan.sends {
+            if send.target.is_none() {
+                break;
+            }
+            if score.has_mixer_automation(MixerParamTarget::Send {
+                channel,
+                target: send.target_channel_id,
+            }) {
+                return true;
+            }
+        }
+        false
     }
 
     fn configure_channel(
@@ -1007,6 +1395,7 @@ impl MixerEngine {
                     .unwrap_or(send.amount);
                 plan.sends[send_count] = SendPlan {
                     target: target_tag,
+                    target_channel_id: send.target,
                     amount: prev_amount,
                     target_amount: send.amount,
                     pdc_delay: 0,
@@ -1039,9 +1428,9 @@ impl MixerEngine {
     }
 
     pub(crate) fn update_controls(&mut self, score: &ScoreWindow, auto_pos: f64, clock_pos: f64) {
-        let visible_channels =
-            &score.mixer.channels[..score.mixer.channels.len().min(MAX_MIXER_CHANNELS)];
-        for plan in &mut self.channels[MAX_INSTRUMENTS..] {
+        let auto_slots = self.automated_mixer_slots;
+        for &slot in &auto_slots[..self.automated_mixer_slot_count] {
+            let plan = &mut self.channels[slot];
             let Some(channel) = plan.channel else {
                 continue;
             };
@@ -1049,70 +1438,44 @@ impl MixerEngine {
                 channel,
                 param: ChannelParam::Gain,
             };
+            if score.has_mixer_automation(gain_target) {
+                plan.target_gain = ChannelParam::Gain
+                    .denormalize(score.resolve_mixer_param(gain_target, auto_pos));
+            }
             let pan_target = MixerParamTarget::Channel {
                 channel,
                 param: ChannelParam::Pan,
             };
+            if score.has_mixer_automation(pan_target) {
+                plan.target_pan =
+                    ChannelParam::Pan.denormalize(score.resolve_mixer_param(pan_target, auto_pos));
+            }
             let scale_target = MixerParamTarget::ChannelGainScale { channel };
-            let strip = match channel {
-                ChannelRef::Channel(id) => score.channel(id).map(|c| c.strip),
-                ChannelRef::Master => Some(score.mixer.master.strip),
-            };
-            plan.target_gain = if score.has_mixer_automation(gain_target) {
-                ChannelParam::Gain.denormalize(score.resolve_mixer_param(gain_target, auto_pos))
-            } else {
-                strip.map_or(1.0, |s| s.gain)
-            };
-            plan.target_pan = if score.has_mixer_automation(pan_target) {
-                ChannelParam::Pan.denormalize(score.resolve_mixer_param(pan_target, auto_pos))
-            } else {
-                strip.map_or(0.0, |s| s.pan)
-            };
-            plan.target_scale = if score.has_mixer_automation(scale_target) {
-                score.resolve_mixer_param(scale_target, auto_pos)
-            } else {
-                1.0
-            };
-            if let ChannelRef::Channel(id) = channel {
-                if let Some(ch) = score.channel(id) {
-                    let prev_sends = plan.sends;
-                    plan.sends = [SendPlan::default(); MAX_SENDS];
-                    let mut send_count = 0usize;
-                    for send in &ch.sends {
-                        if send_count >= MAX_SENDS {
-                            break;
-                        }
-                        if let Some(target) = visible_channels
-                            .iter()
-                            .position(|c| c.id == send.target && c.kind == ChannelKind::Return)
-                        {
-                            let target_tag = Some(target as u8);
-                            let send_target = MixerParamTarget::Send {
-                                channel,
-                                target: send.target,
-                            };
-                            let value = if score.has_mixer_automation(send_target) {
-                                score.resolve_mixer_param(send_target, auto_pos)
-                            } else {
-                                send.amount
-                            };
-                            let (cur_amount, pdc_delay) = prev_sends
-                                .iter()
-                                .find(|s| s.target == target_tag)
-                                .map_or((value, 0), |s| (s.amount, s.pdc_delay));
-                            plan.sends[send_count] = SendPlan {
-                                target: target_tag,
-                                amount: cur_amount,
-                                target_amount: value,
-                                pdc_delay,
-                            };
-                            send_count += 1;
-                        }
-                    }
+            if score.has_mixer_automation(scale_target) {
+                plan.target_scale = score.resolve_mixer_param(scale_target, auto_pos);
+            }
+            for send in &mut plan.sends {
+                if send.target.is_none() {
+                    break;
+                }
+                let send_target = MixerParamTarget::Send {
+                    channel,
+                    target: send.target_channel_id,
+                };
+                if score.has_mixer_automation(send_target) {
+                    send.target_amount = score.resolve_mixer_param(send_target, auto_pos);
                 }
             }
         }
-        for slot in self.effects.iter_mut() {
+
+        let (effect_indices, effect_count) = if self.controls_dirty {
+            self.controls_dirty = false;
+            (self.active_effects, self.active_effect_count)
+        } else {
+            (self.dynamic_effects, self.dynamic_effect_count)
+        };
+        for &slot_idx in &effect_indices[..effect_count] {
+            let slot = &mut self.effects[slot_idx];
             let Some(id) = slot.id else {
                 continue;
             };
@@ -1130,12 +1493,9 @@ impl MixerEngine {
                     param.write_kind(&mut kind, value);
                 }
             }
-            let active = kind.tag();
-            if slot.active != active {
-                slot.reset();
-                slot.active = active;
+            if let Some(effect) = slot.effect.as_mut() {
+                effect.set_parameters(id, kind, score, clock_pos);
             }
-            slot.bank.set_parameters(id, kind, score, clock_pos);
             slot.bypassed = device.bypassed;
             if slot.bypassed {
                 slot.gr_hold.reset();
@@ -1150,13 +1510,13 @@ impl MixerEngine {
         for line in self.pdc_lines.iter_mut() {
             line.reset();
         }
+        self.pdc_active_frames.fill(0);
         for duck in &mut self.ducks {
             duck.elapsed = f64::INFINITY;
             duck.gain = 1.0;
             duck.pending_delays = [0; DUCK_PENDING_CAPACITY];
             duck.pending_len = 0;
         }
-        self.factors.fill(1.0);
         self.clear_meters(None);
     }
 
@@ -1216,79 +1576,232 @@ impl MixerEngine {
     }
 
     pub(crate) fn effect_meters(&self) -> impl Iterator<Item = EffectMeter> + '_ {
-        self.effects.iter().filter_map(|slot| {
-            slot.id.map(|device_id| EffectMeter {
-                device_id,
-                gain_reduction_db: slot.gain_reduction_db(),
-                gr_hold_db: slot.gr_hold_db(),
+        self.active_effects[..self.active_effect_count]
+            .iter()
+            .filter_map(|&idx| {
+                let slot = &self.effects[idx];
+                slot.id.map(|device_id| EffectMeter {
+                    device_id,
+                    gain_reduction_db: slot.gain_reduction_db(),
+                    gr_hold_db: slot.gr_hold_db(),
+                })
             })
-        })
     }
 
     /// Session-wide dynamics gain reduction stats `(device_id, max_gr_db, avg_gr_db)` for active
     /// insert devices that report gain reduction via [`StereoEffect::gain_reduction_db`].
     pub(crate) fn render_effect_stats(&self) -> impl Iterator<Item = (u64, f32, f32)> + '_ {
-        self.effects.iter().filter_map(|slot| {
-            let id = slot.id?;
-            slot.bank.gain_reduction_db(slot.active)?;
-            if slot.bypassed && slot.render_gr_frames == 0 {
-                return None;
-            }
-            let avg_gr_db = if slot.render_gr_frames > 0 {
-                (slot.render_gr_sum_db / slot.render_gr_frames as f64) as f32
-            } else {
-                0.0
-            };
-            Some((id, slot.render_gr_max_db, avg_gr_db))
-        })
+        self.active_effects[..self.active_effect_count]
+            .iter()
+            .filter_map(|&idx| {
+                let slot = &self.effects[idx];
+                let id = slot.id?;
+                slot.effect.as_ref()?.gain_reduction_db()?;
+                if slot.bypassed && slot.render_gr_frames == 0 {
+                    return None;
+                }
+                let avg_gr_db = if slot.render_gr_frames > 0 {
+                    (slot.render_gr_sum_db / slot.render_gr_frames as f64) as f32
+                } else {
+                    0.0
+                };
+                Some((id, slot.render_gr_max_db, avg_gr_db))
+            })
     }
+}
 
-    fn inserts(&mut self, channel: usize, mut input: [f32; 2]) -> [f32; 2] {
-        let plan = self.channels[channel];
-        let hold_frames = self.hold_frames;
-        let hold_decay = self.hold_decay;
-        for &slot in plan.inserts.iter().flatten() {
-            if let Some(effect) = self.effects.get_mut(usize::from(slot)) {
-                input = effect.process(input, hold_frames, hold_decay);
+/// Post-recovery grace window (`10 ms`) after which an idle duck envelope snaps to `1.0`.
+const DUCK_TAIL_SETTLE_SEC: f64 = 0.01;
+
+#[inline]
+fn slice_has_audio(buf: &[[f32; 2]]) -> bool {
+    buf.iter().any(|&[l, r]| l != 0.0 || r != 0.0)
+}
+
+/// Advance unsettled strip & send smoothers in place for a silent/sleeping channel
+/// without writing per-frame scratch buffers.
+#[inline]
+fn step_channel_smoothers_silent(channel: &mut ChannelPlan, sm: f32, frames: usize) {
+    if !channel.has_smoothers_unsettled() {
+        return;
+    }
+    if channel.gain != channel.target_gain
+        || channel.pan != channel.target_pan
+        || channel.scale != channel.target_scale
+    {
+        for _ in 0..frames {
+            smooth_step_f32(&mut channel.gain, channel.target_gain, sm);
+            smooth_step_f32(&mut channel.pan, channel.target_pan, sm);
+            smooth_step_f32(&mut channel.scale, channel.target_scale, sm);
+        }
+        channel.refresh_pan_cache();
+    }
+    for send in &mut channel.sends {
+        if send.target.is_none() {
+            break;
+        }
+        if send.amount != send.target_amount {
+            for _ in 0..frames {
+                smooth_step_f32(&mut send.amount, send.target_amount, sm);
             }
         }
-        input
     }
+}
 
-    #[inline]
-    fn strip_fader(&self, channel: usize, input: [f32; 2]) -> [f32; 2] {
-        let plan = self.channels[channel];
-        apply_fader_gain(input, plan.gain, plan.scale, self.factors[channel])
-    }
-
-    #[inline]
-    fn strip(&self, channel: usize, input: [f32; 2]) -> [f32; 2] {
-        let plan = self.channels[channel];
-        plan.apply_cached_pan(apply_fader_gain(
-            input,
-            plan.gain,
-            plan.scale,
-            self.factors[channel],
-        ))
-    }
-
-    #[inline]
-    fn apply_pdc(&mut self, channel_idx: usize, delay_frames: usize, output: [f32; 2]) -> [f32; 2] {
-        if delay_frames == 0 {
-            return output;
+/// Step one channel's strip (`gain`, `pan`, `scale`) and active aux-send smoothers
+/// across `frames` frames, returning `true` when strip smoothers were already settled.
+#[inline]
+fn step_channel_smoothers(
+    channel: &mut ChannelPlan,
+    sm: f32,
+    frames: usize,
+    gain_buf: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+    scale_buf: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+    pan_lr_buf: &mut [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    send_amt_buf: &mut [[f32; AUDIO_SUB_BLOCK_FRAMES]; MAX_SENDS],
+) -> bool {
+    let strip_settled = channel.gain == channel.target_gain
+        && channel.pan == channel.target_pan
+        && channel.scale == channel.target_scale;
+    if strip_settled {
+        channel.refresh_pan_cache();
+    } else {
+        for i in 0..frames {
+            smooth_step_f32(&mut channel.gain, channel.target_gain, sm);
+            smooth_step_f32(&mut channel.pan, channel.target_pan, sm);
+            channel.refresh_pan_cache();
+            smooth_step_f32(&mut channel.scale, channel.target_scale, sm);
+            gain_buf[i] = channel.gain;
+            scale_buf[i] = channel.scale;
+            pan_lr_buf[i] = channel.cached_pan_lr;
         }
-        if let Some(line) = self.pdc_lines.get_mut(channel_idx) {
-            // Read before writing for exact `z^{-delay_frames}` sample alignment with Limiter lookahead.
-            let delayed = line.read_integer(delay_frames);
-            line.write(output);
-            delayed
+    }
+    for (s_idx, send) in channel.sends.iter_mut().enumerate() {
+        if send.target.is_none() {
+            break;
+        }
+        if send.amount == send.target_amount {
+            send_amt_buf[s_idx][..frames].fill(send.amount);
         } else {
-            output
+            for amt in &mut send_amt_buf[s_idx][..frames] {
+                smooth_step_f32(&mut send.amount, send.target_amount, sm);
+                *amt = send.amount;
+            }
         }
     }
+    strip_settled
+}
 
+#[inline]
+fn route_output_block(
+    wet_only: bool,
+    plan: ChannelPlan,
+    output: &[[f32; 2]],
+    buses: &mut [[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_MIXER_CHANNELS],
+    bus_active: &mut [bool; MAX_MIXER_CHANNELS],
+    master: &mut [[f32; 2]; AUDIO_SUB_BLOCK_FRAMES],
+    master_active: &mut bool,
+) {
+    let n = output.len();
+    match plan.output_slot() {
+        Some(MASTER) => {
+            if !wet_only {
+                if !*master_active {
+                    master[..n].copy_from_slice(output);
+                    *master_active = true;
+                } else {
+                    for (dst, &src) in master[..n].iter_mut().zip(output) {
+                        dst[0] += src[0];
+                        dst[1] += src[1];
+                    }
+                }
+            }
+        }
+        Some(slot) if (MAX_INSTRUMENTS..MASTER).contains(&slot) => {
+            let idx = slot - MAX_INSTRUMENTS;
+            if idx < MAX_MIXER_CHANNELS {
+                if !bus_active[idx] {
+                    buses[idx][..n].copy_from_slice(output);
+                    bus_active[idx] = true;
+                } else {
+                    for (dst, &src) in buses[idx][..n].iter_mut().zip(output) {
+                        dst[0] += src[0];
+                        dst[1] += src[1];
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn run_inserts_block(
+    inserts: [Option<u8>; MAX_INSERTS],
+    effects: &mut [EffectSlot],
+    buf: &mut [[f32; 2]],
+    hold_frames: u32,
+    hold_decay: f32,
+    gr_scratch: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+) {
+    for &slot in inserts.iter().flatten() {
+        if let Some(effect) = effects.get_mut(usize::from(slot)) {
+            effect.process_block(buf, hold_frames, hold_decay, gr_scratch);
+        }
+    }
+}
+
+#[inline]
+fn observe_silent_inserts(
+    inserts: [Option<u8>; MAX_INSERTS],
+    effects: &mut [EffectSlot],
+    frames: usize,
+    hold_frames: u32,
+    hold_decay: f32,
+) {
+    for &slot in inserts.iter().flatten() {
+        if let Some(effect) = effects.get_mut(usize::from(slot)) {
+            effect.observe_silent_block(frames, hold_frames, hold_decay);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline]
+fn process_channel_inserts_block(
+    inserts: [Option<u8>; MAX_INSERTS],
+    effects: &mut [EffectSlot],
+    input: Option<&[[f32; 2]]>,
+    inserts_quiet: bool,
+    work: &mut [[f32; 2]],
+    hold_frames: u32,
+    hold_decay: f32,
+    gr_scratch: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
+) {
+    if let Some(src) = input {
+        work.copy_from_slice(src);
+        run_inserts_block(inserts, effects, work, hold_frames, hold_decay, gr_scratch);
+    } else if !inserts_quiet {
+        work.fill([0.0; 2]);
+        run_inserts_block(inserts, effects, work, hold_frames, hold_decay, gr_scratch);
+    } else {
+        work.fill([0.0; 2]);
+        observe_silent_inserts(inserts, effects, work.len(), hold_frames, hold_decay);
+    }
+}
+
+#[inline]
+fn apply_pan_lr(input: [f32; 2], pan_lr: [f32; 2]) -> [f32; 2] {
+    [
+        sanitize_sample(input[0]) * pan_lr[0],
+        sanitize_sample(input[1]) * pan_lr[1],
+    ]
+}
+
+impl MixerEngine {
     pub(crate) fn trigger_part(&mut self, part: u64) {
-        for duck in &mut self.ducks {
+        let active_ducks = self.active_ducks;
+        for &duck_idx in &active_ducks[..self.active_duck_count] {
+            let duck = &mut self.ducks[duck_idx];
             if duck.id.is_some() && duck.source_part == part {
                 if duck.pdc_delay == 0 {
                     duck.elapsed = 0.0;
@@ -1306,270 +1819,838 @@ impl MixerEngine {
         }
     }
 
-    #[inline]
-    fn route_output(
-        &self,
-        plan: ChannelPlan,
-        output: [f32; 2],
-        channels: &mut [[f32; 2]; MAX_MIXER_CHANNELS],
-        master: &mut [f32; 2],
-    ) {
-        match plan.output_slot() {
-            Some(MASTER) => {
-                if !self.wet_only {
-                    master[0] += output[0];
-                    master[1] += output[1];
-                }
-            }
-            Some(slot) if (MAX_INSTRUMENTS..MASTER).contains(&slot) => {
-                let idx = slot - MAX_INSTRUMENTS;
-                if idx < MAX_MIXER_CHANNELS {
-                    channels[idx][0] += output[0];
-                    channels[idx][1] += output[1];
-                }
-            }
-            _ => {}
-        }
-    }
-
-    #[inline]
-    fn process_bus_channel(
+    #[allow(clippy::too_many_arguments)]
+    fn process_bus_channel_block(
         &mut self,
         index: usize,
-        buses: &mut [[f32; 2]; MAX_MIXER_CHANNELS],
-        returns: &mut [[f32; 2]; MAX_MIXER_CHANNELS],
-        master: &mut [f32; 2],
+        frames: usize,
+        duck_dirty: &[bool; MAX_CHANNELS],
+        bus_active: &mut [bool; MAX_MIXER_CHANNELS],
+        return_active: &mut [bool; MAX_MIXER_CHANNELS],
+        master_active: &mut bool,
     ) {
         let slot = MAX_INSTRUMENTS + index;
-        let plan = self.channels[slot];
-        let input = buses[index];
-        let processed = self.inserts(slot, input);
-        let inserts_non_finite = !processed[0].is_finite() || !processed[1].is_finite();
-        // Aux sends tap post-fader, pre-strip-pan so stereo sources stay stereo
-        // and channel strip panning never starves opposite-panned Returns.
-        let (post_fader, output) = if plan.source_enabled {
-            let pf = self.strip_fader(slot, processed);
-            (pf, plan.apply_cached_pan(pf))
-        } else {
-            ([0.0; 2], [0.0; 2])
-        };
-        self.channels[slot].meter.observe(
-            input,
-            output,
-            false,
-            self.meter_decay,
-            self.hold_frames,
-            self.hold_decay,
-        );
-        if inserts_non_finite {
-            self.channels[slot].meter.clipped = true;
+        let sm = self.smoothing;
+        let decay = self.meter_decay;
+        let hold_frames = self.hold_frames;
+        let hold_decay = self.hold_decay;
+        let wet_only = self.wet_only;
+
+        let has_input = bus_active[index];
+        let sleep_enabled = self.sleep_enabled();
+        let inserts_quiet = self.channel_inserts_quiet(slot);
+        let was_pdc_active = self.pdc_active_frames[index] > 0;
+        let source_enabled = self.channels[slot].source_enabled;
+
+        // Fast sleep: completely silent input, drained inserts, and drained PDC line.
+        if !has_input && inserts_quiet && !was_pdc_active {
+            step_channel_smoothers_silent(&mut self.channels[slot], sm, frames);
+            let inserts = self.channels[slot].inserts;
+            observe_silent_inserts(inserts, &mut self.effects, frames, hold_frames, hold_decay);
+            self.channels[slot]
+                .meter
+                .observe_silent_block(frames, decay, hold_frames, hold_decay);
+            return;
         }
+
+        let scratch = &mut *self.scratch;
+        // Muted / non-soloed channel: keep pre-insert input metering live, drain inserts
+        // with silence until quiet, then skip insert DSP cleanly.
+        if !source_enabled {
+            let meter = &mut self.channels[slot].meter;
+            if has_input {
+                for &inp in &scratch.buses[index][..frames] {
+                    meter.observe(inp, [0.0; 2], false, decay, hold_frames, hold_decay);
+                }
+            } else {
+                meter.observe_silent_block(frames, decay, hold_frames, hold_decay);
+            }
+            let inserts = self.channels[slot].inserts;
+            if inserts_quiet {
+                observe_silent_inserts(inserts, &mut self.effects, frames, hold_frames, hold_decay);
+            } else {
+                scratch.work[..frames].fill([0.0; 2]);
+                run_inserts_block(
+                    inserts,
+                    &mut self.effects,
+                    &mut scratch.work[..frames],
+                    hold_frames,
+                    hold_decay,
+                    &mut scratch.gr_scratch,
+                );
+            }
+            if !was_pdc_active {
+                step_channel_smoothers_silent(&mut self.channels[slot], sm, frames);
+                return;
+            }
+            let strip_settled = step_channel_smoothers(
+                &mut self.channels[slot],
+                sm,
+                frames,
+                &mut scratch.gain_buf,
+                &mut scratch.scale_buf,
+                &mut scratch.pan_lr_buf,
+                &mut scratch.send_amt_buf,
+            );
+            let plan = self.channels[slot];
+            let const_pan = plan.cached_pan_lr;
+            self.pdc_active_frames[index] = self.pdc_active_frames[index].saturating_sub(frames);
+            if let Some(line) = self.pdc_lines.get_mut(index) {
+                for i in 0..frames {
+                    for (s_idx, send) in plan.sends.iter().enumerate() {
+                        let Some(target) = send.target.map(usize::from) else {
+                            break;
+                        };
+                        let amt = scratch.send_amt_buf[s_idx][i];
+                        if target < MAX_MIXER_CHANNELS && amt > 0.0 && send.pdc_delay > 0 {
+                            let tapped = line.read_integer(send.pdc_delay);
+                            if tapped[0] != 0.0 || tapped[1] != 0.0 {
+                                if !return_active[target] {
+                                    scratch.returns[target][..frames].fill([0.0; 2]);
+                                    return_active[target] = true;
+                                }
+                                scratch.returns[target][i][0] += tapped[0] * amt;
+                                scratch.returns[target][i][1] += tapped[1] * amt;
+                            }
+                        }
+                    }
+                    let main_pf = if plan.pdc_delay == 0 {
+                        [0.0; 2]
+                    } else {
+                        line.read_integer(plan.pdc_delay)
+                    };
+                    line.write([0.0; 2]);
+                    let pan_lr = if strip_settled {
+                        const_pan
+                    } else {
+                        scratch.pan_lr_buf[i]
+                    };
+                    scratch.work[i] = apply_pan_lr(main_pf, pan_lr);
+                }
+                if self.pdc_active_frames[index] == 0 {
+                    line.reset();
+                }
+                if slice_has_audio(&scratch.work[..frames]) {
+                    route_output_block(
+                        wet_only,
+                        plan,
+                        &scratch.work[..frames],
+                        &mut scratch.buses,
+                        bus_active,
+                        &mut scratch.master,
+                        master_active,
+                    );
+                }
+            }
+            return;
+        }
+
+        let strip_settled = step_channel_smoothers(
+            &mut self.channels[slot],
+            sm,
+            frames,
+            &mut scratch.gain_buf,
+            &mut scratch.scale_buf,
+            &mut scratch.pan_lr_buf,
+            &mut scratch.send_amt_buf,
+        );
+        let plan = self.channels[slot];
+        process_channel_inserts_block(
+            plan.inserts,
+            &mut self.effects,
+            has_input.then_some(&scratch.buses[index][..frames]),
+            inserts_quiet,
+            &mut scratch.work[..frames],
+            hold_frames,
+            hold_decay,
+            &mut scratch.gr_scratch,
+        );
+
+        let has_duck = duck_dirty[slot];
+        let mut inserts_non_finite = false;
+        let mut post_has_audio = false;
+        let meter = &mut self.channels[slot].meter;
+        let const_gain = plan.gain;
+        let const_scale = plan.scale;
+        let const_pan = plan.cached_pan_lr;
+        for i in 0..frames {
+            let inp = if has_input {
+                scratch.buses[index][i]
+            } else {
+                [0.0; 2]
+            };
+            let processed = scratch.work[i];
+            if !processed[0].is_finite() || !processed[1].is_finite() {
+                inserts_non_finite = true;
+            }
+            let duck = if has_duck {
+                scratch.factors[slot][i]
+            } else {
+                1.0
+            };
+            let (g, sc, pan_lr) = if strip_settled {
+                (const_gain, const_scale, const_pan)
+            } else {
+                (
+                    scratch.gain_buf[i],
+                    scratch.scale_buf[i],
+                    scratch.pan_lr_buf[i],
+                )
+            };
+            let pf = apply_fader_gain(processed, g, sc, duck);
+            let out = apply_pan_lr(pf, pan_lr);
+            let safe_pf = sanitize_frame(pf);
+            if safe_pf[0] != 0.0 || safe_pf[1] != 0.0 {
+                post_has_audio = true;
+            }
+            scratch.post_fader[i] = safe_pf;
+            meter.observe(inp, out, false, decay, hold_frames, hold_decay);
+        }
+        if inserts_non_finite {
+            meter.clipped = true;
+        }
+
         // Reuse the channel's single PDC delay line (holding sanitized post-fader, pre-pan audio)
-        // to tap both Return-aligned sends and main output before writing once.
-        let safe_pf = sanitize_frame(post_fader);
-        let any_send_pdc = plan
-            .sends
-            .iter()
-            .any(|s| s.target.is_some() && s.pdc_delay > 0);
-        let needs_pdc_write = plan.pdc_delay > 0 || any_send_pdc;
-        let delayed_pf = if let Some(line) = self.pdc_lines.get_mut(index) {
-            for send in &plan.sends {
-                let Some(target) = send.target.map(usize::from) else {
-                    break;
-                };
-                if target < MAX_MIXER_CHANNELS && send.amount > 0.0 {
-                    let tapped = if send.pdc_delay == 0 {
+        // to tap both Return-aligned sends and main output before writing once per frame.
+        let needs_pdc_write = plan.max_pdc_delay > 0;
+        if needs_pdc_write {
+            if !post_has_audio && !was_pdc_active && sleep_enabled {
+                return;
+            }
+            if post_has_audio {
+                self.pdc_active_frames[index] = plan.max_pdc_delay;
+            } else {
+                self.pdc_active_frames[index] =
+                    self.pdc_active_frames[index].saturating_sub(frames);
+            }
+            if let Some(line) = self.pdc_lines.get_mut(index) {
+                for i in 0..frames {
+                    let safe_pf = scratch.post_fader[i];
+                    for (s_idx, send) in plan.sends.iter().enumerate() {
+                        let Some(target) = send.target.map(usize::from) else {
+                            break;
+                        };
+                        let amt = scratch.send_amt_buf[s_idx][i];
+                        if target < MAX_MIXER_CHANNELS && amt > 0.0 {
+                            let tapped = if send.pdc_delay == 0 {
+                                safe_pf
+                            } else {
+                                line.read_integer(send.pdc_delay)
+                            };
+                            if tapped[0] != 0.0 || tapped[1] != 0.0 {
+                                if !return_active[target] {
+                                    scratch.returns[target][..frames].fill([0.0; 2]);
+                                    return_active[target] = true;
+                                }
+                                scratch.returns[target][i][0] += tapped[0] * amt;
+                                scratch.returns[target][i][1] += tapped[1] * amt;
+                            }
+                        }
+                    }
+                    let main_pf = if plan.pdc_delay == 0 {
                         safe_pf
                     } else {
-                        line.read_integer(send.pdc_delay)
+                        line.read_integer(plan.pdc_delay)
                     };
-                    returns[target][0] += tapped[0] * send.amount;
-                    returns[target][1] += tapped[1] * send.amount;
+                    line.write(safe_pf);
+                    let pan_lr = if strip_settled {
+                        const_pan
+                    } else {
+                        scratch.pan_lr_buf[i]
+                    };
+                    scratch.work[i] = apply_pan_lr(main_pf, pan_lr);
                 }
+                if self.pdc_active_frames[index] == 0 && !post_has_audio {
+                    line.reset();
+                }
+                if slice_has_audio(&scratch.work[..frames]) {
+                    route_output_block(
+                        wet_only,
+                        plan,
+                        &scratch.work[..frames],
+                        &mut scratch.buses,
+                        bus_active,
+                        &mut scratch.master,
+                        master_active,
+                    );
+                }
+                return;
             }
-            let main_pf = if plan.pdc_delay == 0 {
-                safe_pf
-            } else {
-                line.read_integer(plan.pdc_delay)
+        }
+
+        if !post_has_audio {
+            return;
+        }
+        for (s_idx, send) in plan.sends.iter().enumerate() {
+            let Some(target) = send.target.map(usize::from) else {
+                break;
             };
-            if needs_pdc_write {
-                line.write(safe_pf);
-            }
-            main_pf
-        } else {
-            for send in &plan.sends {
-                let Some(target) = send.target.map(usize::from) else {
-                    break;
-                };
-                if target < MAX_MIXER_CHANNELS && send.amount > 0.0 {
-                    returns[target][0] += safe_pf[0] * send.amount;
-                    returns[target][1] += safe_pf[1] * send.amount;
+            if target < MAX_MIXER_CHANNELS {
+                let any_amt = scratch.send_amt_buf[s_idx][..frames]
+                    .iter()
+                    .any(|&a| a > 0.0);
+                if any_amt {
+                    if !return_active[target] {
+                        scratch.returns[target][..frames].fill([0.0; 2]);
+                        return_active[target] = true;
+                    }
+                    for i in 0..frames {
+                        let amt = scratch.send_amt_buf[s_idx][i];
+                        if amt > 0.0 {
+                            scratch.returns[target][i][0] += scratch.post_fader[i][0] * amt;
+                            scratch.returns[target][i][1] += scratch.post_fader[i][1] * amt;
+                        }
+                    }
                 }
             }
-            safe_pf
-        };
-        let aligned = plan.apply_cached_pan(delayed_pf);
-        self.route_output(plan, aligned, buses, master);
+        }
+        if strip_settled {
+            for i in 0..frames {
+                scratch.work[i] = apply_pan_lr(scratch.post_fader[i], const_pan);
+            }
+        } else {
+            for i in 0..frames {
+                scratch.work[i] = apply_pan_lr(scratch.post_fader[i], scratch.pan_lr_buf[i]);
+            }
+        }
+        route_output_block(
+            wet_only,
+            plan,
+            &scratch.work[..frames],
+            &mut scratch.buses,
+            bus_active,
+            &mut scratch.master,
+            master_active,
+        );
     }
 
+    /// Process a contiguous sub-block (`1..=AUDIO_SUB_BLOCK_FRAMES`) through the full
+    /// mixer routing DAG, inserts, PDC lines, sends, ducking, and metering.
+    pub(crate) fn process_block(
+        &mut self,
+        sources: &[[[f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS],
+        source_active_mask: u32,
+        preview: &[[f32; 2]],
+        monitor: &[[f32; 2]],
+        out: &mut [[f32; 2]],
+    ) {
+        let frames = out.len().min(AUDIO_SUB_BLOCK_FRAMES);
+        if frames == 0 {
+            return;
+        }
+
+        let mut duck_dirty = [false; MAX_CHANNELS];
+        let env_sm = self.envelope_smoothing;
+        let settle_margin = self.sample_rate * DUCK_TAIL_SETTLE_SEC;
+        let active_ducks = self.active_ducks;
+        for &duck_idx in &active_ducks[..self.active_duck_count] {
+            let duck = &mut self.ducks[duck_idx];
+            if duck.id.is_none() {
+                continue;
+            }
+            if duck.pending_len == 0
+                && duck.gain == 1.0
+                && duck.elapsed > duck.recovery_frames + settle_margin
+            {
+                duck.elapsed += frames as f64;
+                continue;
+            }
+            let target_slot = duck.target.map(usize::from).filter(|&s| s < MAX_CHANNELS);
+            let mut target_factors = target_slot.map(|ts| {
+                if !duck_dirty[ts] {
+                    self.scratch.factors[ts][..frames].fill(1.0);
+                    duck_dirty[ts] = true;
+                }
+                self.scratch.factors[ts][..frames].iter_mut()
+            });
+            for _ in 0..frames {
+                let x = (duck.elapsed / duck.recovery_frames).clamp(0.0, 1.0) as f32;
+                let target = 1.0 - duck.depth * (1.0 - x).powi(2);
+                smooth_step_f32(&mut duck.gain, target, env_sm);
+                if duck.elapsed > duck.recovery_frames + settle_margin {
+                    duck.gain = 1.0;
+                }
+                duck.elapsed += 1.0;
+                if let Some(factor) = target_factors.as_mut().and_then(Iterator::next) {
+                    *factor *= duck.gain;
+                }
+                // Advance pending PDC-aligned duck countdowns after evaluating this frame so
+                // a delay of `N` frames arms `elapsed = 0.0` on exact frame `N`.
+                let mut triggered = false;
+                let mut j = 0usize;
+                let mut len = usize::from(duck.pending_len).min(DUCK_PENDING_CAPACITY);
+                while j < len {
+                    if duck.pending_delays[j] <= 1 {
+                        triggered = true;
+                        len -= 1;
+                        duck.pending_delays.copy_within(j + 1..len + 1, j);
+                        duck.pending_delays[len] = 0;
+                    } else {
+                        duck.pending_delays[j] -= 1;
+                        j += 1;
+                    }
+                }
+                duck.pending_len = len as u8;
+                if triggered {
+                    duck.elapsed = 0.0;
+                }
+            }
+        }
+
+        // Lazy bus/return/master activity flags avoid clearing unused scratch buffers
+        // and let silent downstream channels skip insert DSP completely.
+        let mut bus_active = [false; MAX_MIXER_CHANNELS];
+        let mut return_active = [false; MAX_MIXER_CHANNELS];
+        let mut master_active = false;
+
+        // Route active HiddenSource instrument stems into target Audio/Group/Master buses.
+        let mut mask = source_active_mask;
+        while mask != 0 {
+            let index = mask.trailing_zeros() as usize;
+            mask &= mask - 1;
+            if index >= MAX_INSTRUMENTS {
+                break;
+            }
+            let plan = self.channels[index];
+            if plan.role != ChannelRole::HiddenSource {
+                continue;
+            }
+            let mut source_non_finite = false;
+            let mut source_has_audio = false;
+            let src = &sources[index][..frames];
+            for (dst, &raw) in self.scratch.work[..frames].iter_mut().zip(src) {
+                if !raw[0].is_finite() || !raw[1].is_finite() {
+                    source_non_finite = true;
+                }
+                let safe = sanitize_frame(raw);
+                if safe[0] != 0.0 || safe[1] != 0.0 {
+                    source_has_audio = true;
+                }
+                *dst = safe;
+            }
+            if source_non_finite {
+                if let Some(out_slot) = plan.output_slot().filter(|&s| s < MAX_CHANNELS) {
+                    self.channels[out_slot].meter.clipped = true;
+                }
+            }
+            if source_has_audio {
+                route_output_block(
+                    self.wet_only,
+                    plan,
+                    &self.scratch.work[..frames],
+                    &mut self.scratch.buses,
+                    &mut bus_active,
+                    &mut self.scratch.master,
+                    &mut master_active,
+                );
+            }
+        }
+
+        // Process active Audio channels (dense list precomputed in `adopt`).
+        let active_audio = self.active_audio;
+        for &index in &active_audio[..self.active_audio_count] {
+            self.process_bus_channel_block(
+                index,
+                frames,
+                &duck_dirty,
+                &mut bus_active,
+                &mut return_active,
+                &mut master_active,
+            );
+        }
+
+        // Process Group channels in causal topological order (supports chained groups).
+        let group_order = self.group_order;
+        for &index in group_order.iter().take(self.group_count) {
+            self.process_bus_channel_block(
+                index,
+                frames,
+                &duck_dirty,
+                &mut bus_active,
+                &mut return_active,
+                &mut master_active,
+            );
+        }
+
+        // Process active Return buses (dense list precomputed in `adopt`).
+        let sm = self.smoothing;
+        let decay = self.meter_decay;
+        let hold_frames = self.hold_frames;
+        let hold_decay = self.hold_decay;
+        let active_returns = self.active_returns;
+        for &index in &active_returns[..self.active_return_count] {
+            let slot = MAX_INSTRUMENTS + index;
+            let has_input = return_active[index];
+            let sleep_enabled = self.sleep_enabled();
+            let inserts_quiet = self.channel_inserts_quiet(slot);
+            let was_pdc_active = self.pdc_active_frames[index] > 0;
+            let enabled =
+                !self.channels[slot].muted && (!self.wet_only || self.channels[slot].solo);
+
+            if !has_input && inserts_quiet && !was_pdc_active {
+                step_channel_smoothers_silent(&mut self.channels[slot], sm, frames);
+                let inserts = self.channels[slot].inserts;
+                observe_silent_inserts(inserts, &mut self.effects, frames, hold_frames, hold_decay);
+                self.channels[slot].meter.observe_silent_block(
+                    frames,
+                    decay,
+                    hold_frames,
+                    hold_decay,
+                );
+                continue;
+            }
+
+            let scratch = &mut *self.scratch;
+            if !enabled {
+                step_channel_smoothers_silent(&mut self.channels[slot], sm, frames);
+                let meter = &mut self.channels[slot].meter;
+                if has_input {
+                    for &inp in &scratch.returns[index][..frames] {
+                        meter.observe(inp, [0.0; 2], false, decay, hold_frames, hold_decay);
+                    }
+                } else {
+                    meter.observe_silent_block(frames, decay, hold_frames, hold_decay);
+                }
+                let inserts = self.channels[slot].inserts;
+                if inserts_quiet {
+                    observe_silent_inserts(
+                        inserts,
+                        &mut self.effects,
+                        frames,
+                        hold_frames,
+                        hold_decay,
+                    );
+                } else {
+                    scratch.work[..frames].fill([0.0; 2]);
+                    run_inserts_block(
+                        inserts,
+                        &mut self.effects,
+                        &mut scratch.work[..frames],
+                        hold_frames,
+                        hold_decay,
+                        &mut scratch.gr_scratch,
+                    );
+                }
+                if was_pdc_active {
+                    let pdc_delay = self.channels[slot].pdc_delay;
+                    self.pdc_active_frames[index] =
+                        self.pdc_active_frames[index].saturating_sub(frames);
+                    if let Some(line) = self.pdc_lines.get_mut(index) {
+                        for i in 0..frames {
+                            let aligned = line.read_integer(pdc_delay);
+                            line.write([0.0; 2]);
+                            if aligned[0] != 0.0 || aligned[1] != 0.0 {
+                                if !master_active {
+                                    scratch.master[..frames].fill([0.0; 2]);
+                                    master_active = true;
+                                }
+                                scratch.master[i][0] += aligned[0];
+                                scratch.master[i][1] += aligned[1];
+                            }
+                        }
+                        if self.pdc_active_frames[index] == 0 {
+                            line.reset();
+                        }
+                    }
+                }
+                continue;
+            }
+
+            let strip_settled = step_channel_smoothers(
+                &mut self.channels[slot],
+                sm,
+                frames,
+                &mut scratch.gain_buf,
+                &mut scratch.scale_buf,
+                &mut scratch.pan_lr_buf,
+                &mut scratch.send_amt_buf,
+            );
+            let plan = self.channels[slot];
+            process_channel_inserts_block(
+                plan.inserts,
+                &mut self.effects,
+                has_input.then_some(&scratch.returns[index][..frames]),
+                inserts_quiet,
+                &mut scratch.work[..frames],
+                hold_frames,
+                hold_decay,
+                &mut scratch.gr_scratch,
+            );
+
+            let has_duck = duck_dirty[slot];
+            let mut inserts_non_finite = false;
+            let mut post_has_audio = false;
+            let meter = &mut self.channels[slot].meter;
+            let const_gain = plan.gain;
+            let const_scale = plan.scale;
+            let const_pan = plan.cached_pan_lr;
+            for i in 0..frames {
+                let inp = if has_input {
+                    scratch.returns[index][i]
+                } else {
+                    [0.0; 2]
+                };
+                let processed = scratch.work[i];
+                if !processed[0].is_finite() || !processed[1].is_finite() {
+                    inserts_non_finite = true;
+                }
+                let duck = if has_duck {
+                    scratch.factors[slot][i]
+                } else {
+                    1.0
+                };
+                let (g, sc, pan_lr) = if strip_settled {
+                    (const_gain, const_scale, const_pan)
+                } else {
+                    (
+                        scratch.gain_buf[i],
+                        scratch.scale_buf[i],
+                        scratch.pan_lr_buf[i],
+                    )
+                };
+                let output = apply_pan_lr(apply_fader_gain(processed, g, sc, duck), pan_lr);
+                meter.observe(inp, output, false, decay, hold_frames, hold_decay);
+                let safe = sanitize_frame(output);
+                if safe[0] != 0.0 || safe[1] != 0.0 {
+                    post_has_audio = true;
+                }
+                scratch.post_fader[i] = safe;
+            }
+            if inserts_non_finite {
+                meter.clipped = true;
+            }
+            if plan.pdc_delay > 0 {
+                if !post_has_audio && !was_pdc_active && sleep_enabled {
+                    continue;
+                }
+                if post_has_audio {
+                    self.pdc_active_frames[index] = plan.pdc_delay;
+                } else {
+                    self.pdc_active_frames[index] =
+                        self.pdc_active_frames[index].saturating_sub(frames);
+                }
+                if let Some(line) = self.pdc_lines.get_mut(index) {
+                    for i in 0..frames {
+                        let aligned = line.read_integer(plan.pdc_delay);
+                        line.write(scratch.post_fader[i]);
+                        if aligned[0] != 0.0 || aligned[1] != 0.0 {
+                            if !master_active {
+                                scratch.master[..frames].fill([0.0; 2]);
+                                master_active = true;
+                            }
+                            scratch.master[i][0] += aligned[0];
+                            scratch.master[i][1] += aligned[1];
+                        }
+                    }
+                    if self.pdc_active_frames[index] == 0 && !post_has_audio {
+                        line.reset();
+                    }
+                    continue;
+                }
+            }
+            if post_has_audio {
+                if !master_active {
+                    scratch.master[..frames].copy_from_slice(&scratch.post_fader[..frames]);
+                    master_active = true;
+                } else {
+                    for i in 0..frames {
+                        scratch.master[i][0] += scratch.post_fader[i][0];
+                        scratch.master[i][1] += scratch.post_fader[i][1];
+                    }
+                }
+            }
+        }
+
+        // Process Master bus.
+        let master_inserts_quiet = self.channel_inserts_quiet(MASTER);
+        let has_preview = !preview.is_empty();
+        let has_monitor = !monitor.is_empty();
+        if !master_active && master_inserts_quiet && !has_preview && !has_monitor {
+            step_channel_smoothers_silent(&mut self.channels[MASTER], sm, frames);
+            let inserts = self.channels[MASTER].inserts;
+            observe_silent_inserts(inserts, &mut self.effects, frames, hold_frames, hold_decay);
+            self.channels[MASTER].meter.observe_silent_block(
+                frames,
+                decay,
+                hold_frames,
+                hold_decay,
+            );
+            out[..frames].fill([0.0; 2]);
+            return;
+        }
+
+        let scratch = &mut *self.scratch;
+        let master_muted = self.channels[MASTER].muted;
+        if master_muted {
+            step_channel_smoothers_silent(&mut self.channels[MASTER], sm, frames);
+            let inserts = self.channels[MASTER].inserts;
+            if master_inserts_quiet {
+                observe_silent_inserts(inserts, &mut self.effects, frames, hold_frames, hold_decay);
+            } else {
+                scratch.work[..frames].fill([0.0; 2]);
+                run_inserts_block(
+                    inserts,
+                    &mut self.effects,
+                    &mut scratch.work[..frames],
+                    hold_frames,
+                    hold_decay,
+                    &mut scratch.gr_scratch,
+                );
+            }
+            let meter = &mut self.channels[MASTER].meter;
+            if !master_active && !has_preview && !has_monitor {
+                meter.observe_silent_block(frames, decay, hold_frames, hold_decay);
+                out[..frames].fill([0.0; 2]);
+                return;
+            }
+            let mut master_non_finite = false;
+            for (i, dst) in out[..frames].iter_mut().enumerate() {
+                let prev = preview.get(i).copied().unwrap_or([0.0; 2]);
+                let mon = monitor.get(i).copied().unwrap_or([0.0; 2]);
+                if !prev[0].is_finite()
+                    || !prev[1].is_finite()
+                    || !mon[0].is_finite()
+                    || !mon[1].is_finite()
+                {
+                    master_non_finite = true;
+                }
+                let inp = if master_active {
+                    scratch.master[i]
+                } else {
+                    [0.0; 2]
+                };
+                let final_raw = [
+                    sanitize_sample(prev[0]) + sanitize_sample(mon[0]),
+                    sanitize_sample(prev[1]) + sanitize_sample(mon[1]),
+                ];
+                meter.observe(inp, final_raw, true, decay, hold_frames, hold_decay);
+                *dst = sanitize_frame(final_raw);
+            }
+            if master_non_finite {
+                meter.clipped = true;
+            }
+            return;
+        }
+
+        let strip_settled = step_channel_smoothers(
+            &mut self.channels[MASTER],
+            sm,
+            frames,
+            &mut scratch.gain_buf,
+            &mut scratch.scale_buf,
+            &mut scratch.pan_lr_buf,
+            &mut scratch.send_amt_buf,
+        );
+        let master_plan = self.channels[MASTER];
+        process_channel_inserts_block(
+            master_plan.inserts,
+            &mut self.effects,
+            master_active.then_some(&scratch.master[..frames]),
+            master_inserts_quiet,
+            &mut scratch.work[..frames],
+            hold_frames,
+            hold_decay,
+            &mut scratch.gr_scratch,
+        );
+
+        let has_duck = duck_dirty[MASTER];
+        let mut master_non_finite = false;
+        let meter = &mut self.channels[MASTER].meter;
+        let const_gain = master_plan.gain;
+        let const_scale = master_plan.scale;
+        let const_pan = master_plan.cached_pan_lr;
+        for (i, dst) in out[..frames].iter_mut().enumerate() {
+            let processed = scratch.work[i];
+            if !processed[0].is_finite() || !processed[1].is_finite() {
+                master_non_finite = true;
+            }
+            let duck = if has_duck {
+                scratch.factors[MASTER][i]
+            } else {
+                1.0
+            };
+            let (g, sc, pan_lr) = if strip_settled {
+                (const_gain, const_scale, const_pan)
+            } else {
+                (
+                    scratch.gain_buf[i],
+                    scratch.scale_buf[i],
+                    scratch.pan_lr_buf[i],
+                )
+            };
+            let strip_out = apply_pan_lr(apply_fader_gain(processed, g, sc, duck), pan_lr);
+            let prev = preview.get(i).copied().unwrap_or([0.0; 2]);
+            let mon = monitor.get(i).copied().unwrap_or([0.0; 2]);
+            if !prev[0].is_finite()
+                || !prev[1].is_finite()
+                || !mon[0].is_finite()
+                || !mon[1].is_finite()
+            {
+                master_non_finite = true;
+            }
+            // Preview audition and live software input monitoring sum after Master inserts/mute
+            // so muting Master never silences them, while Master meters observe the exact final
+            // stereo frame sent to DAC/WAV.
+            let final_raw = [
+                strip_out[0] + sanitize_sample(prev[0]) + sanitize_sample(mon[0]),
+                strip_out[1] + sanitize_sample(prev[1]) + sanitize_sample(mon[1]),
+            ];
+            let inp = if master_active {
+                scratch.master[i]
+            } else {
+                [0.0; 2]
+            };
+            meter.observe(inp, final_raw, true, decay, hold_frames, hold_decay);
+            *dst = sanitize_frame(final_raw);
+        }
+        if master_non_finite {
+            meter.clipped = true;
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn process(
         &mut self,
         sources: &[[f32; 2]; MAX_INSTRUMENTS],
         preview: [f32; 2],
         monitor: [f32; 2],
     ) -> [f32; 2] {
-        self.factors.fill(1.0);
-        for duck in &mut self.ducks {
-            if duck.id.is_none() {
-                continue;
-            }
-            let x = (duck.elapsed / duck.recovery_frames).clamp(0.0, 1.0) as f32;
-            let target = 1.0 - duck.depth * (1.0 - x).powi(2);
-            smooth_step_f32(&mut duck.gain, target, self.envelope_smoothing);
-            if duck.elapsed > duck.recovery_frames + self.sample_rate * 0.01 {
-                duck.gain = 1.0;
-            }
-            duck.elapsed += 1.0;
-            if let Some(target_slot) = duck.target.map(usize::from) {
-                if target_slot < MAX_CHANNELS {
-                    self.factors[target_slot] *= duck.gain;
-                }
-            }
-            // Advance pending PDC-aligned duck countdowns after evaluating this frame so
-            // a delay of `N` frames arms `elapsed = 0.0` on exact frame `N`.
-            let mut triggered = false;
-            let mut i = 0usize;
-            let mut len = usize::from(duck.pending_len).min(DUCK_PENDING_CAPACITY);
-            while i < len {
-                if duck.pending_delays[i] <= 1 {
-                    triggered = true;
-                    len -= 1;
-                    duck.pending_delays.copy_within(i + 1..len + 1, i);
-                    duck.pending_delays[len] = 0;
-                } else {
-                    duck.pending_delays[i] -= 1;
-                    i += 1;
-                }
-            }
-            duck.pending_len = len as u8;
-            if triggered {
-                duck.elapsed = 0.0;
+        let mut src_block = [[[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES]; MAX_INSTRUMENTS];
+        let mut active_mask = 0u32;
+        for (i, &frame) in sources.iter().enumerate() {
+            if frame[0] != 0.0 || frame[1] != 0.0 || !frame[0].is_finite() || !frame[1].is_finite()
+            {
+                src_block[i][0] = frame;
+                active_mask |= 1u32 << i;
             }
         }
-        let sm = self.smoothing;
-        for channel in &mut self.channels {
-            if matches!(
-                channel.role,
-                ChannelRole::Inactive | ChannelRole::HiddenSource
-            ) {
-                continue;
-            }
-            smooth_step_f32(&mut channel.gain, channel.target_gain, sm);
-            smooth_step_f32(&mut channel.pan, channel.target_pan, sm);
-            channel.refresh_pan_cache();
-            smooth_step_f32(&mut channel.scale, channel.target_scale, sm);
-            for send in &mut channel.sends {
-                if send.target.is_none() {
-                    break;
-                }
-                smooth_step_f32(&mut send.amount, send.target_amount, sm);
-            }
-        }
-        let mut buses = [[0.0; 2]; MAX_MIXER_CHANNELS];
-        let mut returns = [[0.0; 2]; MAX_MIXER_CHANNELS];
-        let mut master = [0.0; 2];
-
-        let decay = self.meter_decay;
-        let hold_frames = self.hold_frames;
-        let hold_decay = self.hold_decay;
-
-        for (index, &raw_source) in sources.iter().enumerate() {
-            let plan = self.channels[index];
-            if plan.role != ChannelRole::HiddenSource {
-                continue;
-            }
-            let source_non_finite = !raw_source[0].is_finite() || !raw_source[1].is_finite();
-            let output = sanitize_frame(raw_source);
-            if source_non_finite {
-                if let Some(out_slot) = plan.output_slot().filter(|&s| s < MAX_CHANNELS) {
-                    self.channels[out_slot].meter.clipped = true;
-                }
-            }
-            self.route_output(plan, output, &mut buses, &mut master);
-        }
-
-        // Process Audio channels.
-        for index in 0..MAX_MIXER_CHANNELS {
-            let slot = MAX_INSTRUMENTS + index;
-            if self.channels[slot].role != ChannelRole::Audio {
-                continue;
-            }
-            self.process_bus_channel(index, &mut buses, &mut returns, &mut master);
-        }
-
-        // Process Group channels in causal topological order (supports chained groups).
-        let group_order = self.group_order;
-        for &index in group_order.iter().take(self.group_count) {
-            self.process_bus_channel(index, &mut buses, &mut returns, &mut master);
-        }
-
-        // Process Return buses.
-        for (index, &input) in returns.iter().enumerate() {
-            let slot = MAX_INSTRUMENTS + index;
-            let plan = self.channels[slot];
-            if plan.role != ChannelRole::Return {
-                continue;
-            }
-            let processed = self.inserts(slot, input);
-            let inserts_non_finite = !processed[0].is_finite() || !processed[1].is_finite();
-            let output = if !plan.muted && (!self.wet_only || plan.solo) {
-                self.strip(slot, processed)
-            } else {
-                [0.0; 2]
-            };
-            self.channels[slot]
-                .meter
-                .observe(input, output, false, decay, hold_frames, hold_decay);
-            if inserts_non_finite {
-                self.channels[slot].meter.clipped = true;
-            }
-            let safe_out = sanitize_frame(output);
-            let aligned = self.apply_pdc(index, plan.pdc_delay, safe_out);
-            master[0] += aligned[0];
-            master[1] += aligned[1];
-        }
-
-        let processed = self.inserts(MASTER, master);
-        let inserts_non_finite = !processed[0].is_finite() || !processed[1].is_finite();
-        let strip_out = if self.channels[MASTER].muted {
-            [0.0; 2]
-        } else {
-            self.strip(MASTER, processed)
-        };
-        let aux_non_finite = !preview[0].is_finite()
+        let preview_slice: &[[f32; 2]] = if preview[0] != 0.0
+            || preview[1] != 0.0
+            || !preview[0].is_finite()
             || !preview[1].is_finite()
+        {
+            std::slice::from_ref(&preview)
+        } else {
+            &[]
+        };
+        let monitor_slice: &[[f32; 2]] = if monitor[0] != 0.0
+            || monitor[1] != 0.0
             || !monitor[0].is_finite()
-            || !monitor[1].is_finite();
-        // Preview audition and live software input monitoring sum after Master inserts/mute
-        // so muting Master never silences them, while Master meters observe the exact final
-        // stereo frame sent to DAC/WAV.
-        let final_raw = [
-            strip_out[0] + sanitize_sample(preview[0]) + sanitize_sample(monitor[0]),
-            strip_out[1] + sanitize_sample(preview[1]) + sanitize_sample(monitor[1]),
-        ];
-        self.channels[MASTER].meter.observe(
-            master,
-            final_raw,
-            true,
-            decay,
-            hold_frames,
-            hold_decay,
+            || !monitor[1].is_finite()
+        {
+            std::slice::from_ref(&monitor)
+        } else {
+            &[]
+        };
+        let mut out = [[0.0_f32; 2]; 1];
+        self.process_block(
+            &src_block,
+            active_mask,
+            preview_slice,
+            monitor_slice,
+            &mut out,
         );
-        if inserts_non_finite || aux_non_finite {
-            self.channels[MASTER].meter.clipped = true;
-        }
-
-        sanitize_frame(final_raw)
+        out[0]
     }
 }
 

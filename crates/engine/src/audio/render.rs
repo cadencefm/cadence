@@ -3,7 +3,7 @@ use super::engine::Engine;
 use super::shared::*;
 use super::*;
 use cadence_core::assets::ensure_sample_bank_ready;
-use cadence_core::dsp::sanitize_sample;
+use cadence_core::dsp::{sanitize_sample, AUDIO_SUB_BLOCK_FRAMES};
 use cadence_core::mixer::{ChannelRef, EffectKind, MAX_MIXER_CHANNELS};
 use cadence_core::music::STEPS_PER_BAR;
 use cadence_core::runtime::SampleBank;
@@ -442,26 +442,38 @@ fn render_schedule_validated(
     let tail_end_frame = frames.saturating_sub(u64::from(sample_rate) / 100);
     let mut output = RenderSignalAccumulator::default();
     let mut tail = RenderSignalAccumulator::default();
-    for index in 0..frames {
+    let mut block = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+    let mut index = 0u64;
+    while index < frames {
         // Publish after the previous step played and before this one does;
         // the engine adopts pending scores at the start of each step.
         while let Some((at, score)) = upcoming.next_if(|(at, _)| engine.play_step() >= *at) {
             let _ = at;
             engine.publish_score_update((*score).clone());
         }
-        let stereo = engine.next_frame().map(sanitize_sample);
-        let fade = if frames - index <= fade_frames {
-            (frames - index - 1) as f32 / fade_frames as f32
+        let chunk = (frames - index).min(AUDIO_SUB_BLOCK_FRAMES as u64) as usize;
+        let rendered = if upcoming.peek().is_some() {
+            engine.render_sub_block(&mut block[..chunk])
         } else {
-            1.0
+            engine.render_block(&mut block[..chunk]);
+            chunk
         };
-        // NaN-safe clamp strictly at the final i16 WAV conversion boundary.
-        let pcm =
-            stereo.map(|sample| (sample.clamp(-1.0, 1.0) * fade * i16::MAX as f32).round() as i16);
-        sink(stereo, pcm)?;
-        output.observe(pcm);
-        if (tail_start_frame..tail_end_frame).contains(&index) {
-            tail.observe(pcm);
+        for &raw in &block[..rendered] {
+            let stereo = raw.map(sanitize_sample);
+            let fade = if frames - index <= fade_frames {
+                (frames - index - 1) as f32 / fade_frames as f32
+            } else {
+                1.0
+            };
+            // NaN-safe clamp strictly at the final i16 WAV conversion boundary.
+            let pcm = stereo
+                .map(|sample| (sample.clamp(-1.0, 1.0) * fade * i16::MAX as f32).round() as i16);
+            sink(stereo, pcm)?;
+            output.observe(pcm);
+            if (tail_start_frame..tail_end_frame).contains(&index) {
+                tail.observe(pcm);
+            }
+            index += 1;
         }
     }
     let (channels, effects) = engine.collect_render_telemetry();
@@ -521,6 +533,10 @@ fn sanitize_stem_name(name: &str) -> String {
 
 /// Export `00-Master.wav` plus one isolated stereo WAV per active `Audio` channel
 /// (`01-<Name>.wav`, `02-<Name>.wav`, ...) through the exact production mixer & FX graph.
+///
+/// Compiles all stem jobs deterministically upfront and renders independent WAVs in
+/// parallel across scoped worker threads capped to [`std::thread::available_parallelism`],
+/// preserving deterministic filenames, `stem_paths` order, and error propagation.
 pub fn render_stems_with_samples_report(
     project: &cadence_core::material::Project,
     flags: &cadence_core::mixer::LiveFlags,
@@ -530,20 +546,14 @@ pub fn render_stems_with_samples_report(
     steps: u64,
     sample_rate: u32,
 ) -> Result<StemExportSummary> {
+    use std::sync::atomic::AtomicUsize;
+
     let dir = out_dir.as_ref();
     std::fs::create_dir_all(dir)
         .with_context(|| format!("Creating stems directory {}", dir.display()))?;
 
     let master_score = project.compile_with_flags(flags)?;
     let master_path = dir.join("00-Master.wav");
-    let master_report = render_schedule_report(
-        &[(0, &master_score)],
-        start_step,
-        steps,
-        samples.clone(),
-        &master_path,
-        sample_rate,
-    )?;
 
     let is_ancestor_group_muted = |mut out: ChannelRef| -> bool {
         for _ in 0..MAX_MIXER_CHANNELS {
@@ -564,6 +574,9 @@ pub fn render_stems_with_samples_report(
         false
     };
 
+    let mut jobs: Vec<(ScoreWindow, std::path::PathBuf)> = Vec::new();
+    jobs.push((master_score, master_path.clone()));
+
     let mut stem_paths = Vec::new();
     let mut stem_idx = 1usize;
     for ch in &project.mixer.channels {
@@ -579,17 +592,84 @@ pub fn render_stems_with_samples_report(
         let stem_score = project.compile_with_flags(&solo_flags)?;
         let filename = format!("{stem_idx:02}-{}.wav", sanitize_stem_name(&ch.name));
         let stem_path = dir.join(filename);
-        render_schedule_report(
-            &[(0, &stem_score)],
-            start_step,
-            steps,
-            samples.clone(),
-            &stem_path,
-            sample_rate,
-        )?;
-        stem_paths.push(stem_path);
+        stem_paths.push(stem_path.clone());
+        jobs.push((stem_score, stem_path));
         stem_idx += 1;
     }
+
+    let worker_count = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .clamp(1, jobs.len());
+
+    let mut outcomes: Vec<Option<Result<RenderReport>>> = (0..jobs.len()).map(|_| None).collect();
+    if worker_count <= 1 {
+        for (idx, (score, path)) in jobs.iter().enumerate() {
+            outcomes[idx] = Some(render_schedule_report(
+                &[(0, score)],
+                start_step,
+                steps,
+                samples.clone(),
+                path,
+                sample_rate,
+            ));
+        }
+    } else {
+        type StemJobOutcome = (usize, Result<RenderReport>);
+        let next_job = AtomicUsize::new(0);
+        let jobs_ref = &jobs;
+        let samples_ref = &samples;
+        let batches: Vec<Result<Vec<StemJobOutcome>>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..worker_count)
+                .map(|_| {
+                    let next_job = &next_job;
+                    scope.spawn(move || {
+                        let mut local = Vec::new();
+                        loop {
+                            let idx = next_job.fetch_add(1, Ordering::Relaxed);
+                            let Some((score, path)) = jobs_ref.get(idx) else {
+                                break;
+                            };
+                            let res = render_schedule_report(
+                                &[(0, score)],
+                                start_step,
+                                steps,
+                                samples_ref.clone(),
+                                path,
+                                sample_rate,
+                            );
+                            local.push((idx, res));
+                        }
+                        local
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join()
+                        .map_err(|_| anyhow::anyhow!("Stem export worker panicked"))
+                })
+                .collect()
+        });
+        for batch in batches {
+            for (idx, res) in batch? {
+                if let Some(slot) = outcomes.get_mut(idx) {
+                    *slot = Some(res);
+                }
+            }
+        }
+    }
+
+    let mut master_report = None;
+    for (idx, outcome) in outcomes.into_iter().enumerate() {
+        let report =
+            outcome.with_context(|| format!("Missing render result for stem job {idx}"))??;
+        if idx == 0 {
+            master_report = Some(report);
+        }
+    }
+    let master_report = master_report.context("Missing master render report")?;
 
     Ok(StemExportSummary {
         master_path,
@@ -727,23 +807,29 @@ pub fn finalize_recording_wav(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadence_core::material::Project;
 
     #[test]
     fn render_schedule_creates_parent_dirs_and_guards_step_overflow() {
         let dir = tempfile::tempdir().unwrap();
-        let score = Project::demo().compile().unwrap();
+        let fx = crate::test_fixtures::kitchen_sink_fixture(8_000);
 
         // Missing nested parent directories are created automatically by the atomic WAV pipeline.
         let nested_wav = dir.path().join("nested/exports/out.wav");
-        let report =
-            render_schedule_report(&[(0, &score)], 0, 16, Vec::new(), &nested_wav, 8_000).unwrap();
+        let report = render_schedule_report(
+            &[(0, &fx.score)],
+            0,
+            16,
+            fx.samples.clone(),
+            &nested_wav,
+            8_000,
+        )
+        .unwrap();
         assert!(nested_wav.is_file());
         assert_eq!(report.sample_rate, 8_000);
         assert!(report.frames > 0);
 
         // Overflowing `start_step + steps` returns a clean error instead of wrapping or panicking.
-        let err = validate_render_schedule(&[(0, &score)], u64::MAX - 4, 16, &Vec::new(), 8_000);
+        let err = validate_render_schedule(&[(0, &fx.score)], u64::MAX - 4, 16, &fx.samples, 8_000);
         assert!(err.is_err());
     }
 }

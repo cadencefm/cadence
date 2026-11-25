@@ -19,6 +19,12 @@ pub const DECAY_LN_60DB: f64 = 6.907_755_278_982_137;
 /// Natural logarithm of `100` (`ln(100)`), yielding 99% (`-40 dB`) settling at stage end.
 pub const LN_100: f64 = 4.605_170_185_988_092;
 
+/// Maximum event-free audio processing sub-block length in sample frames.
+///
+/// Matches Apple Silicon L1D cache locality (~128 KiB) and control-rate granularity
+/// (`~1.33 ms` at `48 kHz`) with zero added latency.
+pub const AUDIO_SUB_BLOCK_FRAMES: usize = 64;
+
 /// Maximum safe discrete-time filter/oscillator frequency ratio relative to sample rate (`0.45 * sr`).
 pub const NYQUIST_SAFE_RATIO: f64 = 0.45;
 /// Drum-kit choke exponential fade-out duration (`3.5 ms` to `-60 dB`).
@@ -222,6 +228,25 @@ pub fn control_stride_mask(sample_rate: f64, target_hz: f64) -> u32 {
     let hz = sanitize_clamp_f64(target_hz, 1.0, sr, 1_000.0);
     let exp = (sr / hz).max(1.0).log2().round().clamp(0.0, 16.0) as u32;
     (1u32 << exp) - 1
+}
+
+/// Return the zero-based offset of the last frame in `0..frames` where a
+/// control-rate counter starting at `ctrl_count` hits `0` under `ctrl_mask`
+/// (`(ctrl_count + offset) & ctrl_mask == 0`), or `None` if no tick occurs.
+#[inline]
+pub fn control_stride_last_tick(ctrl_count: u32, ctrl_mask: u32, frames: usize) -> Option<usize> {
+    if frames == 0 {
+        return None;
+    }
+    let mask = ctrl_mask as usize;
+    let c0 = (ctrl_count as usize) & mask;
+    let first_tick = if c0 == 0 { 0 } else { (mask + 1) - c0 };
+    if first_tick >= frames {
+        None
+    } else {
+        let last = frames - 1;
+        Some(last - (c0.wrapping_add(last) & mask))
+    }
 }
 
 /// Flush subnormal/tiny values (`|x| < 1e-24`) and non-finite numbers to `0.0`.
@@ -528,6 +553,24 @@ impl Smoother {
     pub fn is_settled(&self) -> bool {
         (self.target - self.current).abs() <= self.settle_tol()
     }
+
+    /// Advance smoother state across `frames` silent or idle-bypassed samples.
+    ///
+    /// Costs O(1) once converged (`current == target`) and steps identically to
+    /// `frames` calls to [`Smoother::next`] while slewing, stopping early upon
+    /// settling to `target`.
+    #[inline]
+    pub fn advance_silent(&mut self, frames: usize) {
+        if self.current == self.target || frames == 0 {
+            return;
+        }
+        for _ in 0..frames {
+            self.next();
+            if self.current == self.target {
+                break;
+            }
+        }
+    }
 }
 
 /// Per-frame state returned by [`BypassFader::step`] for unified click-free effect bypass.
@@ -572,11 +615,47 @@ impl BypassFader {
         !self.was_active
     }
 
+    /// True when the bypass crossfade has fully settled for `bypassed` (either
+    /// idle-bypassed or active at unity wet gain).
+    #[inline]
+    pub fn is_settled_for(&self, bypassed: bool) -> bool {
+        if bypassed {
+            !self.was_active
+        } else {
+            self.wet.current() == 1.0 && self.wet.target() == 1.0
+        }
+    }
+
     /// Transition cleanly to idle-bypassed state after resetting internal effect buffers.
     #[inline]
     pub fn mark_idle(&mut self) {
         self.wet.snap(0.0);
         self.was_active = false;
+    }
+
+    /// Fast block-level check for idle-bypassed state: snaps wet gain to `0.0` and
+    /// returns `true` when `bypassed && !was_active` so callers can skip an entire block
+    /// while preserving smooth `0.0 -> 1.0` un-bypass fade-in.
+    #[inline]
+    pub fn check_idle_bypass(&mut self, bypassed: bool) -> bool {
+        if bypassed && !self.was_active {
+            self.wet.snap(0.0);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Keep the idle/active bypass latch consistent across skipped silent frames.
+    #[inline]
+    pub fn advance_silent(&mut self, bypassed: bool) {
+        if bypassed {
+            if !self.was_active {
+                self.wet.snap(0.0);
+            }
+        } else {
+            self.was_active = true;
+        }
     }
 
     /// Advance bypass state by one audio sample.
@@ -724,6 +803,38 @@ impl LogSmoother {
     pub fn is_settled(&self) -> bool {
         (self.target_log - self.current_log).abs()
             <= Self::SETTLE_EPS * self.target_log.abs().max(1.0)
+    }
+
+    /// Advance smoother state across `frames` silent or idle-bypassed samples.
+    ///
+    /// Costs O(1) once converged (`current_log == target_log`) and refreshes
+    /// `current_val` with a single `exp()` after advancing `current_log` identically
+    /// to `frames` calls to [`LogSmoother::step`].
+    #[inline]
+    pub fn advance_silent(&mut self, coeff: f64, frames: usize) {
+        if self.current_log == self.target_log || frames == 0 {
+            return;
+        }
+        let tol = Self::SETTLE_EPS * self.target_log.abs().max(1.0);
+        let c = if coeff.is_finite() {
+            coeff.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        for _ in 0..frames {
+            let diff = self.target_log - self.current_log;
+            if diff.abs() <= tol {
+                self.current_log = self.target_log;
+                break;
+            }
+            let next = self.current_log + diff * c;
+            if c > 0.0 && next == self.current_log {
+                self.current_log = self.target_log;
+                break;
+            }
+            self.current_log = next;
+        }
+        self.current_val = self.current_log.exp();
     }
 }
 

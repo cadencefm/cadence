@@ -8,7 +8,7 @@ use crate::dsp::biquad::TptOnePoleLpf;
 use crate::dsp::delay::DelayLine;
 use crate::dsp::math::{
     mix_stereo_f64, sanitize_clamp_f64, sanitize_frame, sanitize_sample_f64, sanitize_sample_rate,
-    BypassFader, BypassStep, Smoother,
+    BypassFader, BypassStep, Smoother, TAIL_SILENCE_FLOOR_F32, TAIL_SILENCE_FLOOR_F64,
 };
 use crate::mixer::ChorusPatch;
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -63,6 +63,13 @@ impl QuadratureLfo {
         self.phase = (self.phase + inc).rem_euclid(1.0);
         (v1, v2)
     }
+
+    /// Advance LFO phase by `frames` samples in O(1) while the chorus is sleeping on silence.
+    #[inline]
+    pub fn advance_frames(&mut self, frames: usize, rate_hz: f64) {
+        let inc = sanitize_sample_f64(rate_hz).clamp(0.0, 40.0) / self.sample_rate;
+        self.phase = (self.phase + inc * frames as f64).rem_euclid(1.0);
+    }
 }
 
 /// Stereo BBD-style dual-voice quadrature chorus with cubic Hermite delay reads,
@@ -79,6 +86,9 @@ pub struct Chorus {
     bypass: BypassFader,
     tone_lpf: TptOnePoleLpf,
     last_patch: ChorusPatch,
+    drain_frames: u32,
+    tail_silent_frames: u32,
+    tail_quiet: bool,
     has_processed: bool,
 }
 
@@ -86,6 +96,7 @@ impl Chorus {
     pub fn new(sample_rate: f64) -> Self {
         let sr = sanitize_sample_rate(sample_rate);
         let cap = ((sr * MAX_CHORUS_SECONDS).ceil() as usize).max(256);
+        let drain_frames = ((sr * 0.017).ceil() as u32).saturating_add(4);
         let default = ChorusPatch::default();
         let mut ch = Self {
             sample_rate: sr,
@@ -98,6 +109,9 @@ impl Chorus {
             bypass: BypassFader::new(sr),
             tone_lpf: TptOnePoleLpf::new(sr, BBD_TONE_HZ),
             last_patch: default,
+            drain_frames,
+            tail_silent_frames: 0,
+            tail_quiet: true,
             has_processed: false,
         };
         ch.set_parameters(default);
@@ -118,6 +132,8 @@ impl Chorus {
         self.width.snap(self.width.target());
         self.mix.snap(self.mix.target());
         self.bypass.reset();
+        self.tail_silent_frames = 0;
+        self.tail_quiet = true;
         self.has_processed = false;
     }
 
@@ -150,21 +166,62 @@ impl Chorus {
         }
     }
 
+    #[inline]
+    pub fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        if frames == 0 {
+            return;
+        }
+        self.has_processed = true;
+        self.bypass.advance_silent(bypassed);
+        self.depth.advance_silent(frames);
+        self.width.advance_silent(frames);
+        self.mix.advance_silent(frames);
+        if bypassed {
+            self.rate_hz.advance_silent(frames);
+        } else if self.rate_hz.current() == self.rate_hz.target() {
+            self.lfo.advance_frames(frames, self.rate_hz.current());
+        } else {
+            for i in 0..frames {
+                let rate = self.rate_hz.next();
+                self.lfo.advance_frames(1, rate);
+                if self.rate_hz.current() == self.rate_hz.target() {
+                    let rem = frames - 1 - i;
+                    if rem > 0 {
+                        self.lfo.advance_frames(rem, self.rate_hz.current());
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
         self.has_processed = true;
         let dry = sanitize_frame(input);
         let bypass_w = match self.bypass.step(bypassed) {
-            BypassStep::Idle => return dry,
+            BypassStep::Idle => {
+                self.advance_silent_frames(1, true);
+                return dry;
+            }
             BypassStep::SettledBypass => {
                 // O(1) validity reset prevents stale bursts when un-bypassed later.
                 self.line.reset();
                 self.tone_lpf.reset();
+                self.tail_silent_frames = 0;
+                self.tail_quiet = true;
                 self.bypass.mark_idle();
+                self.advance_silent_frames(1, true);
                 return dry;
             }
             BypassStep::Active(w) => w,
         };
 
+        let dry_silent =
+            dry[0].abs() < TAIL_SILENCE_FLOOR_F32 && dry[1].abs() < TAIL_SILENCE_FLOOR_F32;
+        if !dry_silent {
+            self.tail_quiet = false;
+            self.tail_silent_frames = 0;
+        }
         self.line.write(dry);
         let rate = self.rate_hz.next();
         let depth = self.depth.next();
@@ -190,6 +247,22 @@ impl Chorus {
                 self.line.read_cubic_channel(d_r1, 1) + self.line.read_cubic_channel(d_r2, 1),
             );
         let toned = self.tone_lpf.process_stereo([wet_l, wet_r]);
+        if !self.tail_quiet && dry_silent {
+            if toned[0].abs() < TAIL_SILENCE_FLOOR_F64
+                && toned[1].abs() < TAIL_SILENCE_FLOOR_F64
+                && self.tone_lpf.quiet()
+            {
+                self.tail_silent_frames = self.tail_silent_frames.saturating_add(1);
+                if self.tail_silent_frames >= self.drain_frames {
+                    self.line.reset();
+                    self.tone_lpf.reset();
+                    self.tail_silent_frames = 0;
+                    self.tail_quiet = true;
+                }
+            } else {
+                self.tail_silent_frames = 0;
+            }
+        }
 
         // True (1 - mix) * dry + mix * wet law (zero dry bleed at 100% wet, flat bass at 50% mix!).
         let out = mix_stereo_f64(
@@ -208,8 +281,36 @@ impl crate::dsp::StereoEffect for Chorus {
     }
 
     #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        if buf.is_empty() {
+            return;
+        }
+        self.has_processed = true;
+        if self.bypass.check_idle_bypass(bypassed) {
+            self.advance_silent_frames(buf.len(), true);
+            for frame in buf.iter_mut() {
+                *frame = sanitize_frame(*frame);
+            }
+            return;
+        }
+        for frame in buf.iter_mut() {
+            *frame = Chorus::process(self, *frame, bypassed);
+        }
+    }
+
+    #[inline]
     fn reset(&mut self) {
         Chorus::reset(self);
+    }
+
+    #[inline]
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        self.tail_quiet && self.bypass.is_settled_for(bypassed)
+    }
+
+    #[inline]
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        Chorus::advance_silent_frames(self, frames, bypassed);
     }
 }
 

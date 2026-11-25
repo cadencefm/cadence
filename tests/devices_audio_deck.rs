@@ -670,3 +670,34 @@ fn rising_edge_audio_health_alerts_midi_out_error_and_outcome_merge() {
     assert!(dst.audio_restart);
     assert!(dst.audio_rescan);
 }
+
+#[test]
+fn observe_transport_recompiles_live_window_when_step_rewinds_below_base() {
+    use cadence_core::material::LIVE_RING_STEPS;
+
+    let (mut app, _io, _dir) = memory_app();
+    // Advance transport past half the ring so the live score window rebases past 0.
+    let far_step = LIVE_RING_STEPS / 2 + 32;
+    let out_fwd = app.observe_transport(far_step - 1, far_step, true, false);
+    assert!(out_fwd.changed);
+    let fwd_win = app
+        .audio_project()
+        .live_window
+        .expect("rebased live window");
+    assert!(fwd_win.start >= LIVE_RING_STEPS / 2);
+    assert!(fwd_win.contains(far_step));
+
+    // If transport ever observes a step before `live_window.start`, observe_transport must
+    // immediately recompile the ring window so playback cannot stall in a silent dead zone.
+    let out_back = app.observe_transport(0, 0, false, false);
+    assert!(
+        out_back.changed,
+        "rewinding below live_window.start must trigger audio score recompile"
+    );
+    let back_win = app
+        .audio_project()
+        .live_window
+        .expect("recompiled live window");
+    assert_eq!(back_win.start, 0);
+    assert!(back_win.contains(0));
+}

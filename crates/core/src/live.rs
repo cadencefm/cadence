@@ -459,9 +459,11 @@ impl Performance {
             .filter(move |p| Self::lane_of(&p.change) == Some(lane))
     }
 
-    /// Whether the ring needs to move forward to keep ahead of the playhead.
+    /// Whether the compiled ring window no longer covers `next_step` with sufficient
+    /// lookahead (either `next_step` moved into the second half of the ring or rewound
+    /// before `self.base`).
     pub fn needs_extension(&self) -> bool {
-        self.next_step >= self.base + LIVE_RING_STEPS / 2
+        self.next_step < self.base || self.next_step >= self.base + LIVE_RING_STEPS / 2
     }
 
     /// Compile the ring window starting at the bar of the step last played.
@@ -583,5 +585,31 @@ mod tests {
             1,
             "update_heard_project must preserve pending live changes"
         );
+    }
+
+    #[test]
+    fn needs_extension_detects_both_forward_horizon_and_rewind_below_base() {
+        let project = Project::demo();
+        let flags = LiveFlags::default();
+        let mut perf = Performance::new(&project);
+        perf.next_step = LIVE_RING_STEPS / 2 + 16;
+        let win_mid = perf.compile(&project, &flags, None).unwrap();
+        let mid_window = win_mid.live_window.expect("live window");
+        assert!(mid_window.start >= LIVE_RING_STEPS / 2);
+        assert!(mid_window.contains(perf.next_step));
+        assert!(!perf.needs_extension());
+
+        // Advancing past half the ring triggers forward extension.
+        perf.next_step = mid_window.start + LIVE_RING_STEPS / 2;
+        assert!(perf.needs_extension());
+
+        // Rewinding behind `base` also triggers recompile so the ring covers `next_step`.
+        perf.next_step = 0;
+        assert!(perf.needs_extension());
+        let win_rewound = perf.compile(&project, &flags, None).unwrap();
+        let rewound_window = win_rewound.live_window.expect("live window");
+        assert_eq!(rewound_window.start, 0);
+        assert!(rewound_window.contains(0));
+        assert!(!perf.needs_extension());
     }
 }

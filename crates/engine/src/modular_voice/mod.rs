@@ -895,6 +895,14 @@ impl ModularVoice {
         }
     }
 
+    /// Fast-path update for continuous `Zone.Pan` and `Rack.Tune` modulation lanes
+    /// without rescanning unchanged module/cable topology.
+    #[inline]
+    pub fn set_continuous_zone_pan_and_tune(&mut self, zone_pan: f32, rack_tune: f32) {
+        self.target_zone_pan = sanitize_sample(zone_pan).clamp(-1.0, 1.0);
+        self.target_rack_tune = f64::from(sanitize_sample(rack_tune).clamp(-24.0, 24.0));
+    }
+
     /// Apply one unlocked continuous module modulation (`ModLane`) directly onto this voice.
     #[inline]
     pub fn apply_continuous_module_param(&mut self, module_id: u16, param: ModuleParam, norm: f32) {
@@ -1008,6 +1016,7 @@ impl ModularVoice {
 
     /// Execute one full stereo audio frame of the compiled Eurorack DAG (`f64` internal,
     /// `[f32; 2]` voice output). Zero allocations, zero locks, zero panics.
+    #[inline]
     pub fn next_frame(&mut self, bank: &SampleBank, preview: Option<&Arc<SampleData>>) -> [f32; 2] {
         if !self.active || self.op_count == 0 {
             return [0.0; 2];
@@ -1089,6 +1098,29 @@ impl ModularVoice {
             return [0.0; 2];
         }
         out
+    }
+
+    /// Execute up to `out.len()` consecutive frames for this voice while keeping its
+    /// entire modular state hot in L1D cache. Returns the number of active frames
+    /// written (`0..=out.len()`) before voice retirement.
+    pub fn render_block(
+        &mut self,
+        bank: &SampleBank,
+        preview: Option<&Arc<SampleData>>,
+        out: &mut [[f32; 2]],
+    ) -> usize {
+        if !self.active || self.op_count == 0 {
+            return 0;
+        }
+        let mut written = 0usize;
+        for slot in out.iter_mut() {
+            if !self.active {
+                break;
+            }
+            *slot = self.next_frame(bank, preview);
+            written += 1;
+        }
+        written
     }
 
     #[inline]

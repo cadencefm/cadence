@@ -1,12 +1,14 @@
 //! Live CPAL audio device runtime, RT-safe callback watchdog/circuit breaker,
 //! explicit device/rate/buffer selection, hot-plug detection, and silent fallback clock.
+#[cfg(feature = "audio")]
+use super::engine::resolve_reconfigure_start_step;
 use super::engine::Engine;
 #[cfg(feature = "audio")]
 use super::input::{build_input_stream_for_format, resolve_input_stream};
 use super::input::{process_input_slice, InputMeterState};
 use super::shared::*;
 use super::*;
-use cadence_core::dsp::{hann_fade_out, sanitize_sample, stereo_mid_f32};
+use cadence_core::dsp::{hann_fade_out, sanitize_sample, stereo_mid_f32, AUDIO_SUB_BLOCK_FRAMES};
 use cadence_core::mixer::MAX_EFFECT_DEVICES;
 use cadence_core::rack::{compile_zone_graph, ModuleKind, RackPatch, RackZone, SampleLoopMode};
 use cadence_core::runtime::{
@@ -309,18 +311,25 @@ pub(super) fn render_output_slice_with_elapsed<T: OutputSample>(
     let tail_start = frames.saturating_sub(fade_frames);
     let mut block_peak = 0.0_f32;
 
-    for frame_idx in 0..frames {
-        let [left, right] = engine.next_frame();
-        let sl = sanitize_sample(left);
-        let sr = sanitize_sample(right);
-        block_peak = block_peak.max(sl.abs()).max(sr.abs());
-        if frame_idx >= tail_start {
-            if let Some(slot) = watchdog.tail_stereo.get_mut(frame_idx - tail_start) {
-                *slot = [sl, sr];
+    let mut block = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+    let mut frame_idx = 0usize;
+    while frame_idx < frames {
+        let chunk = (frames - frame_idx).min(AUDIO_SUB_BLOCK_FRAMES);
+        engine.render_block(&mut block[..chunk]);
+        for (i, &[left, right]) in block[..chunk].iter().enumerate() {
+            let sl = sanitize_sample(left);
+            let sr = sanitize_sample(right);
+            block_peak = block_peak.max(sl.abs()).max(sr.abs());
+            let abs_idx = frame_idx + i;
+            if abs_idx >= tail_start {
+                if let Some(slot) = watchdog.tail_stereo.get_mut(abs_idx - tail_start) {
+                    *slot = [sl, sr];
+                }
             }
+            let offset = abs_idx * channels;
+            write_stereo_frame(&mut data[offset..offset + channels], sl, sr);
         }
-        let offset = frame_idx * channels;
-        write_stereo_frame(&mut data[offset..offset + channels], sl, sr);
+        frame_idx += chunk;
     }
     let used = frames * channels;
     if used < data.len() {
@@ -441,7 +450,11 @@ impl AudioTapHandle {
                 .tap_read
                 .store(read.wrapping_add(available as u64), Ordering::Release);
         }
-        self.shared.tap_dropped.swap(0, Ordering::Relaxed)
+        if self.shared.tap_dropped.load(Ordering::Relaxed) != 0 {
+            self.shared.tap_dropped.swap(0, Ordering::Relaxed)
+        } else {
+            0
+        }
     }
 
     /// Disarm the lock-free tap ring so the audio callback does zero tap work.
@@ -550,14 +563,17 @@ impl AudioRuntime {
                 let _ = worker.join();
             }
 
-            self.shared.reset_for_reconfigure();
+            let preserved_step = self.shared.next_step.load(Ordering::Acquire);
+            let start_step = resolve_reconfigure_start_step(&project, preserved_step);
+            self.shared.reset_for_reconfigure(start_step);
             self.shared.is_silent.store(false, Ordering::Release);
             apply_stream_metadata(&self.shared, &resolved);
 
-            let engine = Engine::new(
+            let engine = Engine::new_at_step(
                 project,
                 samples,
                 resolved.sample_rate,
+                start_step,
                 Arc::clone(&self.shared),
             );
             let started = build_stream_for_format(
@@ -863,11 +879,10 @@ impl AudioRuntime {
             .spawn(move || {
                 let quantum = Duration::from_secs_f64(SILENT_BLOCK as f64 / SILENT_RATE as f64);
                 let mut deadline = Instant::now();
+                let mut silent_buf = vec![[0.0_f32; 2]; SILENT_BLOCK];
                 while thread_shared.alive.load(Ordering::Acquire) {
                     engine.poll_controls();
-                    for _ in 0..SILENT_BLOCK {
-                        let _ = engine.next_frame();
-                    }
+                    engine.render_block(&mut silent_buf);
                     deadline += quantum;
                     let now = Instant::now();
                     if deadline > now {
@@ -974,7 +989,7 @@ impl AudioRuntime {
         } else {
             self.shared.input_generation.load(Ordering::Acquire)
         };
-        let extra_delays = self.shared.prepare_extra_delays(&project);
+        let prepared_effects = self.shared.prepare_effects(&project, project_boundary);
         self.shared.publish_input_tracks(&project);
         self.shared.project_slot.publish_merged(
             ProjectPublication {
@@ -984,21 +999,11 @@ impl AudioRuntime {
                 } else {
                     samples.map(Box::new)
                 },
-                extra_delays,
+                prepared_effects,
+                retired_effects: Vec::with_capacity(MAX_EFFECT_DEVICES),
                 generation,
             },
-            |next, previous| {
-                // A routine edit following an unadopted load must carry its bank.
-                if next.samples.is_none() && next.generation == previous.generation {
-                    next.samples = previous.samples.take();
-                }
-                // Preserve any off-RT pre-allocated Delay buffers across coalesced publishes.
-                if !previous.extra_delays.is_empty() {
-                    let mut merged = std::mem::take(&mut previous.extra_delays);
-                    merged.append(&mut next.extra_delays);
-                    next.extra_delays = merged;
-                }
-            },
+            ProjectPublication::merge_from_previous,
         );
         Ok(())
     }
@@ -1557,7 +1562,11 @@ impl AudioRuntime {
                 .capture_read
                 .store(read.wrapping_add(available as u64), Ordering::Release);
         }
-        let dropped = self.shared.capture_dropped.swap(0, Ordering::Relaxed);
+        let dropped = if self.shared.capture_dropped.load(Ordering::Relaxed) != 0 {
+            self.shared.capture_dropped.swap(0, Ordering::Relaxed)
+        } else {
+            0
+        };
         (available, dropped)
     }
 
