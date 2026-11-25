@@ -583,6 +583,8 @@ pub struct ArrangeUiState {
     /// Horizontal zoom factor for Arrange (`1.0` = `song_bars.min(16)` bars, down to `0.125` for 128 bars).
     pub zoom: f32,
     pub step: u32,
+    /// Bar-aligned horizontal viewport anchor used for smooth scrolloff in Arrange.
+    pub(crate) viewport_start_step: std::cell::Cell<usize>,
     pub event: Option<EventKey>,
     /// Parked pitch-bank anchor; observed transport never changes it.
     pub pitch_anchor: Option<u8>,
@@ -598,6 +600,7 @@ impl ArrangeUiState {
             page_steps: None,
             zoom: 1.0,
             step: 0,
+            viewport_start_step: std::cell::Cell::new(0),
             event: None,
             pitch_anchor: None,
             pitch_lane: selected_lane,

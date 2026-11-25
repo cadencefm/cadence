@@ -114,15 +114,11 @@ pub(super) fn draw_overview(
         dl.push_clip(row_tl);
         draw_vertical_time_grid(dl, row_tl, view, geom, theme);
 
-        // Subtle cursor step highlight on selected lane.
+        // Subtle cursor step highlight on selected lane (full-height edit cursor line is drawn in arrange/mod.rs).
         if lane.selected && cx1 > geom.timeline_x && cx0 < body.right() {
             dl.fill(
                 Rect::new(cx0, y + 1.0, (cx1 - cx0).max(2.0), (row_h - 2.0).max(1.0)),
                 theme.accent.focus.with_alpha(0.14),
-            );
-            dl.fill(
-                Rect::new(cx0, y + 1.0, 1.0, (row_h - 2.0).max(1.0)),
-                theme.accent.focus.with_alpha(0.60),
             );
         }
 

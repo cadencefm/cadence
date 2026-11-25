@@ -230,3 +230,83 @@ fn gpu_renders_zoomed_out_overview_substep_roll_and_offscreen_graph_wires() {
         &px_graph_mid,
     );
 }
+
+#[test]
+fn gpu_renders_arrange_user_cursor_bar_and_scrolloff_across_themes() {
+    let Ok(mut gpu) = HeadlessGpu::new(1440, 860) else {
+        return;
+    };
+    let status = "Metal · 48 kHz";
+    let demo_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/demo/project.json");
+    let project = cadence_app::load_project(&demo_path).expect("load Afterglow project");
+
+    // Walk cursor right past the 16-bar scrolloff threshold (bar 15, step 224) with playhead
+    // running at bar 10 (step 150) so BOTH the vertical user cursor bar and green playhead
+    // appear simultaneously with smooth 4-bar lookahead (viewport shows bars 4..=19).
+    let mut app = App::new(project, demo_path).expect("init Afterglow app");
+    app.press_keys("ga").unwrap();
+    for _ in 0..14 {
+        app.press_keys("l").unwrap();
+    }
+    let snap_split = AudioSnapshot {
+        playing: true,
+        absolute_step: 150,
+        step_fraction: 0.35,
+        ..AudioSnapshot::default()
+    };
+    app.observe_transport(150, 151, true, false);
+    let fv_split = app.frame_view(&snap_split, status);
+    let arr_split = fv_split
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Arrange(a) => Some(a),
+            _ => None,
+        })
+        .expect("Arrange deck");
+    assert_eq!(arr_split.cursor_step, 14 * 16);
+    assert_eq!(
+        arr_split.page_start_step,
+        3 * 16,
+        "bar 15 on 16-bar viewport (scrolloff=4) must glide to start bar 4 (step 48)"
+    );
+
+    let dark = Theme::cadence_dark();
+    let neon = Theme::midnight_neon();
+    let light = Theme::studio_light();
+
+    let px_dark = gpu.render_rgba8(&fv_split, &dark).unwrap();
+    let px_neon = gpu.render_rgba8(&fv_split, &neon).unwrap();
+    let px_light = gpu.render_rgba8(&fv_split, &light).unwrap();
+    assert!(distinct_pixel_ratio(&px_dark, dark.surface.canvas) > 0.20);
+    assert!(distinct_pixel_ratio(&px_neon, neon.surface.canvas) > 0.20);
+    assert!(distinct_pixel_ratio(&px_light, light.surface.canvas) > 0.20);
+    maybe_save_png("06-arrange-cursor-scrolloff-dark.png", 1440, 860, &px_dark);
+    maybe_save_png("07-arrange-cursor-scrolloff-neon.png", 1440, 860, &px_neon);
+    maybe_save_png(
+        "08-arrange-cursor-scrolloff-light.png",
+        1440,
+        860,
+        &px_light,
+    );
+
+    // Exact overlap check: playhead right on cursor_step (bar 15, step 224) keeps both ruler
+    // caps visually distinct (green playhead on top, crisp user cursor bar beneath).
+    let snap_overlap = AudioSnapshot {
+        playing: true,
+        absolute_step: 224,
+        step_fraction: 0.0,
+        ..AudioSnapshot::default()
+    };
+    app.observe_transport(224, 225, true, false);
+    let fv_overlap = app.frame_view(&snap_overlap, status);
+    let px_overlap = gpu.render_rgba8(&fv_overlap, &dark).unwrap();
+    assert_ne!(px_dark, px_overlap);
+    maybe_save_png(
+        "09-arrange-cursor-playhead-overlap-dark.png",
+        1440,
+        860,
+        &px_overlap,
+    );
+}

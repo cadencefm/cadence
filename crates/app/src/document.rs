@@ -1030,6 +1030,7 @@ impl App {
     /// after New, Open or cross-document undo/redo.
     fn reset_session_for_document(&mut self, invalidate_cache: bool) -> Result<Outcome> {
         self.follow.clear_anchors();
+        self.arrange_ui.viewport_start_step.set(0);
         self.arrange_ui.event = None;
         self.arrange_ui.pitch_anchor = None;
         self.arrange_ui.pitch_lane = None;

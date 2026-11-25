@@ -158,6 +158,7 @@ impl App {
             self.arrange_ui.zoom =
                 (default_bars as f32 / target_bars as f32).clamp(min_zoom, max_zoom);
             self.arrange_ui.page_steps = None;
+            let _ = self.arrange_view_page(self.transport.step, self.arrange_visible_bars());
             let pct = self.arrange_ui.zoom * 100.0;
             let unit = if target_bars == 1 { "bar" } else { "bars" };
             if target_bars == song_bars {
@@ -186,6 +187,7 @@ impl App {
         } else if self.arrange_canvas_focused() {
             self.arrange_ui.zoom = 1.0;
             self.arrange_ui.page_steps = None;
+            let _ = self.arrange_view_page(self.transport.step, self.arrange_visible_bars());
             let song_bars = self.doc.project().bars.max(1);
             let bars = self.arrange_visible_bars();
             let unit = if bars == 1 { "bar" } else { "bars" };

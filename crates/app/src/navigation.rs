@@ -627,6 +627,10 @@ impl App {
             }
         }
         self.normalize_arrangement_event();
+        if !self.follow.active() {
+            let visible_bars = self.arrange_visible_bars();
+            let _ = self.arrange_view_page(self.transport.step, visible_bars);
+        }
         self.follow_deck();
     }
     pub(super) fn back(&mut self) -> Result<Outcome> {
