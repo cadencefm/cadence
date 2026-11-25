@@ -1,5 +1,5 @@
 //! Multi-lane evaluated pitch-band overview for the GPU Arrange deck.
-use super::{draw_vertical_time_grid, TimelineGeom};
+use super::{draw_lane_meter_pill, draw_vertical_time_grid, TimelineGeom};
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::Theme;
 use cadence_app::view::{ArrangeDeckView, ArrangeEvaluatedView};
@@ -49,12 +49,13 @@ pub(super) fn draw_overview(
             theme.border.hairline,
         );
 
+        let meter_reserve = if view.show_lane_meters { 13.0 } else { 0.0 };
         let live_badge_w = if lane.override_info.is_some() {
             34.0
         } else {
             0.0
         };
-        let name_w = (geom.gutter_w - 14.0 - live_badge_w).max(20.0);
+        let name_w = (geom.gutter_w - 14.0 - live_badge_w - meter_reserve).max(20.0);
         let max_name = (name_w / theme.char_width(theme.font.small)) as usize;
         dl.text(
             Rect::new(body.x + 8.0, y, name_w, row_h),
@@ -72,7 +73,7 @@ pub(super) fn draw_overview(
         );
         if lane.override_info.is_some() {
             let lr = Rect::new(
-                body.x + geom.gutter_w - 36.0,
+                body.x + geom.gutter_w - 36.0 - meter_reserve,
                 y + (row_h - 15.0) * 0.5,
                 30.0,
                 15.0,
@@ -92,6 +93,24 @@ pub(super) fn draw_overview(
                 true,
                 theme.accent.override_bar,
                 TextAlign::Center,
+            );
+        }
+        if view.show_lane_meters {
+            let meter_h = (row_h - 6.0).clamp(14.0, 28.0);
+            let meter_rect = Rect::new(
+                body.x + geom.gutter_w - 14.0,
+                y + (row_h - meter_h) * 0.5,
+                9.0,
+                meter_h,
+            );
+            draw_lane_meter_pill(
+                dl,
+                meter_rect,
+                lane.meter_peak,
+                lane.meter_hot,
+                lane.meter_clipped,
+                lane.muted,
+                theme,
             );
         }
 

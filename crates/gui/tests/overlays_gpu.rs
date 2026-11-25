@@ -339,8 +339,8 @@ fn gpu_renders_live_timing_chrome_settings_authoring_mixer_and_effect_routing() 
         &px1,
     );
 
-    // 2. Settings overlay scrolled to `LIVE TIMING (PROJECT)` rows 9–11.
-    app.press_keys("g,jjjjjjjjj").unwrap();
+    // 2. Settings overlay scrolled to `LIVE TIMING (PROJECT)` rows 12–14.
+    app.press_keys("g,jjjjjjjjjjjj").unwrap();
     let fv2 = app.frame_view(&snap, status);
     let px2 = gpu.render_rgba8(&fv2, &dark).unwrap();
     assert!(distinct_pixel_ratio(&px2, dark.surface.canvas) > 0.20);

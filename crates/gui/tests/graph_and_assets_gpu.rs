@@ -354,7 +354,7 @@ fn gpu_renders_signal_graph_filehub_settings_authoring_and_rack_out_faceplate() 
     app.config.sample_dirs = vec!["/Users/studio/Samples/Drums".into()];
     app.config.preset_dirs = vec!["/Users/studio/Presets/Analog".into()];
     app.press_keys("g,").unwrap();
-    app.settings_ui.cursor = 12;
+    app.settings_ui.cursor = 15; // Sample Directories row
     app.press_keys("a/Users/studio/Samples/Pads").unwrap();
     let fv3 = app.frame_view(&snap, status);
     let px3 = gpu.render_rgba8(&fv3, &dark).unwrap();

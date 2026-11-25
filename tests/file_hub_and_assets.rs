@@ -754,14 +754,26 @@ fn settings_clamps_toggles_persistence_and_workflow_folder_dialog() {
     app.press_keys("g,").unwrap();
     assert_eq!(app.mode_name(), "SETTINGS");
 
-    // Row 3: Contextual Key Hints toggle back on via Enter.
-    app.settings_ui.cursor = 3;
+    // Helper to locate a Settings row by label cleanly without hardcoded row indices.
+    let find_settings_row = |app: &App, label: &str| -> usize {
+        let fv = snap_view(app);
+        let Some(cadence_app::view::OverlayView::Settings(sv)) = fv.overlay else {
+            panic!("expected Settings overlay");
+        };
+        sv.rows
+            .iter()
+            .position(|r| r.label == label)
+            .unwrap_or_else(|| panic!("missing Settings row {label:?}"))
+    };
+
+    // Contextual Key Hints toggle back on via Enter.
+    app.settings_ui.cursor = find_settings_row(&app, "Contextual Key Hints");
     app.press_keys("<Enter>").unwrap();
     assert!(app.config.show_key_hints);
     assert!(!snap_view(&app).chrome.hints.is_empty());
 
-    // Row 6: Default Tempo (BPM) clamps strictly to 20..300 (matching UserConfig::validate).
-    app.settings_ui.cursor = 6;
+    // Default Tempo (BPM) clamps strictly to 20..300 (matching UserConfig::validate).
+    app.settings_ui.cursor = find_settings_row(&app, "Default Tempo");
     app.press_keys("<Enter>20<Enter>").unwrap();
     assert_eq!(app.mode_name(), "SETTINGS");
     assert!((app.config.default_bpm - 20.0).abs() < 1e-6);
@@ -773,8 +785,8 @@ fn settings_clamps_toggles_persistence_and_workflow_folder_dialog() {
     assert!((app.config.default_bpm - 300.0).abs() < 1e-6);
     assert!(app.config.validate().is_ok());
 
-    // Row 7: Default Key Root clamps strictly to 24..84 (C1..C6).
-    app.settings_ui.cursor = 7;
+    // Default Key Root clamps strictly to 24..84 (C1..C6).
+    app.settings_ui.cursor = find_settings_row(&app, "Default Key");
     app.press_keys("<Enter>24<Enter>").unwrap();
     assert_eq!(app.config.default_root_midi, 24);
     app.press_keys("<").unwrap();
@@ -785,8 +797,8 @@ fn settings_clamps_toggles_persistence_and_workflow_folder_dialog() {
     assert_eq!(app.config.default_root_midi, 84);
     assert!(app.config.validate().is_ok());
 
-    // Row 8: Default Scale cycles cleanly and applies to `Project::empty_with_config`.
-    app.settings_ui.cursor = 8;
+    // Default Scale cycles cleanly and applies to `Project::empty_with_config`.
+    app.settings_ui.cursor = find_settings_row(&app, "Default Scale");
     let orig_scale = app.config.default_scale.clone();
     app.press_keys(".").unwrap();
     assert_ne!(app.config.default_scale, orig_scale);

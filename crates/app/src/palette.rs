@@ -110,6 +110,9 @@ enum PaletteAction {
     OpenSettings,
     OpenSettingsRow(SettingsCoreRow),
     ToggleKeyHints,
+    ToggleTopBarCpu,
+    CycleTopBarMeter,
+    ToggleArrangeLaneMeters,
     SetTheme(ThemeId),
     OpenHelp,
     OpenAssets,
@@ -1175,6 +1178,44 @@ impl App {
             "g,",
             PaletteAction::ToggleKeyHints,
         );
+        push(
+            &mut entries,
+            "VIEW",
+            "Toggle Top-Bar DSP CPU Pill",
+            if self.config.show_top_bar_cpu {
+                "Currently visible · hide DSP CPU pill beside FINAL"
+            } else {
+                "Currently hidden · show DSP CPU pill beside FINAL"
+            },
+            "toggle top bar dsp cpu load meter chrome monitoring",
+            "g,",
+            PaletteAction::ToggleTopBarCpu,
+        );
+        push(
+            &mut entries,
+            "VIEW",
+            "Cycle Top-Bar Stereo Meter",
+            format!(
+                "Currently {} · cycle Auto (Output hidden) / Always / Off",
+                self.config.top_bar_meter.label()
+            ),
+            "cycle top bar stereo meter compact final chrome output hidden",
+            "g,",
+            PaletteAction::CycleTopBarMeter,
+        );
+        push(
+            &mut entries,
+            "VIEW",
+            "Toggle Arrange Lane Meters",
+            if self.config.show_arrange_lane_meters {
+                "Currently visible · hide vertical per-lane meter pills in Arrange"
+            } else {
+                "Currently hidden · show vertical per-lane meter pills in Arrange"
+            },
+            "toggle arrange lane meters vertical gutter level monitoring",
+            "g,",
+            PaletteAction::ToggleArrangeLaneMeters,
+        );
         let default_scale_lbl = cadence_core::music::named_scale(&self.config.default_scale)
             .map(|s| scale_label(&s))
             .unwrap_or("Natural Minor");
@@ -1876,6 +1917,18 @@ impl App {
             }
             PaletteAction::ToggleKeyHints => {
                 self.set_key_hints_visible(!self.view_state.tips);
+                Ok(Outcome::default())
+            }
+            PaletteAction::ToggleTopBarCpu => {
+                self.set_top_bar_cpu_visible(!self.config.show_top_bar_cpu);
+                Ok(Outcome::default())
+            }
+            PaletteAction::CycleTopBarMeter => {
+                self.cycle_top_bar_meter(1);
+                Ok(Outcome::default())
+            }
+            PaletteAction::ToggleArrangeLaneMeters => {
+                self.set_arrange_lane_meters_visible(!self.config.show_arrange_lane_meters);
                 Ok(Outcome::default())
             }
             PaletteAction::SetTheme(theme) => {

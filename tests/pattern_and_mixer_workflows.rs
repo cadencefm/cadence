@@ -1094,30 +1094,36 @@ fn section_part_placement_and_live_timing_cycle_workflows() {
     assert!(fv.chrome.live_timing_cycle);
     assert!(fv.chrome.live_edits_on_launch);
 
-    // Settings overlay (`g,`) exposes Contextual Key Hints (3), Auto-Record Takes (5), Default Scale (8),
-    // and LiveTiming rows 9, 10, 11 without marking global `config_dirty`!
+    // Settings overlay (`g,`) exposes Contextual Key Hints (2), Monitoring rows (3..=6),
+    // Auto-Record Takes (8), Default Scale (11), and LiveTiming rows 12, 13, 14 without
+    // marking global `config_dirty`!
     app.settings_ui.config_dirty = false;
     app.press_keys("g,").unwrap();
     let fv_settings = app.frame_view(&AudioSnapshot::default(), "silent");
     let Some(OverlayView::Settings(sv)) = fv_settings.overlay else {
         panic!("expected Settings overlay");
     };
-    assert_eq!(sv.rows.len(), 14);
-    assert_eq!(sv.rows[3].group, "WORKSPACE");
-    assert_eq!(sv.rows[3].label, "Contextual Key Hints");
-    assert_eq!(sv.rows[5].group, "TRANSPORT");
-    assert_eq!(sv.rows[5].label, "Auto-Record Takes");
-    assert_eq!(sv.rows[8].group, "NEW PROJECT");
-    assert_eq!(sv.rows[8].label, "Default Scale");
-    assert_eq!(sv.rows[9].group, "LIVE TIMING (PROJECT)");
-    assert_eq!(sv.rows[9].label, "Launch Quantize");
-    assert_eq!(sv.rows[10].label, "Live Edit Timing");
-    assert_eq!(sv.rows[11].label, "Late Tolerance");
-    assert_eq!(sv.rows[12].group, "ASSET DIRECTORIES");
-    assert_eq!(sv.rows[13].group, "ASSET DIRECTORIES");
+    assert_eq!(sv.rows.len(), 17);
+    assert_eq!(sv.rows[2].group, "WORKSPACE");
+    assert_eq!(sv.rows[2].label, "Contextual Key Hints");
+    assert_eq!(sv.rows[3].group, "MONITORING");
+    assert_eq!(sv.rows[3].label, "Output Monitor");
+    assert_eq!(sv.rows[4].label, "Top-Bar DSP CPU");
+    assert_eq!(sv.rows[5].label, "Top-Bar Stereo Meter");
+    assert_eq!(sv.rows[6].label, "Arrange Lane Meters");
+    assert_eq!(sv.rows[8].group, "TRANSPORT");
+    assert_eq!(sv.rows[8].label, "Auto-Record Takes");
+    assert_eq!(sv.rows[11].group, "NEW PROJECT");
+    assert_eq!(sv.rows[11].label, "Default Scale");
+    assert_eq!(sv.rows[12].group, "LIVE TIMING (PROJECT)");
+    assert_eq!(sv.rows[12].label, "Launch Quantize");
+    assert_eq!(sv.rows[13].label, "Live Edit Timing");
+    assert_eq!(sv.rows[14].label, "Late Tolerance");
+    assert_eq!(sv.rows[15].group, "ASSET DIRECTORIES");
+    assert_eq!(sv.rows[16].group, "ASSET DIRECTORIES");
 
-    // Navigate to row 11 (Late Tolerance) and nudge +1 -> 2 steps directly via Alt+l!
-    app.press_keys("jjjjjjjjjjj<m-l>").unwrap();
+    // Navigate to row 14 (Late Tolerance) and nudge +1 -> 2 steps directly via Alt+l!
+    app.press_keys(&format!("{}<m-l>", "j".repeat(14))).unwrap();
     assert_eq!(app.project().timing.late_tolerance_steps, 2);
     assert!(
         !app.settings_ui.config_dirty,

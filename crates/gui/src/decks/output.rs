@@ -261,10 +261,10 @@ pub fn draw_output(dl: &mut DisplayList, area: Rect, view: &OutputDeckView, them
         let hold_str = match (view.hold_left, view.hold_right) {
             (Some(l), Some(r)) => {
                 let pre = match (view.input_hold_left, view.input_hold_right) {
-                    (Some(il), Some(ir)) => format!(" · Pre {}", fmt_db(il.max(ir))),
+                    (Some(il), Some(ir)) => format!(" · Pre {}", fmt_db_fixed(il.max(ir))),
                     _ => String::new(),
                 };
-                format!("Hold L {} R {}{pre}", fmt_db(l), fmt_db(r))
+                format!("Hold L {} R {}{pre}", fmt_db_fixed(l), fmt_db_fixed(r))
             }
             _ => "Unity 32-bit float · 0 dBFS DAC/WAV".into(),
         };
@@ -319,7 +319,7 @@ fn draw_meter_bar(
         theme.accent.routing,
         TextAlign::Left,
     );
-    let readout_w = 68.0;
+    let readout_w = 74.0;
     let track = Rect::new(
         rect.x + 16.0,
         rect.y + 3.0,
@@ -420,9 +420,9 @@ fn draw_meter_bar(
     );
 
     let db_text = if observed {
-        format!("{} dB", fmt_db(peak))
+        format!("{} dB", fmt_db_fixed(peak))
     } else {
-        "-- dB".into()
+        format!("{UNOBSERVED_DB_FIXED} dB")
     };
     dl.text(
         Rect::new(rect.right() - readout_w, rect.y, readout_w, rect.h),
@@ -453,6 +453,22 @@ pub fn db_norm(peak: f32) -> f32 {
     db_to_meter_norm(lin_to_db(peak))
 }
 
-pub fn fmt_db(peak: f32) -> String {
-    cadence_core::dsp::format_db_value(peak)
+/// Fixed 6-character placeholder aligned with [`fmt_db_fixed`] before the engine publishes levels.
+pub const UNOBSERVED_DB_FIXED: &str = "    --";
+
+pub fn fmt_db_fixed(peak: f32) -> String {
+    cadence_core::dsp::format_db_fixed(peak)
+}
+
+/// Shared DSP CPU load color ramp reused by the top chrome DSP pill and Devices Audio CPU card.
+pub fn dsp_cpu_color(cpu_load: f32, overloaded: bool, theme: &Theme) -> crate::theme::Color {
+    if cpu_load >= 0.85 || overloaded {
+        theme.meter.clip
+    } else if cpu_load >= 0.70 {
+        theme.meter.hot
+    } else if cpu_load >= 0.45 {
+        theme.meter.mid
+    } else {
+        theme.meter.low
+    }
 }

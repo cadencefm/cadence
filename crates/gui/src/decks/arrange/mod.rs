@@ -6,6 +6,7 @@ mod placements;
 mod roll;
 
 use crate::chrome::{draw_deck_frame, DeckFrameSpec};
+use crate::decks::output::{db_norm, METER_ZERO_DB_NORM};
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
 use cadence_app::view::{ArrangeDeckView, UiModeKind};
@@ -86,6 +87,58 @@ pub(crate) fn draw_dashed_vline(dl: &mut DisplayList, x: f32, y0: f32, y1: f32, 
         dl.fill(Rect::new(x, y, 1.5, h), color);
         y += 9.0;
     }
+}
+
+/// Draw a compact vertical dual-channel (L/R) peak meter pill inside an Arrange lane gutter.
+pub(super) fn draw_lane_meter_pill(
+    dl: &mut DisplayList,
+    rect: Rect,
+    peak: Option<[f32; 2]>,
+    hot: bool,
+    clipped: bool,
+    muted: bool,
+    theme: &Theme,
+) {
+    if rect.w < 6.0 || rect.h < 10.0 {
+        return;
+    }
+    let border = if clipped {
+        theme.meter.clip
+    } else if hot {
+        theme.meter.hot.with_alpha(0.75)
+    } else {
+        theme.border.subtle
+    };
+    dl.panel(rect, theme.meter.track_bg, border, 2.0, 0.75, 0.0);
+    let inner = rect.inset(1.5, 1.5);
+    if inner.w < 3.0 || inner.h < 4.0 {
+        return;
+    }
+    let bar_w = ((inner.w - 1.0) * 0.5).max(1.5);
+    let y_zero = inner.bottom() - inner.h * METER_ZERO_DB_NORM;
+    if let Some([pl, pr]) = peak {
+        for (i, lvl) in [pl, pr].into_iter().enumerate() {
+            let bx = inner.x + i as f32 * (bar_w + 1.0);
+            let h = (inner.h * db_norm(lvl)).clamp(0.0, inner.h);
+            if h > 0.5 {
+                let mut col = if clipped || lvl > 1.0 {
+                    theme.meter.clip
+                } else if lvl >= 0.5 {
+                    theme.meter.high
+                } else {
+                    theme.meter.mid
+                };
+                if muted {
+                    col = col.with_alpha(0.40);
+                }
+                dl.fill(Rect::new(bx, inner.bottom() - h, bar_w, h), col);
+            }
+        }
+    }
+    dl.fill(
+        Rect::new(inner.x, y_zero, inner.w, 1.0),
+        theme.meter.zero_db.with_alpha(0.45),
+    );
 }
 
 pub fn draw_arrange(

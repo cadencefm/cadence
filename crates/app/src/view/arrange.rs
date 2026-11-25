@@ -20,6 +20,7 @@ pub struct ArrangeDeckView {
     pub playing: bool,
     pub focused: bool,
     pub jam_active: bool,
+    pub show_lane_meters: bool,
     pub playing_loop: Option<(u32, u32)>,
     pub loop_region: Option<(u32, u32)>,
     pub staging_active: bool,
@@ -53,6 +54,9 @@ pub struct ArrangeLaneRow {
     pub solo: bool,
     pub staged_mute: Option<bool>,
     pub staged_solo: Option<bool>,
+    pub meter_peak: Option<[f32; 2]>,
+    pub meter_hot: bool,
+    pub meter_clipped: bool,
     pub placements: Vec<ArrangePlacementBlock>,
     pub override_info: Option<ArrangeOverrideRow>,
     pub pending: Vec<ArrangeMark>,
@@ -232,6 +236,16 @@ impl App {
                         is_release: part.is_none(),
                     })
                     .collect();
+                let (meter_peak, meter_hot, meter_clipped) = if self.config.show_arrange_lane_meters
+                {
+                    self.lane_meter_state(
+                        lane,
+                        override_info.as_ref().map(|ov| ov.part_id),
+                        snapshot,
+                    )
+                } else {
+                    (None, false, false)
+                };
                 ArrangeLaneRow {
                     id: lane.id,
                     index,
@@ -242,6 +256,9 @@ impl App {
                     solo: self.flags().lane_solo(lane.id),
                     staged_mute: self.staged_lane_mute(lane.id),
                     staged_solo: self.staged_lane_solo(lane.id),
+                    meter_peak,
+                    meter_hot,
+                    meter_clipped,
                     placements,
                     override_info,
                     pending,
@@ -446,6 +463,7 @@ impl App {
             playing: snapshot.playing,
             focused,
             jam_active: self.is_jam(),
+            show_lane_meters: self.config.show_arrange_lane_meters,
             playing_loop: self.playing_loop(),
             loop_region: self.loop_region(),
             staging_active: self.staging().is_some(),
@@ -455,6 +473,45 @@ impl App {
             lanes,
             evaluated,
         }
+    }
+
+    /// Resolve combined stereo peak / headroom state for an Arrange lane by inspecting the
+    /// mixer channel(s) fed by its active override part, placements, and launchable parts.
+    fn lane_meter_state(
+        &self,
+        lane: &cadence_core::material::Lane,
+        override_part: Option<Id>,
+        snapshot: &AudioSnapshot,
+    ) -> (Option<[f32; 2]>, bool, bool) {
+        let mut observed = false;
+        let mut peak = [0.0_f32; 2];
+        let mut hot = false;
+        let mut clipped = false;
+        let mut fold_part = |part_id: Id| {
+            let Some(part) = self.part(part_id) else {
+                return;
+            };
+            let Some(inst) = self.instrument(part.instrument) else {
+                return;
+            };
+            if let Some(m) = snapshot.channel_meter(ChannelRef::Channel(inst.channel)) {
+                observed = true;
+                peak[0] = peak[0].max(m.output_peak[0]);
+                peak[1] = peak[1].max(m.output_peak[1]);
+                hot |= m.hot;
+                clipped |= m.clipped;
+            }
+        };
+        if let Some(pid) = override_part {
+            fold_part(pid);
+        }
+        for pl in &lane.placements {
+            fold_part(pl.part);
+        }
+        for lp in &lane.parts {
+            fold_part(lp.part);
+        }
+        (observed.then_some(peak), hot, clipped)
     }
 }
 

@@ -1,5 +1,5 @@
 //! Arrangement placement grid with live staging badges, override double-bars, and M/S pills.
-use super::{draw_dashed_rect, draw_vertical_time_grid, TimelineGeom};
+use super::{draw_dashed_rect, draw_lane_meter_pill, draw_vertical_time_grid, TimelineGeom};
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
 use cadence_app::view::ArrangeDeckView;
@@ -118,7 +118,8 @@ pub(super) fn draw_placements(
                 );
                 gx += badge_w + 4.0;
             }
-            let ms_w = 40.0;
+            let meter_reserve = if view.show_lane_meters { 13.0 } else { 0.0 };
+            let ms_w = 40.0 + meter_reserve;
             let name_w = (geom.gutter_w - (gx - body.x) - ms_w - 4.0).max(20.0);
             let max_c = (name_w / theme.char_width(theme.font.small)) as usize;
             dl.text(
@@ -135,6 +136,24 @@ pub(super) fn draw_placements(
                 },
                 TextAlign::Left,
             );
+            if view.show_lane_meters {
+                let meter_h = (row_h - 8.0).clamp(14.0, 26.0);
+                let meter_rect = Rect::new(
+                    body.x + geom.gutter_w - 50.0,
+                    y + (row_h - meter_h) * 0.5,
+                    9.0,
+                    meter_h,
+                );
+                draw_lane_meter_pill(
+                    dl,
+                    meter_rect,
+                    lane.meter_peak,
+                    lane.meter_hot,
+                    lane.meter_clipped,
+                    lane.muted,
+                    theme,
+                );
+            }
             // M / S pill badges (with dashed modulation outline when mute/solo is staged).
             let m_rect = Rect::new(
                 body.x + geom.gutter_w - 38.0,
@@ -442,6 +461,7 @@ mod tests {
             playing: true,
             focused: true,
             jam_active: false,
+            show_lane_meters: false,
             playing_loop: None,
             loop_region: None,
             staging_active: false,
@@ -458,6 +478,9 @@ mod tests {
                 solo: false,
                 staged_mute: None,
                 staged_solo: None,
+                meter_peak: None,
+                meter_hot: false,
+                meter_clipped: false,
                 placements: vec![
                     ArrangePlacementBlock {
                         id: 10,

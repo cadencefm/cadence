@@ -173,9 +173,9 @@ fn gpu_renders_midi_deck_settings_and_help_dark_and_light() {
     maybe_save_png("03-midi-deck-mappings-learn-dark.png", 1440, 860, &px_learn);
     app.press_keys("<Esc>zz").unwrap();
 
-    // 3. Settings (`g,`) showing Contextual Key Hints, Default Tempo/Key/Scale (Dark & Light).
+    // 3. Settings (`g,`) showing Contextual Key Hints & MONITORING rows (Dark & Light).
     app.press_keys("g,").unwrap();
-    app.settings_ui.cursor = 3; // Contextual Key Hints row — shows APPEARANCE, Contextual Key Hints, NEW PROJECT (BPM/Key/Scale)
+    app.settings_ui.cursor = 2; // Contextual Key Hints row — shows APPEARANCE, WORKSPACE, MONITORING
     let fv_settings = app.frame_view(&snap, status);
     assert!(matches!(
         fv_settings.overlay,
