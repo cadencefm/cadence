@@ -82,7 +82,7 @@ fn matches_preset_category(item: &PresetBrowserItem, category: &str) -> bool {
                 && patch.zones.first().is_some_and(|z| {
                     z.modules
                         .iter()
-                        .any(|m| matches!(m.kind, ModuleKind::Vco(_)))
+                        .any(|m| matches!(m.kind, ModuleKind::Vco(_) | ModuleKind::Mobius(_)))
                 }))
         }
         "Sampler" => {
@@ -182,6 +182,15 @@ fn summarize_rack_brief(patch: &RackPatch) -> String {
                 lead = Some(v.waveform.label().to_string());
                 break;
             }
+            ModuleKind::Mobius(m) => {
+                lead = Some(format!(
+                    "Mobius {}A {} · {}",
+                    m.atoms,
+                    m.topology.label(),
+                    m.exciter.label()
+                ));
+                break;
+            }
             _ => {}
         }
     }
@@ -266,6 +275,16 @@ fn describe_rack_details(patch: &RackPatch) -> Vec<String> {
                         s.path.as_deref().unwrap_or("(no sample)"),
                         note_name(zone.root_midi)
                     )),
+                    ModuleKind::Mobius(mbs) => lines.push(format!(
+                        "{}: {}A {} {} · {} · xi {:.2} · K {:+.1}st",
+                        m.name,
+                        mbs.atoms,
+                        mbs.dispersion.label(),
+                        mbs.topology.label(),
+                        mbs.exciter.label(),
+                        mbs.stiffness,
+                        mbs.kerr_semitones
+                    )),
                     _ => {}
                 }
             }
@@ -278,7 +297,10 @@ fn describe_rack_details(patch: &RackPatch) -> Vec<String> {
                 .find(|m| {
                     matches!(
                         m.kind,
-                        ModuleKind::Sampler(_) | ModuleKind::Vco(_) | ModuleKind::Noise(_)
+                        ModuleKind::Sampler(_)
+                            | ModuleKind::Vco(_)
+                            | ModuleKind::Noise(_)
+                            | ModuleKind::Mobius(_)
                     )
                 })
                 .map_or("Modular", |m| m.kind.tag().label());

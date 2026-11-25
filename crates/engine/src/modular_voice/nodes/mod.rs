@@ -6,6 +6,7 @@ mod env;
 mod filter;
 mod lfo;
 mod lofi;
+mod mobius;
 mod noise;
 mod out;
 mod resonator;
@@ -18,6 +19,7 @@ pub(super) use env::EnvNode;
 pub(super) use filter::FilterNode;
 pub(super) use lfo::LfoNode;
 pub(super) use lofi::LoFiNode;
+pub(super) use mobius::MobiusNode;
 pub(super) use noise::NoiseNode;
 pub(super) use out::OutNode;
 pub(super) use resonator::ResonatorNode;
@@ -27,7 +29,8 @@ pub(super) use vco::VcoNode;
 
 use super::{ModuleParams, VoiceLockKey};
 use cadence_core::dsp::{
-    midi_to_hz, sanitize_clamp_f64, semitones_to_ratio_f64, stereo_mid_f64, ModalResonator,
+    midi_to_hz, sanitize_clamp_f64, semitones_to_ratio_f64, stereo_mid_f64, MobiusSynth,
+    ModalResonator,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking};
 use cadence_core::runtime::SampleBank;
@@ -141,6 +144,8 @@ pub(super) struct TriggerCtx {
 pub(super) struct TriggerState<'a> {
     pub resonator_banks: &'a mut [ModalResonator],
     pub next_res_bank: usize,
+    pub mobius_banks: &'a mut [MobiusSynth],
+    pub next_mobius_bank: usize,
 }
 
 /// Summed stereo audio and CV inputs gathered from a module's incoming patch cables.
@@ -177,6 +182,7 @@ pub(super) struct ProcessCtx<'a> {
     pub bank: &'a SampleBank,
     pub preview: Option<&'a Arc<SampleData>>,
     pub resonator_banks: &'a mut [ModalResonator],
+    pub mobius_banks: &'a mut [MobiusSynth],
 }
 
 /// Delegate normalized parameter writes on a `Copy` module struct straight to
@@ -235,7 +241,11 @@ pub(super) trait VoiceModule {
     fn on_choke(&mut self, _sample_rate: f64, _choke_coeff: f64) {}
 
     #[inline]
-    fn is_tail_quiet(&self, _resonator_banks: &[ModalResonator]) -> bool {
+    fn is_tail_quiet(
+        &self,
+        _resonator_banks: &[ModalResonator],
+        _mobius_banks: &[MobiusSynth],
+    ) -> bool {
         true
     }
 }
@@ -254,6 +264,7 @@ pub(super) enum ModuleNode {
     Drive(DriveNode),
     LoFi(LoFiNode),
     Resonator(ResonatorNode),
+    Mobius(MobiusNode),
     Out(OutNode),
 }
 
@@ -263,7 +274,7 @@ impl Default for ModuleNode {
     }
 }
 
-/// Exhaustive zero-cost static dispatch across all 11 [`ModuleNode`] variants.
+/// Exhaustive zero-cost static dispatch across all 12 [`ModuleNode`] variants.
 macro_rules! dispatch_module_node {
     ($node:expr, |$inner:ident| $body:expr) => {
         match $node {
@@ -277,6 +288,7 @@ macro_rules! dispatch_module_node {
             ModuleNode::Drive($inner) => $body,
             ModuleNode::LoFi($inner) => $body,
             ModuleNode::Resonator($inner) => $body,
+            ModuleNode::Mobius($inner) => $body,
             ModuleNode::Out($inner) => $body,
         }
     };
@@ -296,6 +308,7 @@ impl ModuleNode {
             ModuleKind::Drive(m) => Self::Drive(DriveNode::new(*m, sample_rate)),
             ModuleKind::LoFi(m) => Self::LoFi(LoFiNode::new(*m, sample_rate)),
             ModuleKind::Resonator(m) => Self::Resonator(ResonatorNode::new(*m)),
+            ModuleKind::Mobius(m) => Self::Mobius(MobiusNode::new(*m)),
             ModuleKind::Out(m) => Self::Out(OutNode::new(*m, sample_rate)),
         }
     }
@@ -315,6 +328,7 @@ impl ModuleNode {
             (Self::Drive(n), ModuleKind::Drive(m)) => n.target = *m,
             (Self::LoFi(n), ModuleKind::LoFi(m)) => n.target = *m,
             (Self::Resonator(n), ModuleKind::Resonator(m)) => n.target = *m,
+            (Self::Mobius(n), ModuleKind::Mobius(m)) => n.target = *m,
             (Self::Out(n), ModuleKind::Out(m)) => n.target = *m,
             (slot, other) => *slot = Self::from_kind(other, sample_rate),
         }
@@ -395,7 +409,11 @@ impl ModuleNode {
     }
 
     #[inline]
-    pub(super) fn is_tail_quiet(&self, resonator_banks: &[ModalResonator]) -> bool {
-        dispatch_module_node!(self, |n| n.is_tail_quiet(resonator_banks))
+    pub(super) fn is_tail_quiet(
+        &self,
+        resonator_banks: &[ModalResonator],
+        mobius_banks: &[MobiusSynth],
+    ) -> bool {
+        dispatch_module_node!(self, |n| n.is_tail_quiet(resonator_banks, mobius_banks))
     }
 }

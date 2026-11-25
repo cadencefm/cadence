@@ -204,6 +204,24 @@ pub enum ModuleVisualView {
         modes: Vec<(f32, f32, f32)>,
         live_waveform: Vec<f32>,
     },
+    Mobius {
+        module_id: u16,
+        name: String,
+        exciter_label: &'static str,
+        dispersion_label: &'static str,
+        topology_label: &'static str,
+        base_hz: f32,
+        atom_count: u8,
+        stiffness: f32,
+        kerr_semitones: f32,
+        distance_ms: f32,
+        feedback: f32,
+        /// Target source preview sampled strictly via `mobius_target_preview`.
+        target_curve: Vec<f32>,
+        /// `(freq_norm, ring_norm, kerr_signed_norm, delay_norm)` stems derived via `mobius_atom_descriptors`.
+        atoms: Vec<(f32, f32, f32, f32)>,
+        live_waveform: Vec<f32>,
+    },
     Out {
         module_id: u16,
         name: String,
@@ -450,6 +468,30 @@ pub(super) fn module_card_detail(module: &RackModule) -> String {
                 format!("{} · {}", r.mode.label(), format_hz(r.fixed_hz))
             } else {
                 format!("{} · {:.0}ms", r.mode.label(), r.decay_ms)
+            }
+        }
+        ModuleKind::Mobius(m) => {
+            if m.distance_ms > 0.5 {
+                format!(
+                    "{}A {} · {:.0}ms",
+                    m.atoms,
+                    m.topology.label(),
+                    m.distance_ms
+                )
+            } else if m.feedback > 0.01 {
+                format!(
+                    "{}A {} · FB {:.0}%",
+                    m.atoms,
+                    m.topology.label(),
+                    m.feedback * 100.0
+                )
+            } else {
+                format!(
+                    "{}A {} · {}",
+                    m.atoms,
+                    m.topology.label(),
+                    m.exciter.label()
+                )
             }
         }
         ModuleKind::Out(o) => format!("{:+.1} dB · {}", o.gain_db, format_pan(o.pan)),

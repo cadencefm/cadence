@@ -211,7 +211,11 @@ impl VoiceModule for DriveNode {
     }
 
     #[inline]
-    fn is_tail_quiet(&self, _resonator_banks: &[ModalResonator]) -> bool {
+    fn is_tail_quiet(
+        &self,
+        _resonator_banks: &[ModalResonator],
+        _mobius_banks: &[cadence_core::dsp::MobiusSynth],
+    ) -> bool {
         self.os.quiet()
             && self.dry_align.quiet()
             && self.tone_lpf.quiet()

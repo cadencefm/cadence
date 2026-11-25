@@ -4,6 +4,11 @@
 use crate::dsp::env::EnvMode;
 use crate::dsp::lofi::{LOFI_MAX_BITS, LOFI_MAX_RATE_HZ, LOFI_MIN_BITS, LOFI_MIN_RATE_HZ};
 use crate::dsp::math::{log_to_norm, norm_to_log};
+use crate::dsp::mobius::{
+    MOBIUS_MAX_DISTANCE_MS, MOBIUS_MAX_FB_CYCLES, MOBIUS_MAX_FB_MS, MOBIUS_MAX_KERR_ST,
+    MOBIUS_MAX_STIFFNESS, MOBIUS_MAX_STIFFNESS_TILT, MOBIUS_MIN_KERR_ST, MOBIUS_MIN_STIFFNESS,
+    MOBIUS_MIN_STIFFNESS_TILT,
+};
 use crate::dsp::resonator::{RESONATOR_MAX_DECAY_MS, RESONATOR_MIN_DECAY_MS};
 use crate::dsp::saturate::{
     DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ,
@@ -16,8 +21,9 @@ use crate::params::{
 };
 use crate::rack::modules::{ModuleKindTag, OUT_MAX_GAIN_DB, OUT_MIN_GAIN_DB};
 use crate::rack::types::{
-    FilterMode, LfoShape, NoiseColor, PitchTracking, RackPatch, RackZone, ResonatorMode,
-    TriggerMode, Unit, UpdatePolicy, VoiceMode, VoiceSettings, Waveform,
+    FilterMode, LfoShape, MobiusDispersion, MobiusExciter, MobiusTopology, NoiseColor,
+    PitchTracking, RackPatch, RackZone, ResonatorMode, TriggerMode, Unit, UpdatePolicy, VoiceMode,
+    VoiceSettings, Waveform,
 };
 use crate::sampler::SampleLoopMode;
 use anyhow::{anyhow, ensure, Context, Result};
@@ -448,6 +454,9 @@ define_choice_kinds!(
     FilterMode,
     DriveMode,
     ResonatorMode,
+    MobiusExciter,
+    MobiusDispersion,
+    MobiusTopology,
 );
 
 #[derive(Clone, Copy)]
@@ -630,11 +639,28 @@ define_module_params! {
     Pan            => ("pan",              "Pan",           Continuous, (Linear -1.0, 1.0),                                  Pan),
     Spread         => ("spread",           "Spread",        Continuous, (Linear 0.0, 1.0),                                   Percent),
     // Resonator (57..62)
-    ResonatorMode  => ("resonator_mode",   "Mode",          OnTrigger,  (Choice ResonatorMode),                              Plain),
-    Structure      => ("structure",        "Structure",     Continuous, (Linear 0.0, 1.0),                                   Percent),
-    ResonatorDecay => ("resonator_decay",  "Decay",         Continuous, (Log RESONATOR_MIN_DECAY_MS, RESONATOR_MAX_DECAY_MS), Ms),
-    Brightness     => ("brightness",       "Brightness",    Continuous, (Linear 0.0, 1.0),                                   Percent),
-    Position       => ("position",         "Position",      Continuous, (Linear 0.0, 1.0),                                   Percent),
+    ResonatorMode       => ("resonator_mode",        "Mode",        OnTrigger,  (Choice ResonatorMode),                                          Plain),
+    Structure           => ("structure",             "Structure",   Continuous, (Linear 0.0, 1.0),                                               Percent),
+    ResonatorDecay      => ("resonator_decay",       "Decay",       Continuous, (Log RESONATOR_MIN_DECAY_MS, RESONATOR_MAX_DECAY_MS),            Ms),
+    Brightness          => ("brightness",            "Brightness",  Continuous, (Linear 0.0, 1.0),                                               Percent),
+    Position            => ("position",              "Position",    Continuous, (Linear 0.0, 1.0),                                               Percent),
+    // Mobius (62..78)
+    MobiusExciter       => ("mobius_exciter",        "Exciter",     OnTrigger,  (Choice MobiusExciter),                                          Plain),
+    MobiusShape         => ("mobius_shape",          "Shape",       Continuous, (Linear 0.0, 1.0),                                               Percent),
+    MobiusChirality     => ("mobius_chirality",      "Chirality",   Continuous, (Linear 0.0, 1.0),                                               Percent),
+    MobiusAtoms         => ("mobius_atoms",          "Atoms",       OnTrigger,  (Int 1, 8),                                                      Plain),
+    MobiusDispersion    => ("mobius_dispersion",     "Dispersion",  OnTrigger,  (Choice MobiusDispersion),                                       Plain),
+    MobiusStiffness     => ("mobius_stiffness",      "Stiffness",   Continuous, (Log MOBIUS_MIN_STIFFNESS, MOBIUS_MAX_STIFFNESS),                Plain),
+    MobiusStiffnessTilt => ("mobius_stiffness_tilt", "Stiff Tilt",  Continuous, (Linear MOBIUS_MIN_STIFFNESS_TILT, MOBIUS_MAX_STIFFNESS_TILT),  Octaves),
+    MobiusKerr          => ("mobius_kerr",           "Kerr",        Continuous, (Linear MOBIUS_MIN_KERR_ST, MOBIUS_MAX_KERR_ST),                 Semitones),
+    MobiusKerrSpread    => ("mobius_kerr_spread",    "Kerr Spread", Continuous, (Linear -1.0, 1.0),                                              Percent),
+    MobiusTopology      => ("mobius_topology",       "Topology",    OnTrigger,  (Choice MobiusTopology),                                         Plain),
+    MobiusCoupling      => ("mobius_coupling",       "Coupling",    Continuous, (Linear 0.0, 1.0),                                               Percent),
+    MobiusDistance      => ("mobius_distance",       "Distance",    Continuous, (Linear 0.0, MOBIUS_MAX_DISTANCE_MS),                            Ms),
+    MobiusFeedback      => ("mobius_feedback",       "Feedback",    Continuous, (Linear 0.0, 1.0),                                               Percent),
+    MobiusFbLock        => ("mobius_fb_lock",        "Bore Lock",   OnTrigger,  Boolean,                                                         Plain),
+    MobiusFbCycles      => ("mobius_fb_cycles",      "Bore Cycles", Continuous, (Linear 0.0, MOBIUS_MAX_FB_CYCLES),                              Plain),
+    MobiusFbMs          => ("mobius_fb_ms",          "Bore Length", Continuous, (Linear 0.0, MOBIUS_MAX_FB_MS),                                  Ms),
 }
 
 macro_rules! match_module_param_aliases {
@@ -794,7 +820,17 @@ impl ModuleParam {
                     format!("{v:.1} bit")
                 }
             }
-            Unit::Plain => format!("{v:.0}"),
+            Unit::Plain => match self {
+                Self::MobiusStiffness => {
+                    if v < 0.1 {
+                        format!("{v:.3}")
+                    } else {
+                        format!("{v:.2}")
+                    }
+                }
+                Self::MobiusFbCycles => format!("{v:.2} cyc"),
+                _ => format!("{v:.0}"),
+            },
         }
     }
 
@@ -909,6 +945,36 @@ impl ModuleParam {
                 Pan:    "pan",
                 Spread: "spread" | "width",
             },
+            Mobius => {
+                MobiusExciter:       "exciter" | "mobius_exciter" | "source" | "src",
+                Brightness:          "bright" | "brightness" | "r" | "radius",
+                MobiusShape:         "shape" | "mobius_shape" | "psi" | "pwm" | "formant",
+                MobiusChirality:     "chirality" | "chi" | "bite" | "mobius_chirality",
+                Attack:              "attack" | "atk" | "attack_ms",
+                Decay:               "decay" | "dec" | "decay_ms",
+                Sustain:             "sustain" | "sus",
+                MobiusAtoms:         "atoms" | "n" | "count" | "mobius_atoms",
+                MobiusDispersion:    "dispersion" | "disp" | "modes" | "mobius_dispersion",
+                Structure:           "structure" | "struc" | "vowel" | "ratio" | "detune",
+                MobiusStiffness:     "stiffness" | "xi" | "g" | "stiff" | "mobius_stiffness",
+                MobiusStiffnessTilt: "tilt" | "stiff_tilt" | "stiffness_tilt" | "mobius_stiffness_tilt",
+                MobiusKerr:          "kerr" | "beta" | "kerr_st" | "mobius_kerr",
+                MobiusKerrSpread:    "kerr_spread" | "kspread" | "mobius_kerr_spread",
+                MobiusTopology:      "topology" | "topo" | "coupling_mode" | "mobius_topology",
+                MobiusCoupling:      "coupling" | "couple" | "c" | "eta" | "mobius_coupling",
+                MobiusDistance:      "distance" | "dist" | "tau" | "delay" | "mobius_distance",
+                MobiusFeedback:      "feedback" | "fb" | "bore" | "mobius_feedback",
+                MobiusFbLock:        "fb_lock" | "bore_lock" | "lock" | "mobius_fb_lock",
+                MobiusFbCycles:      "fb_cycles" | "cycles" | "cyc" | "bore_cycles" | "mobius_fb_cycles",
+                MobiusFbMs:          "fb_ms" | "bore_ms" | "bore_len" | "bore_length" | "mobius_fb_ms",
+                VcoPitchTrack:       "track" | "tracking" | "pitch_track" | "pitch_tracking" | "vco_pitch_track",
+                Tune:                "tune" | "semi" | "semitones" | "pitch",
+                Fine:                "fine" | "cents",
+                FixedHz:             "freq" | "hz" | "fixed" | "fixed_hz",
+                KeyTrack:            "key" | "key_track" | "key_tracking" | "keytrack",
+                Spread:              "spread" | "width" | "stereo" | "stereo_width",
+                Mix:                 "mix" | "wet",
+            },
         });
         if candidate.is_some() {
             return candidate;
@@ -969,6 +1035,18 @@ impl ModuleParam {
         }
 
         let compact = raw.to_ascii_lowercase().replace(' ', "");
+        if self == Self::MobiusFbCycles {
+            let stripped = compact
+                .strip_suffix("cycles")
+                .or_else(|| compact.strip_suffix("cycle"))
+                .or_else(|| compact.strip_suffix("cyc"))
+                .unwrap_or(&compact);
+            let value = stripped
+                .parse::<f32>()
+                .with_context(|| format!("Invalid value for {}", self.label()))?;
+            self.validate_native(value)?;
+            return Ok(value);
+        }
         const UNITS: [(&str, f32, Unit); 11] = [
             ("cents", 1.0, Unit::Cents),
             ("khz", 1000.0, Unit::Hz),
@@ -1041,15 +1119,21 @@ impl ModuleParam {
                 Unit::Octaves => nudge_quantized(value, dir, 20.0, 1.0, 10.0, coarse),
                 Unit::Db | Unit::Bits => nudge_quantized(value, dir, 2.0, 1.0, 4.0, coarse),
                 Unit::Ms => {
-                    if matches!(self, Self::Hold | Self::BurstSpacingMs) {
+                    if matches!(self, Self::Hold | Self::BurstSpacingMs | Self::MobiusFbMs) {
                         nudge_quantized(value, dir, 2.0, 1.0, 10.0, coarse)
+                    } else if self == Self::MobiusDistance {
+                        nudge_quantized(value, dir, 2.0, 1.0, 20.0, coarse)
                     } else {
                         nudge_quantized(value, dir, 1.0, 5.0, 50.0, coarse)
                     }
                 }
                 _ => {
-                    let step = (max - min) * if coarse { 0.05 } else { 0.01 };
-                    value + d * step
+                    if self == Self::MobiusFbCycles {
+                        nudge_quantized(value, dir, 20.0, 1.0, 5.0, coarse)
+                    } else {
+                        let step = (max - min) * if coarse { 0.05 } else { 0.01 };
+                        value + d * step
+                    }
                 }
             },
         };

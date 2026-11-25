@@ -4,7 +4,8 @@ use super::*;
 use cadence_core::rack::{
     cable_default_amount, compile_zone_graph, format_cable_amount, parse_cable_amount, InPort,
     ModuleKindTag, PanelPin, PatchCable, RackModule, RackPatch, RackZone, MAX_CABLES_PER_ZONE,
-    MAX_MODULES_PER_ZONE, MAX_PANEL_PINS, MAX_RESONATORS_PER_ZONE, PATCHBAY_COLUMNS,
+    MAX_MOBIUS_PER_ZONE, MAX_MODULES_PER_ZONE, MAX_PANEL_PINS, MAX_RESONATORS_PER_ZONE,
+    PATCHBAY_COLUMNS,
 };
 
 cadence_core::define_choice_enum! {
@@ -1081,6 +1082,18 @@ impl App {
                 zone.name
             );
         }
+        if kind == ModuleKindTag::Mobius {
+            let mbs_count = zone
+                .modules
+                .iter()
+                .filter(|m| m.kind.tag() == ModuleKindTag::Mobius)
+                .count();
+            ensure!(
+                mbs_count < MAX_MOBIUS_PER_ZONE,
+                "Zone '{}' already has the maximum {MAX_MOBIUS_PER_ZONE} Mobius modules",
+                zone.name
+            );
+        }
         let mod_id = zone.next_module_id();
         let resolved_name = name
             .map(|n| n.trim().to_string())
@@ -1671,8 +1684,8 @@ mod tests {
     use cadence_core::presets::InstrumentPreset;
     use cadence_core::rack::{
         module_sample_key, DriveModule, EnvModule, FilterModule, InPort, LfoModule, LoFiModule,
-        ModuleKind, NoiseModule, OutModule, PanelPin, PatchCable, RackModule, RackPatch,
-        RackTemplate, ResonatorModule, SamplerModule, VcaModule, VcoModule,
+        MobiusModule, ModuleKind, NoiseModule, OutModule, PanelPin, PatchCable, RackModule,
+        RackPatch, RackTemplate, ResonatorModule, SamplerModule, VcaModule, VcoModule,
     };
     use cadence_core::runtime::AudioSnapshot;
     use cadence_core::sampler::SampleLoopMode;
@@ -2249,7 +2262,7 @@ mod tests {
     }
 
     #[test]
-    fn all_twelve_module_visual_views_produce_finite_dsp_curves() {
+    fn all_module_visual_views_produce_finite_dsp_curves() {
         let mut rack = RackPatch::default_synth();
         let z = &mut rack.zones[0];
         z.modules = vec![
@@ -2267,6 +2280,7 @@ mod tests {
                 "Resonator",
                 ModuleKind::Resonator(ResonatorModule::default()),
             ),
+            RackModule::new(12, "Mobius", ModuleKind::Mobius(MobiusModule::default())),
             RackModule::new(11, "Out", ModuleKind::Out(OutModule::default())),
         ];
         z.cables = vec![
@@ -2284,8 +2298,8 @@ mod tests {
         let mut app = App::new(proj, "all-vis.json".into()).unwrap();
         app.open_instrument(inst_id).unwrap();
 
-        let mut seen = [false; 12];
-        for slot in 0..12 {
+        let mut seen = [false; 13];
+        for slot in 0..13 {
             app.rack_ui.panel_slot = slot;
             let rv = instrument_rack_view(&app);
             match rv.visual {
@@ -2355,15 +2369,30 @@ mod tests {
                     );
                     seen[10] = true;
                 }
+                ModuleVisualView::Mobius {
+                    target_curve,
+                    atoms,
+                    ..
+                } => {
+                    assert!(
+                        !target_curve.is_empty()
+                            && target_curve.iter().all(|v| v.is_finite())
+                            && !atoms.is_empty()
+                            && atoms.iter().all(|(x, h, k, d)| {
+                                x.is_finite() && h.is_finite() && k.is_finite() && d.is_finite()
+                            })
+                    );
+                    seen[11] = true;
+                }
                 ModuleVisualView::Out { voice_summary, .. } => {
                     assert!(!voice_summary.is_empty());
-                    seen[11] = true;
+                    seen[12] = true;
                 }
             }
         }
         assert!(
             seen.iter().all(|&s| s),
-            "all 12 ModuleVisualView variants must be covered: {seen:?}"
+            "all 13 ModuleVisualView variants must be covered: {seen:?}"
         );
     }
 

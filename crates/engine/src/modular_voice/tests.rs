@@ -3234,6 +3234,39 @@ fn synthetic_rack_zone_for_module_kind(tag: ModuleKindTag) -> RackZone {
                 PatchCable::new(4, 4, 5, InPort::In, 1.0),
             ],
         ),
+        ModuleKindTag::Mobius => build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "Mobius",
+                    ModuleKind::Mobius(MobiusModule {
+                        exciter: cadence_core::rack::MobiusExciter::Dipole,
+                        brightness: 0.75,
+                        shape: 0.55,
+                        chirality: 0.25,
+                        attack_ms: 2.0,
+                        decay_ms: 80.0,
+                        sustain: 0.7,
+                        atoms: 4,
+                        dispersion: cadence_core::rack::MobiusDispersion::Cluster,
+                        structure: 0.4,
+                        stiffness: 0.45,
+                        stiffness_tilt: -1.5,
+                        kerr_semitones: 1.5,
+                        kerr_spread: -0.5,
+                        topology: cadence_core::rack::MobiusTopology::Star,
+                        coupling: 0.82,
+                        distance_ms: 14.0,
+                        feedback: 0.35,
+                        fb_lock: true,
+                        fb_cycles: 1.5,
+                        ..MobiusModule::default()
+                    }),
+                ),
+                RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+        ),
         ModuleKindTag::Out => build_zone(
             vec![
                 RackModule::new(1, "VCO", ModuleKind::Vco(base_vco())),
@@ -3280,6 +3313,14 @@ fn all_module_kinds_and_modes_satisfy_render_block_parity_and_zero_alloc() {
             flt.mode = mode;
         }
         cases.push((format!("FilterMode::{mode:?}"), z, false));
+    }
+    // 2b. Exhaustive MobiusTopology::ALL.
+    for &topology in cadence_core::rack::MobiusTopology::ALL {
+        let mut z = synthetic_rack_zone_for_module_kind(ModuleKindTag::Mobius);
+        if let ModuleKind::Mobius(ref mut mbs) = z.modules[0].kind {
+            mbs.topology = topology;
+        }
+        cases.push((format!("MobiusTopology::{topology:?}"), z, false));
     }
     // 3. Exhaustive DriveMode::ALL.
     for mode in DriveMode::ALL {
@@ -3576,4 +3617,129 @@ fn all_post_vca_tail_topologies_ring_out_and_retire_cleanly() {
             );
         }
     }
+}
+
+#[test]
+fn mobius_self_gated_note_off_rings_pure_cubic_tail_and_choke_stops_cleanly() {
+    let sr = 48_000.0;
+    let bank: SampleBank = Vec::new();
+    let zone = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "Mobius",
+                ModuleKind::Mobius(MobiusModule {
+                    exciter: cadence_core::rack::MobiusExciter::Dipole,
+                    brightness: 0.78,
+                    shape: 0.5,
+                    attack_ms: 2.0,
+                    decay_ms: 120.0,
+                    sustain: 0.9,
+                    atoms: 2,
+                    stiffness: 0.04,
+                    kerr_semitones: 1.5,
+                    topology: cadence_core::rack::MobiusTopology::Cascade,
+                    ..MobiusModule::default()
+                }),
+            ),
+            RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+    );
+    let graph = compile_zone_graph(&zone).unwrap();
+    let zspec = spec(&zone, &graph, sr, 120.0);
+    let mut voice = ModularVoice::new_boxed_inactive(sr);
+
+    let mut post_release_60ms_peak = 0.0_f32;
+    assert_no_heap_operations(|| {
+        voice.begin_trigger_from_zone(&zspec);
+        voice.finalize_trigger(start(60, Some(2400)), false, false);
+        // Gate lasts 50 ms (2400 frames). Measure ring-out 60..100 ms AFTER note_off
+        // (well past Out's 15 ms fallback gate — proves self-gated Mobius bypasses fallback chop!).
+        for i in 0..7200 {
+            let [l, r] = voice.next_frame(&bank, None);
+            assert!(l.is_finite() && r.is_finite());
+            if i >= 2400 + 2880 {
+                post_release_60ms_peak = post_release_60ms_peak.max(l.abs()).max(r.abs());
+            }
+        }
+        assert!(
+            voice.is_active(),
+            "Low-stiffness self-gated Mobius voice must keep ringing naturally past 60 ms"
+        );
+        // Choke must attenuate output >60 dB within 25 ms and retire voice cleanly once Out's
+        // 12 Hz DC blocker finishes settling below -120 dB (<300 ms), all with zero heap ops.
+        voice.choke(sr);
+        let mut choked_peak_after_25ms = 0.0_f32;
+        for j in 0..14_400 {
+            if !voice.is_active() {
+                break;
+            }
+            let [l, r] = voice.next_frame(&bank, None);
+            assert!(l.is_finite() && r.is_finite());
+            if j >= 1200 {
+                choked_peak_after_25ms = choked_peak_after_25ms.max(l.abs()).max(r.abs());
+            }
+        }
+        assert!(
+            choked_peak_after_25ms < 1e-3,
+            "Choked Mobius output must fall below -60 dB within 25 ms, got {choked_peak_after_25ms}"
+        );
+    });
+
+    assert!(
+        post_release_60ms_peak > 1e-2,
+        "Expected audible pure cubic ring-out 60 ms after note_off, got {post_release_60ms_peak}"
+    );
+    assert!(
+        !voice.is_active(),
+        "Choked Mobius voice must retire cleanly within 300 ms"
+    );
+}
+
+#[test]
+fn mobius_external_exciter_and_trig_in_restrike_run_zero_alloc() {
+    let sr = 48_000.0;
+    let bank: SampleBank = Vec::new();
+    let zone = build_zone(
+        vec![
+            RackModule::new(1, "VCO", ModuleKind::Vco(VcoModule::default())),
+            RackModule::new(
+                2,
+                "Mobius",
+                ModuleKind::Mobius(MobiusModule {
+                    exciter: cadence_core::rack::MobiusExciter::External,
+                    atoms: 4,
+                    stiffness: 0.3,
+                    topology: cadence_core::rack::MobiusTopology::Ring,
+                    coupling: 0.85,
+                    distance_ms: 18.0,
+                    mix: 0.85,
+                    ..MobiusModule::default()
+                }),
+            ),
+            RackModule::new(3, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 0.8),
+            PatchCable::new(2, 2, 3, InPort::In, 1.0),
+        ],
+    );
+    let graph = compile_zone_graph(&zone).unwrap();
+    let zspec = spec(&zone, &graph, sr, 120.0);
+    let mut voice = ModularVoice::new_boxed_inactive(sr);
+    let mut peak = 0.0_f32;
+    assert_no_heap_operations(|| {
+        voice.begin_trigger_from_zone(&zspec);
+        voice.finalize_trigger(start(57, Some(2400)), false, false);
+        for _ in 0..2400 {
+            let [l, r] = voice.next_frame(&bank, None);
+            assert!(l.is_finite() && r.is_finite());
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+    });
+    assert!(
+        peak > 1e-2,
+        "External-exciter Mobius ring must process incoming VCO audio cleanly (peak={peak})"
+    );
 }

@@ -14,6 +14,7 @@ pub mod filter;
 pub mod gain;
 pub mod lofi;
 pub mod math;
+pub mod mobius;
 pub mod noise;
 pub mod osc;
 pub mod resample;
@@ -67,6 +68,16 @@ pub use math::{
     PeakHold, Smoother, AUDIO_SUB_BLOCK_FRAMES, BYPASS_FADE_MS, BYPASS_SETTLE_EPS, CHOKE_MS,
     DECAY_LN_60DB, FAST_RELEASE_MS, LN_100, NYQUIST_SAFE_RATIO, SMOOTH_SETTLE_EPS_F32,
     SMOOTH_SETTLE_EPS_F64, TAIL_SILENCE_FLOOR_F32, TAIL_SILENCE_FLOOR_F64,
+};
+pub use mobius::{
+    apply_chirality, eval_dipole, eval_poisson, eval_szego, mobius_atom_descriptors,
+    mobius_target_preview, r_max_dipole, r_max_poisson, r_max_szego, semitones_to_beta, step_bloom,
+    step_cascade, step_hybrid, step_ring, step_star, step_swarm, stereo_quad, stiffness_to_g,
+    strike_duration_s, AtomParams, CubicAtom, MobiusAtomDescriptor, MobiusDelayBank, MobiusSynth,
+    MobiusSynthParams, C32, C64, MOBIUS_AUDIBLE_MAX_HZ, MOBIUS_MAX_ATOMS, MOBIUS_MAX_DISTANCE_MS,
+    MOBIUS_MAX_FB_CYCLES, MOBIUS_MAX_FB_MS, MOBIUS_MAX_HZ, MOBIUS_MAX_KERR_ST,
+    MOBIUS_MAX_STIFFNESS, MOBIUS_MAX_STIFFNESS_TILT, MOBIUS_MIN_HZ, MOBIUS_MIN_KERR_ST,
+    MOBIUS_MIN_STIFFNESS, MOBIUS_MIN_STIFFNESS_TILT, MOBIUS_REF_HZ,
 };
 pub use noise::{
     mix_seed, NoiseGen, PinkFilter, XorShift32, GOLDEN_RATIO_32, NOISE_REF_SAMPLE_RATE,

@@ -283,7 +283,11 @@ impl VoiceModule for ResonatorNode {
     }
 
     #[inline]
-    fn is_tail_quiet(&self, resonator_banks: &[ModalResonator]) -> bool {
+    fn is_tail_quiet(
+        &self,
+        resonator_banks: &[ModalResonator],
+        _mobius_banks: &[cadence_core::dsp::MobiusSynth],
+    ) -> bool {
         resonator_banks
             .get(usize::from(self.bank_idx))
             .is_none_or(ModalResonator::quiet)

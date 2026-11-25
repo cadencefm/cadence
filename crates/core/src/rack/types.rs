@@ -16,6 +16,7 @@ pub const MAX_ZONES: usize = 32;
 pub const MAX_CHOKE_GROUPS: u8 = 8;
 pub const MAX_MODULES_PER_ZONE: usize = 24;
 pub const MAX_RESONATORS_PER_ZONE: usize = 4;
+pub const MAX_MOBIUS_PER_ZONE: usize = 2;
 pub const MAX_CABLES_PER_ZONE: usize = 64;
 pub const MAX_PANEL_PINS: usize = 16;
 
@@ -144,6 +145,46 @@ crate::define_choice_enum! {
         Bar => ("bar", "Bar", ["1", "marimba", "beam", "chime", "vibe"]),
         Membrane => ("membrane", "Membrane", ["2", "mem", "drum", "head", "skin"]),
         Plate => ("plate", "Plate", ["3", "plt", "cymbal", "gong", "bell", "metal"]),
+    }
+}
+
+crate::define_choice_enum! {
+    /// Complex unit-disk target source / excitation family for [`crate::rack::MobiusModule`].
+    #[derive(Default)]
+    pub enum MobiusExciter {
+        Szego => ("szego", "Szego", ["0", "monopole", "saw", "horn"]),
+        #[default]
+        Dipole => ("dipole", "Dipole", ["1", "pwm", "clarinet", "brass"]),
+        Poisson => ("poisson", "Poisson", ["2", "sync", "formant", "bell"]),
+        Strike => ("strike", "Strike", ["3", "mallet", "hit", "pluck", "impulse"]),
+        External => ("external", "External", ["4", "ext", "audio", "in"]),
+    }
+}
+
+crate::define_choice_enum! {
+    /// Inter-atom frequency dispersion law for [`crate::rack::MobiusModule`].
+    #[derive(Default)]
+    pub enum MobiusDispersion {
+        #[default]
+        Harmonic => ("harmonic", "Harmonic", ["0", "harm", "string", "overtone"]),
+        Bar => ("bar", "Bar", ["1", "beam", "bell", "marimba"]),
+        Cluster => ("cluster", "Cluster", ["2", "detune", "unison", "chorus"]),
+        Formant => ("formant", "Formant", ["3", "vowel", "vocal", "choir"]),
+        Ratio => ("ratio", "Ratio", ["4", "geom", "interval", "golden"]),
+    }
+}
+
+crate::define_choice_enum! {
+    /// Pure target-coupling space-time network topology for [`crate::rack::MobiusModule`].
+    #[derive(Default)]
+    pub enum MobiusTopology {
+        #[default]
+        Cascade => ("cascade", "Cascade", ["0", "peel", "serial", "vocal"]),
+        Bloom => ("bloom", "Bloom", ["1", "flux", "shimmer", "chain"]),
+        Star => ("star", "Star", ["2", "chamber", "bridge", "body"]),
+        Ring => ("ring", "Ring", ["3", "loop", "spatial", "room"]),
+        Swarm => ("swarm", "Swarm", ["4", "mean", "kuramoto", "chorus"]),
+        Hybrid => ("hybrid", "Hybrid", ["5", "bell", "doublet"]),
     }
 }
 
@@ -894,6 +935,7 @@ impl RackZone {
         let mut mod_ids = HashSet::with_capacity(self.modules.len());
         let mut out_count = 0usize;
         let mut resonator_count = 0usize;
+        let mut mobius_count = 0usize;
         for m in &self.modules {
             m.validate()
                 .with_context(|| format!("Zone '{}'", self.name))?;
@@ -909,6 +951,9 @@ impl RackZone {
             if matches!(m.kind, ModuleKind::Resonator(_)) {
                 resonator_count += 1;
             }
+            if matches!(m.kind, ModuleKind::Mobius(_)) {
+                mobius_count += 1;
+            }
         }
         ensure!(
             out_count == 1,
@@ -918,6 +963,11 @@ impl RackZone {
         ensure!(
             resonator_count <= MAX_RESONATORS_PER_ZONE,
             "Zone '{}' exceeds maximum of {MAX_RESONATORS_PER_ZONE} Resonator modules (found {resonator_count})",
+            self.name
+        );
+        ensure!(
+            mobius_count <= MAX_MOBIUS_PER_ZONE,
+            "Zone '{}' exceeds maximum of {MAX_MOBIUS_PER_ZONE} Mobius modules (found {mobius_count})",
             self.name
         );
 

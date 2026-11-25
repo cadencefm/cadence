@@ -1,12 +1,13 @@
-//! The 11 orthogonal Eurorack modules (`Vco`, `Sampler`, `Noise`, `Env`, `Lfo`,
+//! The 12 orthogonal Eurorack modules (`Vco`, `Sampler`, `Noise`, `Mobius`, `Env`, `Lfo`,
 //! `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`), port compatibility, and cable attenuverter SPOTs.
 
 use crate::dsp::env::{EnvMode, ModularEnvParams};
+use crate::dsp::mobius::MobiusSynthParams;
 use crate::mixer::{DriveMode, DrivePatch};
 use crate::rack::params::{ModuleParam, LFO_DIVISIONS};
 use crate::rack::types::{
-    FilterMode, InPort, LfoShape, NoiseColor, PitchTracking, ResonatorMode, TriggerMode, Unit,
-    Waveform,
+    FilterMode, InPort, LfoShape, MobiusDispersion, MobiusExciter, MobiusTopology, NoiseColor,
+    PitchTracking, ResonatorMode, TriggerMode, Unit, Waveform,
 };
 use crate::sampler::{
     parse_filename_midi, ParamDescriptor, SampleData, SampleLoopMode, SampleMetadata,
@@ -104,9 +105,45 @@ fn default_resonator_brightness() -> f32 {
 fn default_resonator_position() -> f32 {
     0.35
 }
+fn default_mobius_brightness() -> f32 {
+    0.72
+}
+fn default_mobius_chirality() -> f32 {
+    0.20
+}
+fn default_mobius_decay() -> f32 {
+    220.0
+}
+fn default_mobius_sustain() -> f32 {
+    0.80
+}
+fn default_mobius_atoms() -> u8 {
+    2
+}
+fn default_mobius_structure() -> f32 {
+    0.35
+}
+fn default_mobius_stiffness() -> f32 {
+    0.20
+}
+fn default_mobius_kerr() -> f32 {
+    1.5
+}
+fn default_mobius_coupling() -> f32 {
+    0.85
+}
+fn default_mobius_fb_cycles() -> f32 {
+    1.5
+}
+fn default_mobius_fb_ms() -> f32 {
+    8.4
+}
+fn default_mobius_width() -> f32 {
+    0.75
+}
 
 crate::define_choice_enum! {
-    /// Discriminant tag for the 11 modular Eurorack [`ModuleKind`] variants.
+    /// Discriminant tag for the 12 modular Eurorack [`ModuleKind`] variants.
     pub enum ModuleKindTag {
         Vco => ("vco", "VCO", ["osc", "oscillator"]),
         Sampler => ("sampler", "Sampler", ["smp", "sample"]),
@@ -119,12 +156,14 @@ crate::define_choice_enum! {
         #[serde(rename = "lofi")]
         LoFi => ("lofi", "Lo-Fi", ["lo_fi", "lfi", "crush", "bitcrush", "bitcrusher"]),
         Resonator => ("resonator", "Resonator", ["res", "modal", "rings", "plate"]),
+        Mobius => ("mobius", "Mobius", ["mbs", "cubic", "atoms"]),
         Out => ("out", "Out", ["output"]),
     }
 }
 
 impl ModuleKindTag {
     /// All module kinds a user can freely add to a zone (`Out` is singular per zone).
+    /// `Mobius` is appended after `Resonator` so existing picker hotkeys `a1..a9, a0` remain intact.
     pub const ADDABLE: &'static [Self] = &[
         Self::Vco,
         Self::Sampler,
@@ -136,6 +175,7 @@ impl ModuleKindTag {
         Self::Drive,
         Self::LoFi,
         Self::Resonator,
+        Self::Mobius,
     ];
 
     pub fn short_badge(self) -> &'static str {
@@ -150,6 +190,7 @@ impl ModuleKindTag {
             Self::Drive => "DRV",
             Self::LoFi => "LOFI",
             Self::Resonator => "RES",
+            Self::Mobius => "MBS",
             Self::Out => "OUT",
         }
     }
@@ -161,7 +202,7 @@ impl ModuleKindTag {
     /// Semantic Patchbay column (`0=SOURCES`, `1=MODULATORS`, `2=PROCESSORS`, `3=VCA/OUT`).
     pub const fn column(self) -> u8 {
         match self {
-            Self::Vco | Self::Sampler | Self::Noise => 0,
+            Self::Vco | Self::Sampler | Self::Noise | Self::Mobius => 0,
             Self::Env | Self::Lfo => 1,
             Self::Filter | Self::Drive | Self::LoFi | Self::Resonator => 2,
             Self::Vca | Self::Out => 3,
@@ -183,6 +224,7 @@ impl ModuleKindTag {
             Self::Filter | Self::Vca | Self::Drive | Self::Out => &[InPort::In, InPort::Cv],
             Self::LoFi => &[InPort::In],
             Self::Resonator => &[InPort::In, InPort::PitchCv, InPort::Cv],
+            Self::Mobius => &[InPort::In, InPort::PitchCv, InPort::Cv, InPort::TrigIn],
         }
     }
 
@@ -300,6 +342,36 @@ impl ModuleKindTag {
                 ModuleParam::Position,
                 ModuleParam::Mix,
             ],
+            Self::Mobius => &[
+                ModuleParam::MobiusExciter,
+                ModuleParam::Brightness,
+                ModuleParam::MobiusShape,
+                ModuleParam::MobiusChirality,
+                ModuleParam::Attack,
+                ModuleParam::Decay,
+                ModuleParam::Sustain,
+                ModuleParam::MobiusAtoms,
+                ModuleParam::MobiusDispersion,
+                ModuleParam::Structure,
+                ModuleParam::MobiusStiffness,
+                ModuleParam::MobiusStiffnessTilt,
+                ModuleParam::MobiusKerr,
+                ModuleParam::MobiusKerrSpread,
+                ModuleParam::MobiusTopology,
+                ModuleParam::MobiusCoupling,
+                ModuleParam::MobiusDistance,
+                ModuleParam::MobiusFeedback,
+                ModuleParam::MobiusFbLock,
+                ModuleParam::MobiusFbCycles,
+                ModuleParam::MobiusFbMs,
+                ModuleParam::VcoPitchTrack,
+                ModuleParam::Tune,
+                ModuleParam::Fine,
+                ModuleParam::FixedHz,
+                ModuleParam::KeyTrack,
+                ModuleParam::Spread,
+                ModuleParam::Mix,
+            ],
             Self::Out => &[ModuleParam::GainDb, ModuleParam::Pan, ModuleParam::Spread],
         }
     }
@@ -316,6 +388,7 @@ impl ModuleKindTag {
             Self::Drive => ModuleKind::Drive(DriveModule::default()),
             Self::LoFi => ModuleKind::LoFi(LoFiModule::default()),
             Self::Resonator => ModuleKind::Resonator(ResonatorModule::default()),
+            Self::Mobius => ModuleKind::Mobius(MobiusModule::default()),
             Self::Out => ModuleKind::Out(OutModule::default()),
         }
     }
@@ -980,6 +1053,142 @@ impl Default for ResonatorModule {
     }
 }
 
+/// Complex State-Kerr Cubic-Atom Synthesizer and space-time resonant processor (`N = 1..=8` atoms).
+///
+/// Composes closed-form unit-disk exciters (`Szego`, `Dipole`, `Poisson`, `Strike`, `External`),
+/// pure unlifted State-Kerr cubic atoms across 6 pure-target topologies (`Cascade`, `Bloom`,
+/// `Star`, `Ring`, `Swarm`, `Hybrid`), convex propagation delays, delayed projective bore
+/// feedback, and zero-comb quadrature stereo projection.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MobiusModule {
+    #[serde(default)]
+    pub exciter: MobiusExciter,
+    #[serde(default = "default_mobius_brightness")]
+    pub brightness: f32,
+    #[serde(default = "default_half")]
+    pub shape: f32,
+    #[serde(default = "default_mobius_chirality")]
+    pub chirality: f32,
+    #[serde(default = "default_env_attack")]
+    pub attack_ms: f32,
+    #[serde(default = "default_mobius_decay")]
+    pub decay_ms: f32,
+    #[serde(default = "default_mobius_sustain")]
+    pub sustain: f32,
+    #[serde(default = "default_mobius_atoms")]
+    pub atoms: u8,
+    #[serde(default)]
+    pub dispersion: MobiusDispersion,
+    #[serde(default = "default_mobius_structure")]
+    pub structure: f32,
+    #[serde(default = "default_mobius_stiffness")]
+    pub stiffness: f32,
+    #[serde(default)]
+    pub stiffness_tilt: f32,
+    #[serde(default = "default_mobius_kerr")]
+    pub kerr_semitones: f32,
+    #[serde(default)]
+    pub kerr_spread: f32,
+    #[serde(default)]
+    pub topology: MobiusTopology,
+    #[serde(default = "default_mobius_coupling")]
+    pub coupling: f32,
+    #[serde(default)]
+    pub distance_ms: f32,
+    #[serde(default)]
+    pub feedback: f32,
+    #[serde(default = "default_true")]
+    pub fb_lock: bool,
+    #[serde(default = "default_mobius_fb_cycles")]
+    pub fb_cycles: f32,
+    #[serde(default = "default_mobius_fb_ms")]
+    pub fb_ms: f32,
+    #[serde(default)]
+    pub pitch_tracking: PitchTracking,
+    #[serde(default)]
+    pub tune_semitones: f32,
+    #[serde(default)]
+    pub fine_cents: f32,
+    #[serde(default = "default_fixed_hz")]
+    pub fixed_hz: f32,
+    #[serde(default = "default_one")]
+    pub key_tracking: f32,
+    #[serde(default = "default_mobius_width")]
+    pub stereo_width: f32,
+    #[serde(default = "default_one")]
+    pub mix: f32,
+}
+
+impl Default for MobiusModule {
+    fn default() -> Self {
+        Self {
+            exciter: MobiusExciter::Dipole,
+            brightness: 0.72,
+            shape: 0.50,
+            chirality: 0.20,
+            attack_ms: 4.0,
+            decay_ms: 220.0,
+            sustain: 0.80,
+            atoms: 2,
+            dispersion: MobiusDispersion::Harmonic,
+            structure: 0.35,
+            stiffness: 0.20,
+            stiffness_tilt: 0.0,
+            kerr_semitones: 1.5,
+            kerr_spread: 0.0,
+            topology: MobiusTopology::Cascade,
+            coupling: 0.85,
+            distance_ms: 0.0,
+            feedback: 0.0,
+            fb_lock: true,
+            fb_cycles: 1.5,
+            fb_ms: 8.4,
+            pitch_tracking: PitchTracking::Chromatic,
+            tune_semitones: 0.0,
+            fine_cents: 0.0,
+            fixed_hz: 440.0,
+            key_tracking: 1.0,
+            stereo_width: 0.75,
+            mix: 1.0,
+        }
+    }
+}
+
+impl MobiusModule {
+    /// Project directly into the pure DSP parameter snapshot shared by [`crate::dsp::MobiusSynth`]
+    /// and GPU visualizers.
+    #[inline]
+    pub fn to_dsp_params(&self, base_hz: f64, brightness_override: f64) -> MobiusSynthParams {
+        MobiusSynthParams {
+            exciter: self.exciter,
+            base_hz,
+            brightness: brightness_override,
+            shape: f64::from(self.shape),
+            chirality: f64::from(self.chirality),
+            attack_ms: f64::from(self.attack_ms),
+            decay_ms: f64::from(self.decay_ms),
+            sustain: f64::from(self.sustain),
+            atoms: usize::from(self.atoms).clamp(1, crate::dsp::MOBIUS_MAX_ATOMS),
+            dispersion: self.dispersion,
+            structure: f64::from(self.structure),
+            stiffness: f64::from(self.stiffness),
+            stiffness_tilt: f64::from(self.stiffness_tilt),
+            kerr_semitones: f64::from(self.kerr_semitones),
+            kerr_spread: f64::from(self.kerr_spread),
+            key_track: f64::from(self.key_tracking),
+            topology: self.topology,
+            coupling: f64::from(self.coupling),
+            distance_ms: f64::from(self.distance_ms),
+            feedback: f64::from(self.feedback),
+            fb_lock: self.fb_lock,
+            fb_cycles: f64::from(self.fb_cycles),
+            fb_ms: f64::from(self.fb_ms),
+            stereo_width: f64::from(self.stereo_width),
+        }
+    }
+}
+
 /// Minimum `OutModule::gain_db` in decibels shared by parameter metadata and `OutNode`.
 pub const OUT_MIN_GAIN_DB: f32 = -36.0;
 /// Maximum `OutModule::gain_db` in decibels shared by parameter metadata and `OutNode`.
@@ -1008,7 +1217,7 @@ impl Default for OutModule {
     }
 }
 
-/// The 11 orthogonal Eurorack module kinds composing every Cadence instrument zone.
+/// The 12 orthogonal Eurorack module kinds composing every Cadence instrument zone.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModuleKind {
@@ -1023,6 +1232,7 @@ pub enum ModuleKind {
     #[serde(rename = "lofi")]
     LoFi(LoFiModule),
     Resonator(ResonatorModule),
+    Mobius(MobiusModule),
     Out(OutModule),
 }
 
@@ -1039,6 +1249,7 @@ impl ModuleKind {
             Self::Drive(_) => ModuleKindTag::Drive,
             Self::LoFi(_) => ModuleKindTag::LoFi,
             Self::Resonator(_) => ModuleKindTag::Resonator,
+            Self::Mobius(_) => ModuleKindTag::Mobius,
             Self::Out(_) => ModuleKindTag::Out,
         }
     }
@@ -1175,6 +1386,39 @@ impl ModuleKind {
             (Self::Resonator(m), ModuleParam::Brightness) => Some(m.brightness),
             (Self::Resonator(m), ModuleParam::Position) => Some(m.position),
             (Self::Resonator(m), ModuleParam::Mix) => Some(m.mix),
+            // Mobius
+            (Self::Mobius(m), ModuleParam::MobiusExciter) => Some(m.exciter.to_index() as f32),
+            (Self::Mobius(m), ModuleParam::Brightness) => Some(m.brightness),
+            (Self::Mobius(m), ModuleParam::MobiusShape) => Some(m.shape),
+            (Self::Mobius(m), ModuleParam::MobiusChirality) => Some(m.chirality),
+            (Self::Mobius(m), ModuleParam::Attack) => Some(m.attack_ms),
+            (Self::Mobius(m), ModuleParam::Decay) => Some(m.decay_ms),
+            (Self::Mobius(m), ModuleParam::Sustain) => Some(m.sustain),
+            (Self::Mobius(m), ModuleParam::MobiusAtoms) => Some(f32::from(m.atoms)),
+            (Self::Mobius(m), ModuleParam::MobiusDispersion) => {
+                Some(m.dispersion.to_index() as f32)
+            }
+            (Self::Mobius(m), ModuleParam::Structure) => Some(m.structure),
+            (Self::Mobius(m), ModuleParam::MobiusStiffness) => Some(m.stiffness),
+            (Self::Mobius(m), ModuleParam::MobiusStiffnessTilt) => Some(m.stiffness_tilt),
+            (Self::Mobius(m), ModuleParam::MobiusKerr) => Some(m.kerr_semitones),
+            (Self::Mobius(m), ModuleParam::MobiusKerrSpread) => Some(m.kerr_spread),
+            (Self::Mobius(m), ModuleParam::MobiusTopology) => Some(m.topology.to_index() as f32),
+            (Self::Mobius(m), ModuleParam::MobiusCoupling) => Some(m.coupling),
+            (Self::Mobius(m), ModuleParam::MobiusDistance) => Some(m.distance_ms),
+            (Self::Mobius(m), ModuleParam::MobiusFeedback) => Some(m.feedback),
+            (Self::Mobius(m), ModuleParam::MobiusFbLock) => Some(if m.fb_lock { 1.0 } else { 0.0 }),
+            (Self::Mobius(m), ModuleParam::MobiusFbCycles) => Some(m.fb_cycles),
+            (Self::Mobius(m), ModuleParam::MobiusFbMs) => Some(m.fb_ms),
+            (Self::Mobius(m), ModuleParam::VcoPitchTrack) => {
+                Some(m.pitch_tracking.to_index() as f32)
+            }
+            (Self::Mobius(m), ModuleParam::Tune) => Some(m.tune_semitones),
+            (Self::Mobius(m), ModuleParam::Fine) => Some(m.fine_cents),
+            (Self::Mobius(m), ModuleParam::FixedHz) => Some(m.fixed_hz),
+            (Self::Mobius(m), ModuleParam::KeyTrack) => Some(m.key_tracking),
+            (Self::Mobius(m), ModuleParam::Spread) => Some(m.stereo_width),
+            (Self::Mobius(m), ModuleParam::Mix) => Some(m.mix),
             // Out
             (Self::Out(m), ModuleParam::GainDb) => Some(m.gain_db),
             (Self::Out(m), ModuleParam::Pan) => Some(m.pan),
@@ -1283,6 +1527,43 @@ impl ModuleKind {
             (Self::Resonator(m), ModuleParam::Brightness) => m.brightness = value,
             (Self::Resonator(m), ModuleParam::Position) => m.position = value,
             (Self::Resonator(m), ModuleParam::Mix) => m.mix = value,
+            // Mobius
+            (Self::Mobius(m), ModuleParam::MobiusExciter) => {
+                m.exciter = MobiusExciter::from_index(value.round().max(0.0) as usize)
+            }
+            (Self::Mobius(m), ModuleParam::Brightness) => m.brightness = value,
+            (Self::Mobius(m), ModuleParam::MobiusShape) => m.shape = value,
+            (Self::Mobius(m), ModuleParam::MobiusChirality) => m.chirality = value,
+            (Self::Mobius(m), ModuleParam::Attack) => m.attack_ms = value,
+            (Self::Mobius(m), ModuleParam::Decay) => m.decay_ms = value,
+            (Self::Mobius(m), ModuleParam::Sustain) => m.sustain = value,
+            (Self::Mobius(m), ModuleParam::MobiusAtoms) => m.atoms = value.round() as u8,
+            (Self::Mobius(m), ModuleParam::MobiusDispersion) => {
+                m.dispersion = MobiusDispersion::from_index(value.round().max(0.0) as usize)
+            }
+            (Self::Mobius(m), ModuleParam::Structure) => m.structure = value,
+            (Self::Mobius(m), ModuleParam::MobiusStiffness) => m.stiffness = value,
+            (Self::Mobius(m), ModuleParam::MobiusStiffnessTilt) => m.stiffness_tilt = value,
+            (Self::Mobius(m), ModuleParam::MobiusKerr) => m.kerr_semitones = value,
+            (Self::Mobius(m), ModuleParam::MobiusKerrSpread) => m.kerr_spread = value,
+            (Self::Mobius(m), ModuleParam::MobiusTopology) => {
+                m.topology = MobiusTopology::from_index(value.round().max(0.0) as usize)
+            }
+            (Self::Mobius(m), ModuleParam::MobiusCoupling) => m.coupling = value,
+            (Self::Mobius(m), ModuleParam::MobiusDistance) => m.distance_ms = value,
+            (Self::Mobius(m), ModuleParam::MobiusFeedback) => m.feedback = value,
+            (Self::Mobius(m), ModuleParam::MobiusFbLock) => m.fb_lock = value >= 0.5,
+            (Self::Mobius(m), ModuleParam::MobiusFbCycles) => m.fb_cycles = value,
+            (Self::Mobius(m), ModuleParam::MobiusFbMs) => m.fb_ms = value,
+            (Self::Mobius(m), ModuleParam::VcoPitchTrack) => {
+                m.pitch_tracking = PitchTracking::from_index(value.round().max(0.0) as usize)
+            }
+            (Self::Mobius(m), ModuleParam::Tune) => m.tune_semitones = value,
+            (Self::Mobius(m), ModuleParam::Fine) => m.fine_cents = value,
+            (Self::Mobius(m), ModuleParam::FixedHz) => m.fixed_hz = value,
+            (Self::Mobius(m), ModuleParam::KeyTrack) => m.key_tracking = value,
+            (Self::Mobius(m), ModuleParam::Spread) => m.stereo_width = value,
+            (Self::Mobius(m), ModuleParam::Mix) => m.mix = value,
             // Out
             (Self::Out(m), ModuleParam::GainDb) => m.gain_db = value,
             (Self::Out(m), ModuleParam::Pan) => m.pan = value,
@@ -1455,9 +1736,13 @@ pub const fn cable_amount_range(target_kind: ModuleKindTag, to_port: InPort) -> 
         (_, InPort::TrigIn) => (-2.0, 2.0),
         (ModuleKindTag::Filter, InPort::Cv) => (-6.0, 6.0),
         (ModuleKindTag::Vca, InPort::Cv) => (-2.0, 2.0),
-        (ModuleKindTag::Drive | ModuleKindTag::Resonator | ModuleKindTag::Out, InPort::Cv) => {
-            (-1.0, 1.0)
-        }
+        (
+            ModuleKindTag::Drive
+            | ModuleKindTag::Resonator
+            | ModuleKindTag::Mobius
+            | ModuleKindTag::Out,
+            InPort::Cv,
+        ) => (-1.0, 1.0),
         _ => (-2.0, 2.0),
     }
 }
@@ -1485,7 +1770,7 @@ pub const fn cable_default_amount(target_kind: ModuleKindTag, to_port: InPort) -
         (ModuleKindTag::Filter, InPort::Cv) => 2.0,
         (ModuleKindTag::Vca, InPort::Cv) => 1.0,
         (ModuleKindTag::Drive | ModuleKindTag::Out, InPort::Cv) => 0.5,
-        (ModuleKindTag::Resonator, InPort::Cv) => 0.35,
+        (ModuleKindTag::Resonator | ModuleKindTag::Mobius, InPort::Cv) => 0.35,
         _ => 1.0,
     }
 }
@@ -1615,6 +1900,12 @@ mod tests {
         assert_choice_contract::<ModuleKindTag>();
         assert_choice_contract::<SampleLoopMode>();
         assert_choice_contract::<EnvMode>();
+        assert_choice_contract::<MobiusExciter>();
+        assert_choice_contract::<MobiusDispersion>();
+        assert_choice_contract::<MobiusTopology>();
+
+        assert_eq!(ModuleKindTag::parse("mbs"), Some(ModuleKindTag::Mobius));
+        assert_eq!(ModuleKindTag::Mobius.short_badge(), "MBS");
 
         assert_eq!(ModuleKindTag::parse("oscillator"), Some(ModuleKindTag::Vco));
         assert_eq!(

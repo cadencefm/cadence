@@ -598,6 +598,17 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         mix: 0.85,
         ..ResonatorModule::default()
     };
+    let mbs = cadence_core::rack::MobiusModule {
+        exciter: cadence_core::rack::MobiusExciter::Dipole,
+        dispersion: cadence_core::rack::MobiusDispersion::Formant,
+        topology: cadence_core::rack::MobiusTopology::Cascade,
+        atoms: 4,
+        stiffness: 0.22,
+        stiffness_tilt: -1.8,
+        kerr_semitones: 1.5,
+        distance_ms: 18.0,
+        ..cadence_core::rack::MobiusModule::default()
+    };
     z.modules = vec![
         RackModule::new(1, "VCO A", ModuleKind::Vco(vco_a)),
         RackModule::new(2, "VCO B", ModuleKind::Vco(vco_b)),
@@ -606,6 +617,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         RackModule::new(5, "Drive", ModuleKind::Drive(drive)),
         RackModule::new(6, "LoFi", ModuleKind::LoFi(lofi)),
         RackModule::new(8, "Plate Res", ModuleKind::Resonator(res)),
+        RackModule::new(9, "Mobius Choir", ModuleKind::Mobius(mbs)),
         RackModule::new(7, "Out", ModuleKind::Out(Default::default())),
     ];
     z.cables = vec![
@@ -747,6 +759,31 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
             }));
         }
         other => panic!("expected Resonator visual, got {other:?}"),
+    }
+    match get_visual(&mut app, 9) {
+        ModuleVisualView::Mobius {
+            exciter_label,
+            dispersion_label,
+            topology_label,
+            atom_count,
+            target_curve,
+            atoms,
+            ..
+        } => {
+            assert_eq!(exciter_label, "Dipole");
+            assert_eq!(dispersion_label, "Formant");
+            assert_eq!(topology_label, "Cascade");
+            assert_eq!(atom_count, 4);
+            assert_eq!(atoms.len(), 4);
+            assert!(!target_curve.is_empty());
+            assert!(atoms.iter().all(|(x, h, k, d)| {
+                (0.0..=1.0).contains(x)
+                    && (0.0..=1.0).contains(h)
+                    && (-1.0..=1.0).contains(k)
+                    && (0.0..=1.0).contains(d)
+            }));
+        }
+        other => panic!("expected Mobius visual, got {other:?}"),
     }
 
     // 5. Patched FM (`VCO B -> VCO A.FmIn`) distinguishes 48st (16:1) vs 36st (8:1) and -36st vs -24st,

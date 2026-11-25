@@ -173,6 +173,104 @@ pub(super) fn draw_resonator_plot(
     dl.pop_clip();
 }
 
+/// Split Mobius Cubic-Atom visualizer: left unit-disk exciter target waveform +
+/// right N-atom log-frequency resonance/Kerr/delay spectrum (zero hardcoded RGBA).
+pub(super) fn draw_mobius_plot(
+    dl: &mut DisplayList,
+    plot: Rect,
+    target_curve: &[f32],
+    atoms: &[(f32, f32, f32, f32)],
+    accent: Color,
+    theme: &Theme,
+) {
+    if plot.is_empty() {
+        return;
+    }
+    let (wave_rect, spec_rect) = if plot.w >= 260.0 && target_curve.len() >= 2 {
+        let wave_w = (plot.w * 0.36).clamp(96.0, 210.0);
+        let (left, right) = plot.split_left(wave_w);
+        (
+            Some(Rect::new(left.x, left.y, (left.w - 4.0).max(0.0), left.h)),
+            Rect::new(right.x + 4.0, right.y, (right.w - 4.0).max(0.0), right.h),
+        )
+    } else {
+        (None, plot)
+    };
+
+    if let Some(wr) = wave_rect {
+        draw_wave_plot(
+            dl,
+            wr,
+            target_curve,
+            [-1.15, 1.15],
+            theme.accent.routing,
+            true,
+            theme,
+        );
+        dl.fill(
+            Rect::new(wr.right() + 3.0, plot.y + 3.0, 1.0, (plot.h - 6.0).max(1.0)),
+            theme.border.subtle,
+        );
+    }
+
+    if spec_rect.is_empty() {
+        return;
+    }
+    dl.push_clip(spec_rect);
+    draw_log_freq_grid(dl, spec_rect, theme);
+    let baseline = spec_rect.bottom() - 4.0;
+    let usable_h = (spec_rect.h - 12.0).max(4.0);
+    dl.fill(
+        Rect::new(spec_rect.x, baseline, spec_rect.w, 1.0),
+        theme.border.grid_beat,
+    );
+
+    let mut head_pts: Vec<(f32, f32)> = Vec::with_capacity(atoms.len());
+    for &(freq_norm, ring_norm, kerr_signed, delay_norm) in atoms {
+        let x = spec_rect.x + 6.0 + (spec_rect.w - 12.0).max(1.0) * freq_norm.clamp(0.0, 1.0);
+        let h = (ring_norm.clamp(0.0, 1.0) * usable_h).max(4.0);
+        let top_y = baseline - h;
+        // Positive State-Kerr warms toward amber; negative Kerr shifts toward cool cyan.
+        let kerr_col = if kerr_signed >= 0.0 {
+            accent.mix(theme.accent.warning_key, kerr_signed.abs().min(1.0) * 0.70)
+        } else {
+            accent.mix(theme.accent.routing, kerr_signed.abs().min(1.0) * 0.70)
+        };
+        dl.rounded(
+            Rect::new(x - 2.0, top_y, 4.0, h),
+            kerr_col.with_alpha(0.84),
+            1.5,
+        );
+        dl.rounded_glow(
+            Rect::new(x - 3.2, top_y - 3.2, 6.4, 6.4),
+            kerr_col,
+            3.2,
+            0.42,
+        );
+        // Subtle propagation-delay halo marker along the baseline when distance_ms > 0.
+        if delay_norm > 0.01 {
+            let tick_w = (4.0 + 10.0 * delay_norm.clamp(0.0, 1.0)).min(14.0);
+            dl.rounded(
+                Rect::new(x - tick_w * 0.5, baseline - 1.5, tick_w, 3.0),
+                theme.accent.playhead.with_alpha(0.75),
+                1.5,
+            );
+        }
+        head_pts.push((x, top_y));
+    }
+
+    if head_pts.len() >= 2 {
+        dl.polyline(
+            &head_pts,
+            1.25,
+            accent.with_alpha(0.50),
+            theme.glow.scope * 0.35,
+            Some((baseline, 0.09)),
+        );
+    }
+    dl.pop_clip();
+}
+
 pub(super) fn draw_noise_band_plot(
     dl: &mut DisplayList,
     plot: Rect,

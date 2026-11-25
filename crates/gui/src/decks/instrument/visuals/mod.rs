@@ -1,11 +1,11 @@
 //! GPU visualizers for all `ModuleVisualView` variants (`PinnedOverview`, `Vco`, `Sampler`,
-//! `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`).
+//! `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Mobius`, `Out`).
 mod plots;
 
 use self::plots::{
-    draw_bipolar_transfer_plot, draw_env_plot, draw_filter_plot, draw_noise_band_plot,
-    draw_out_summary_card, draw_resonator_plot, draw_sampler_plot, draw_vca_transfer_plot,
-    draw_wave_plot, OutSummarySpec, SamplerPlotSpec,
+    draw_bipolar_transfer_plot, draw_env_plot, draw_filter_plot, draw_mobius_plot,
+    draw_noise_band_plot, draw_out_summary_card, draw_resonator_plot, draw_sampler_plot,
+    draw_vca_transfer_plot, draw_wave_plot, OutSummarySpec, SamplerPlotSpec,
 };
 use super::{
     draw_badge_header, draw_card_panel, draw_live_scope_card, draw_simple_card_header,
@@ -39,6 +39,7 @@ pub(super) fn draw_module_visual(
         ModuleVisualView::Drive { .. } => draw_drive_visual(dl, area, visual, theme),
         ModuleVisualView::LoFi { .. } => draw_lofi_visual(dl, area, visual, theme),
         ModuleVisualView::Resonator { .. } => draw_resonator_visual(dl, area, visual, theme),
+        ModuleVisualView::Mobius { .. } => draw_mobius_visual(dl, area, visual, theme),
         ModuleVisualView::Out { .. } => draw_out_visual(dl, area, visual, theme),
     }
 }
@@ -552,6 +553,57 @@ fn draw_resonator_visual(
         ];
         draw_badge_header(dl, hdr, &badges, name, None, accent, theme);
         draw_resonator_plot(dl, plot, modes, accent, theme);
+    });
+}
+
+fn draw_mobius_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, theme: &Theme) {
+    let ModuleVisualView::Mobius {
+        name,
+        exciter_label,
+        dispersion_label,
+        topology_label,
+        atom_count,
+        stiffness,
+        kerr_semitones,
+        distance_ms,
+        feedback,
+        target_curve,
+        atoms,
+        live_waveform,
+        ..
+    } = visual
+    else {
+        return;
+    };
+
+    draw_module_card_with_scope(dl, area, live_waveform, theme, |dl, hdr, plot| {
+        let accent = module_tag_accent(ModuleKindTag::Mobius, theme);
+        let bank_txt = format!("{atom_count}A · {dispersion_label}");
+        let xi_txt = if *stiffness < 0.1 {
+            format!("xi {stiffness:.3}")
+        } else {
+            format!("xi {stiffness:.2}")
+        };
+        let kerr_txt = format!("K {kerr_semitones:+.1}st");
+        let dist_txt = format!("{distance_ms:.0}ms");
+        let fb_txt = format!("FB {:.0}%", feedback * 100.0);
+
+        let mut badges: Vec<(&str, Color)> = vec![
+            ("MBS", accent),
+            (*topology_label, theme.accent.focus),
+            (*exciter_label, theme.accent.routing),
+            (bank_txt.as_str(), theme.accent.playhead),
+            (xi_txt.as_str(), theme.accent.warning_key),
+        ];
+        if *feedback > 0.01 {
+            badges.push((fb_txt.as_str(), theme.accent.alert));
+        } else if *distance_ms > 0.5 {
+            badges.push((dist_txt.as_str(), theme.text.secondary));
+        } else if kerr_semitones.abs() > 0.05 {
+            badges.push((kerr_txt.as_str(), theme.text.secondary));
+        }
+        draw_badge_header(dl, hdr, &badges, name, None, accent, theme);
+        draw_mobius_plot(dl, plot, target_curve, atoms, accent, theme);
     });
 }
 

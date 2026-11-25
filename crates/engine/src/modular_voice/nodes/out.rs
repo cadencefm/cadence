@@ -167,7 +167,11 @@ impl VoiceModule for OutNode {
     }
 
     #[inline]
-    fn is_tail_quiet(&self, _resonator_banks: &[ModalResonator]) -> bool {
+    fn is_tail_quiet(
+        &self,
+        _resonator_banks: &[ModalResonator],
+        _mobius_banks: &[cadence_core::dsp::MobiusSynth],
+    ) -> bool {
         self.dc_blocker.quiet()
     }
 }

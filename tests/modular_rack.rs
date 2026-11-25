@@ -1677,7 +1677,7 @@ fn rack_param_descriptors_and_module_metadata_stay_aligned() {
         assert_eq!(ZoneParam::parse(zparam.name()), Some(zparam));
     }
 
-    assert_eq!(ModuleKindTag::ALL.len(), 11);
+    assert_eq!(ModuleKindTag::ALL.len(), 12);
     for (idx, &mparam) in ModuleParam::ALL.iter().enumerate() {
         assert_eq!(mparam as usize, idx);
         assert_eq!(ModuleParam::from_slot(idx), Some(mparam));
@@ -1714,5 +1714,75 @@ fn rack_param_descriptors_and_module_metadata_stay_aligned() {
         "eq", "filter", "comp", "limiter", "drive", "delay", "chorus", "reverb",
     ] {
         assert!(EffectDevice::is_kind_name(kind));
+    }
+}
+
+#[test]
+fn mobius_external_presets_load_validate_and_render_clean_stereo_audio() {
+    use cadence_core::presets::InstrumentPreset;
+    use std::path::PathBuf;
+
+    let presets_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("presets/synth");
+    let mobius_files = [
+        "mobius-vocal-choir.json",
+        "mobius-temple-bell.json",
+        "mobius-star-chamber.json",
+        "mobius-nylon-pluck.json",
+        "mobius-sax-multiphonic.json",
+    ];
+    let sr = 48_000.0;
+    for file in mobius_files {
+        let path = presets_dir.join(file);
+        let preset = InstrumentPreset::load(&path)
+            .unwrap_or_else(|e| panic!("failed to load {file}: {e:#}"));
+        preset.validate().unwrap();
+        let zone = &preset.patch.zones[0];
+        let graph = cadence_core::rack::compile_zone_graph(zone).unwrap();
+        assert_eq!(
+            graph.mobius_slots.len(),
+            1,
+            "{file} must compile 1 Mobius slot"
+        );
+
+        let mut voice = cadence_engine::modular_voice::ModularVoice::new_boxed(
+            &cadence_engine::modular_voice::ZoneTriggerSpec {
+                inst_id: 1,
+                zone,
+                graph: &graph,
+                sample_rate: sr,
+                bpm: 120.0,
+                zone_pan: zone.pan,
+                rack_tune: preset.patch.tune_semitones,
+                is_preview: false,
+            },
+            cadence_engine::modular_voice::VoiceStart {
+                midi: 57,
+                velocity: 0.85,
+                gate_frames: Some(12_000),
+                seed: 7,
+                clock_seconds: 0.0,
+                glide_from_pitch: None,
+            },
+        );
+        let bank = Vec::new();
+        let mut peak = 0.0_f32;
+        let mut stereo_diff = 0.0_f32;
+        for _ in 0..16_000 {
+            let [l, r] = voice.next_frame(&bank, None);
+            assert!(
+                l.is_finite() && r.is_finite(),
+                "{file} emitted non-finite audio"
+            );
+            peak = peak.max(l.abs()).max(r.abs());
+            stereo_diff = stereo_diff.max((l - r).abs());
+        }
+        assert!(
+            peak > 0.02,
+            "{file} rendered unexpectedly quiet output (peak={peak})"
+        );
+        assert!(
+            stereo_diff > 1e-3,
+            "{file} expected quadrature stereo width (max |L-R|={stereo_diff})"
+        );
     }
 }

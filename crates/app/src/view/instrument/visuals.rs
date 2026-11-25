@@ -4,16 +4,18 @@ use crate::App;
 use cadence_core::dsp::{
     drive_transfer_sample, eval_modular_env_curve, filter_magnitude_db, filter_mix_magnitude_db,
     fm_depth_from_amount, ideal_waveform, lofi_transfer_sample, log_to_norm, midi_to_hz,
-    norm_to_log, phase_wrap, resonator_mode_descriptors, sanitize_sample_rate,
-    semitones_to_ratio_f64, unison_detune_ratio, NYQUIST_SAFE_RATIO,
+    mobius_atom_descriptors, mobius_target_preview, norm_to_log, phase_wrap,
+    resonator_mode_descriptors, sanitize_sample_rate, semitones_to_ratio_f64, unison_detune_ratio,
+    MOBIUS_MAX_DISTANCE_MS, MOBIUS_MAX_KERR_ST, MOBIUS_MAX_STIFFNESS, MOBIUS_MIN_STIFFNESS,
+    NYQUIST_SAFE_RATIO,
 };
 use cadence_core::material::Id;
 use cadence_core::params::{format_hz, InstrumentParam, RackParam};
 use cadence_core::rack::{
     module_sample_key, DriveModule, EnvModule, FilterMode, FilterModule, InPort, LfoModule,
-    LfoShape, LoFiModule, ModuleKind, ModuleKindTag, NoiseColor, NoiseModule, OutModule,
-    PitchTracking, RackModule, RackPatch, RackZone, ResonatorModule, SamplerModule, VcaModule,
-    VcoModule, Waveform,
+    LfoShape, LoFiModule, MobiusModule, ModuleKind, ModuleKindTag, NoiseColor, NoiseModule,
+    OutModule, PitchTracking, RackModule, RackPatch, RackZone, ResonatorModule, SamplerModule,
+    VcaModule, VcoModule, Waveform,
 };
 use cadence_core::runtime::AudioSnapshot;
 
@@ -209,6 +211,9 @@ impl App {
             (ModuleKind::Resonator(_), ModuleKind::Resonator(r)) => {
                 build_resonator_visual(&ctx, base_mod, r, live_waveform)
             }
+            (ModuleKind::Mobius(_), ModuleKind::Mobius(m)) => {
+                build_mobius_visual(&ctx, base_mod, m, live_waveform)
+            }
             (ModuleKind::Out(_), ModuleKind::Out(o)) => {
                 build_out_visual(&ctx, base_mod, o, live_waveform)
             }
@@ -254,6 +259,33 @@ impl App {
                     format!("{} · {}", m.name, v.waveform.label())
                 };
                 (Some(lbl), curve)
+            })
+            .or_else(|| {
+                ctx.zone
+                    .modules
+                    .iter()
+                    .find(|m| matches!(m.kind, ModuleKind::Mobius(_)))
+                    .map(|m| {
+                        let (eff, _) = self.live_effective_module(
+                            ctx.inst_id,
+                            ctx.rack,
+                            ctx.zone.id,
+                            m,
+                            ctx.query_time,
+                        );
+                        let ModuleKind::Mobius(mbs) = &eff.kind else {
+                            unreachable!()
+                        };
+                        let curve = mobius_target_preview(
+                            mbs.exciter,
+                            mbs.brightness,
+                            mbs.shape,
+                            mbs.chirality,
+                            RACK_WAVE_POINTS,
+                        );
+                        let lbl = format!("{} · {}A {}", m.name, mbs.atoms, mbs.topology.label());
+                        (Some(lbl), curve)
+                    })
             })
             .unwrap_or((None, Vec::new()));
 
@@ -807,6 +839,61 @@ fn build_resonator_visual(
         position: r.position,
         mix: r.mix,
         modes,
+        live_waveform,
+    }
+}
+
+fn build_mobius_visual(
+    ctx: &VisualCtx<'_>,
+    base_mod: &RackModule,
+    m: &MobiusModule,
+    live_waveform: Vec<f32>,
+) -> ModuleVisualView {
+    let semi = f64::from(m.tune_semitones) + f64::from(m.fine_cents) * 0.01;
+    let base_hz = match m.pitch_tracking {
+        PitchTracking::Fixed => {
+            (f64::from(m.fixed_hz.max(20.0)) * semitones_to_ratio_f64(semi)).clamp(20.0, 12_000.0)
+        }
+        PitchTracking::Chromatic => {
+            midi_to_hz(f64::from(ctx.zone.root_midi) + semi).clamp(20.0, 12_000.0)
+        }
+    };
+    let dsp_params = m.to_dsp_params(base_hz, f64::from(m.brightness));
+    let descs = mobius_atom_descriptors(&dsp_params, ctx.sr);
+    let target_curve = mobius_target_preview(
+        m.exciter,
+        m.brightness,
+        m.shape,
+        m.chirality,
+        RACK_WAVE_POINTS,
+    );
+    let atoms = descs
+        .iter()
+        .filter(|d| d.active)
+        .map(|d| {
+            let x = log_to_norm(d.freq_hz as f32, 20.0, 20_000.0);
+            // Resonance persistence inversely tracks log stiffness (`0.005` loose bell = tall, `10` stiff = low).
+            let stiff_norm = log_to_norm(d.xi as f32, MOBIUS_MIN_STIFFNESS, MOBIUS_MAX_STIFFNESS);
+            let ring_h = (1.0 - 0.72 * stiff_norm).clamp(0.22, 1.0);
+            let kerr_signed = (d.kerr_st as f32 / MOBIUS_MAX_KERR_ST).clamp(-1.0, 1.0);
+            let delay_norm = (d.delay_ms as f32 / MOBIUS_MAX_DISTANCE_MS).clamp(0.0, 1.0);
+            (x, ring_h, kerr_signed, delay_norm)
+        })
+        .collect();
+    ModuleVisualView::Mobius {
+        module_id: base_mod.id,
+        name: base_mod.name.clone(),
+        exciter_label: m.exciter.label(),
+        dispersion_label: m.dispersion.label(),
+        topology_label: m.topology.label(),
+        base_hz: base_hz as f32,
+        atom_count: m.atoms,
+        stiffness: m.stiffness,
+        kerr_semitones: m.kerr_semitones,
+        distance_ms: m.distance_ms,
+        feedback: m.feedback,
+        target_curve,
+        atoms,
         live_waveform,
     }
 }

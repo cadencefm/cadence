@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "name": "Mobius Sax Multiphonic",
+  "category": "Lead",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "Multiphonic Horn",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 57,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "mono",
+          "legato": true,
+          "glide_ms": 35.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": false
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Mobius",
+            "kind": {
+              "type": "mobius",
+              "exciter": "dipole",
+              "brightness": 0.56,
+              "shape": 0.36,
+              "chirality": 0.15,
+              "attack_ms": 32.0,
+              "decay_ms": 180.0,
+              "sustain": 0.92,
+              "atoms": 2,
+              "dispersion": "ratio",
+              "structure": 0.21,
+              "stiffness": 0.25,
+              "stiffness_tilt": -0.8,
+              "kerr_semitones": 2.0,
+              "kerr_spread": 0.25,
+              "topology": "cascade",
+              "coupling": 1.0,
+              "distance_ms": 0.0,
+              "feedback": 0.88,
+              "fb_lock": false,
+              "fb_cycles": 1.5,
+              "fb_ms": 8.4,
+              "pitch_tracking": "chromatic",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 440.0,
+              "key_tracking": 1.0,
+              "stereo_width": 0.72,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      }
+    ],
+    "gain_db": 0.0,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_feedback"
+        },
+        "label": "Bore FB"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_fb_ms"
+        },
+        "label": "Bore ms"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_fb_lock"
+        },
+        "label": "Bore Lock"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_fb_cycles"
+        },
+        "label": "Cycles"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "structure"
+        },
+        "label": "Side Ratio"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "brightness"
+        },
+        "label": "Reed"
+      }
+    ]
+  }
+}

@@ -545,6 +545,9 @@ impl App {
                     ModuleKindTag::Resonator => {
                         "Modal physical resonator · String/Bar/Membrane/Plate"
                     }
+                    ModuleKindTag::Mobius => {
+                        "Cubic-atom synth · State-Kerr space-time resonator (1–8 atoms)"
+                    }
                     ModuleKindTag::Out => "Voice output stage",
                 };
                 (i as Id, tag.label().to_string(), desc.to_string())

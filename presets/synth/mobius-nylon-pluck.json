@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "name": "Mobius Nylon Pluck",
+  "category": "Pluck",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "Nylon Pluck",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 60,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Mobius",
+            "kind": {
+              "type": "mobius",
+              "exciter": "szego",
+              "brightness": 0.82,
+              "shape": 0.50,
+              "chirality": 0.25,
+              "attack_ms": 1.0,
+              "decay_ms": 140.0,
+              "sustain": 0.0,
+              "atoms": 2,
+              "dispersion": "ratio",
+              "structure": 1.0,
+              "stiffness": 0.035,
+              "stiffness_tilt": 4.5,
+              "kerr_semitones": 1.5,
+              "kerr_spread": 0.0,
+              "topology": "cascade",
+              "coupling": 1.0,
+              "distance_ms": 0.0,
+              "feedback": 0.0,
+              "fb_lock": true,
+              "fb_cycles": 1.5,
+              "fb_ms": 8.4,
+              "pitch_tracking": "chromatic",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 440.0,
+              "key_tracking": 1.0,
+              "stereo_width": 0.82,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      }
+    ],
+    "gain_db": 0.0,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "brightness"
+        },
+        "label": "Pick Bright"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "decay"
+        },
+        "label": "Pluck ms"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_stiffness"
+        },
+        "label": "Sustain"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_stiffness_tilt"
+        },
+        "label": "Snap Tilt"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_kerr"
+        },
+        "label": "Tension"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_chirality"
+        },
+        "label": "Bite"
+      }
+    ]
+  }
+}

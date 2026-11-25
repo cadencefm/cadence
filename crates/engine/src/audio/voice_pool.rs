@@ -6,12 +6,12 @@ use super::voices::{HeldNotes, Voice};
 use super::*;
 use crate::modular_voice::{VoiceStart, ZoneTriggerSpec};
 use cadence_core::dsp::{
-    db_to_lin, mix_seed, sanitize_sample, stereo_mid_f32, AUDIO_SUB_BLOCK_FRAMES,
+    db_to_lin, mix_seed, sanitize_sample, stereo_mid_f32, MobiusDelayBank, AUDIO_SUB_BLOCK_FRAMES,
 };
 use cadence_core::params::{InstrumentParam, RackParam, ZoneParam};
 use cadence_core::rack::{
     module_sample_key, ModuleKind, ModuleParam, PitchTracking, RackPatch, RackZone, VoiceMode,
-    VoiceSettings,
+    VoiceSettings, MAX_MOBIUS_PER_ZONE,
 };
 use cadence_core::score::{ParamLock, ScoreEvent, ScoreWindow, MAX_INSTRUMENTS};
 use std::sync::Arc;
@@ -22,6 +22,9 @@ const STEAL_FADE_SEC: f64 = 0.002;
 const STEAL_FADE_MIN_FRAMES: u16 = 16;
 const STEAL_FADE_MAX_FRAMES: u16 = 2048;
 const MONO_PITCH_SLOTS: usize = MAX_INSTRUMENTS * 4;
+/// Pre-allocated Mobius complex delay slabs shared across the 256-voice pool (`O(1)` pointer swap,
+/// zero real-time heap allocations or deallocations).
+const MOBIUS_DELAY_POOL_SLOTS: usize = 24;
 
 #[inline]
 pub(super) fn steal_fade_frames(sample_rate: f64) -> u16 {
@@ -212,6 +215,8 @@ impl ZoneTriggerState {
 /// voice allocation, choking, mono/legato retargeting, and steal de-clicking.
 pub(super) struct VoicePool {
     voices: Box<[Voice]>,
+    mobius_delay_pool: Box<[Option<Box<MobiusDelayBank>>]>,
+    mobius_delay_free_count: usize,
     active_voices: [u16; VOICES],
     active_voice_count: usize,
     voice_cursor: usize,
@@ -231,8 +236,14 @@ impl VoicePool {
             .map(|_| Voice::new_inactive(sample_rate))
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let mobius_delay_pool = (0..MOBIUS_DELAY_POOL_SLOTS)
+            .map(|_| Some(Box::new(MobiusDelayBank::new(sample_rate))))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Self {
             voices,
+            mobius_delay_pool,
+            mobius_delay_free_count: MOBIUS_DELAY_POOL_SLOTS,
             active_voices: [0; VOICES],
             active_voice_count: 0,
             voice_cursor: 0,
@@ -245,6 +256,57 @@ impl VoicePool {
         }
     }
 
+    /// Pop one pre-allocated [`MobiusDelayBank`] slab in O(1) with zero heap operations.
+    #[inline]
+    fn checkout_mobius_delay(&mut self) -> Option<Box<MobiusDelayBank>> {
+        if self.mobius_delay_free_count == 0 {
+            return None;
+        }
+        self.mobius_delay_free_count -= 1;
+        self.mobius_delay_pool[self.mobius_delay_free_count].take()
+    }
+
+    /// Return a [`MobiusDelayBank`] slab to the fixed pool in O(1) with zero heap operations.
+    #[inline]
+    fn return_mobius_delay(&mut self, bank: Box<MobiusDelayBank>) {
+        if self.mobius_delay_free_count < self.mobius_delay_pool.len() {
+            self.mobius_delay_pool[self.mobius_delay_free_count] = Some(bank);
+            self.mobius_delay_free_count += 1;
+        }
+    }
+
+    /// Reclaim any pooled Mobius delay slabs held by `self.voices[slot]`.
+    #[inline]
+    fn reclaim_voice_mobius_delays(&mut self, slot: usize) {
+        for b in 0..MAX_MOBIUS_PER_ZONE {
+            if let Some(bank) = self.voices[slot].modular.take_mobius_delay_bank(b) {
+                self.return_mobius_delay(bank);
+            }
+        }
+    }
+
+    /// Ensure `self.voices[slot]` holds pooled Mobius delay slabs for `needed` (`0..=2`) banks,
+    /// returning any unneeded slabs back to the pool without heap allocation or deallocation.
+    #[inline]
+    fn sync_voice_mobius_delays(&mut self, slot: usize, needed: usize) {
+        let count = needed.min(MAX_MOBIUS_PER_ZONE);
+        for b in 0..count {
+            if !self.voices[slot].modular.mobius_bank_has_delay(b) {
+                if let Some(bank) = self.checkout_mobius_delay() {
+                    if let Some(prev) = self.voices[slot].modular.attach_mobius_delay_bank(b, bank)
+                    {
+                        self.return_mobius_delay(prev);
+                    }
+                }
+            }
+        }
+        for b in count..MAX_MOBIUS_PER_ZONE {
+            if let Some(bank) = self.voices[slot].modular.take_mobius_delay_bank(b) {
+                self.return_mobius_delay(bank);
+            }
+        }
+    }
+
     #[cfg(test)]
     #[inline]
     pub(super) fn voices(&self) -> &[Voice] {
@@ -252,8 +314,9 @@ impl VoicePool {
     }
 
     pub(super) fn clear_all(&mut self) {
-        for voice in self.voices.iter_mut() {
-            voice.deactivate();
+        for slot in 0..self.voices.len() {
+            self.reclaim_voice_mobius_delays(slot);
+            self.voices[slot].deactivate();
         }
         self.active_voice_count = 0;
         self.steal_fades = [StealFade::default(); STEAL_FADE_SLOTS];
@@ -266,10 +329,11 @@ impl VoicePool {
     }
 
     pub(super) fn clear_preview_voices(&mut self) {
-        for &slot_u16 in &self.active_voices[..self.active_voice_count] {
-            let voice = &mut self.voices[slot_u16 as usize];
-            if voice.track == PREVIEW_TRACK {
-                voice.deactivate();
+        for i in 0..self.active_voice_count {
+            let slot = self.active_voices[i] as usize;
+            if self.voices[slot].track == PREVIEW_TRACK {
+                self.reclaim_voice_mobius_delays(slot);
+                self.voices[slot].deactivate();
             }
         }
         for fade in &mut self.steal_fades {
@@ -292,19 +356,18 @@ impl VoicePool {
     /// Re-index active voices and prune held-note stacks after a live score update.
     pub(super) fn remap_tracks(&mut self, project: &ScoreWindow) {
         self.controls_dirty = true;
-        for &slot_u16 in &self.active_voices[..self.active_voice_count] {
-            let voice = &mut self.voices[slot_u16 as usize];
+        for i in 0..self.active_voice_count {
+            let slot = self.active_voices[i] as usize;
+            let voice = &self.voices[slot];
             if !voice.active || voice.track == PREVIEW_TRACK {
                 continue;
             }
-            if let Some(index) = project
-                .instruments
-                .iter()
-                .position(|t| t.id == voice.track_id)
-            {
-                voice.track = index as u8;
+            let tid = voice.track_id;
+            if let Some(index) = project.instruments.iter().position(|t| t.id == tid) {
+                self.voices[slot].track = index as u8;
             } else {
-                voice.deactivate();
+                self.reclaim_voice_mobius_delays(slot);
+                self.voices[slot].deactivate();
             }
         }
         for held in self.held_notes.iter_mut() {
@@ -569,6 +632,7 @@ impl VoicePool {
                 graph,
             } => {
                 let slot = self.allocate_voice_slot(sr);
+                self.sync_voice_mobius_delays(slot, graph.mobius_slots.len());
                 let root = sample.meta.root_midi.min(127);
                 let start = VoiceStart {
                     midi: root,
@@ -650,6 +714,7 @@ impl VoicePool {
                         glide_from_pitch: None,
                     };
                     let slot = self.allocate_voice_slot(sr);
+                    self.sync_voice_mobius_delays(slot, graph.mobius_slots.len());
                     let voice = &mut self.voices[slot];
                     voice.modular.begin_trigger_from_zone(&ZoneTriggerSpec {
                         inst_id: 0,
@@ -922,6 +987,7 @@ impl VoicePool {
         };
 
         let idx_u8 = req.inst_index as u8;
+        self.sync_voice_mobius_delays(slot, graph.mobius_slots.len());
         let voice = &mut self.voices[slot];
         let same_topology = voice.modular.begin_trigger_from_zone(&ZoneTriggerSpec {
             inst_id: track_id,
@@ -1265,12 +1331,13 @@ impl VoicePool {
         let mut active_idx = 0usize;
         while active_idx < self.active_voice_count {
             let slot = self.active_voices[active_idx] as usize;
-            let voice = &mut self.voices[slot];
-            if !voice.active {
+            if !self.voices[slot].active {
+                self.reclaim_voice_mobius_delays(slot);
                 self.active_voice_count -= 1;
                 self.active_voices[active_idx] = self.active_voices[self.active_voice_count];
                 continue;
             }
+            let voice = &mut self.voices[slot];
             let track = voice.track as usize;
             if track < MAX_INSTRUMENTS {
                 let bit = 1u32 << track;
@@ -1292,7 +1359,8 @@ impl VoicePool {
                 }
                 voice.render_block(samples, preview_ref, &mut out.preview[..n], None);
             }
-            let retired_mono = if !voice.active {
+            let retired = !voice.active;
+            let retired_mono = if retired {
                 (voice.track != PREVIEW_TRACK && voice.modular.is_mono()).then(|| {
                     (
                         voice.track_id,
@@ -1303,7 +1371,8 @@ impl VoicePool {
             } else {
                 None
             };
-            if !voice.active {
+            if retired {
+                self.reclaim_voice_mobius_delays(slot);
                 if let Some((tid, zid, pitch)) = retired_mono {
                     self.record_mono_pitch(tid, zid, pitch);
                 }

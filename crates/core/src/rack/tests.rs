@@ -253,6 +253,43 @@ fn validation_rejects_port_mismatches_missing_or_duplicate_out_and_bad_pins() {
     }
     assert!(too_many_res.validate().is_err());
 
+    // Mobius accepts In / PitchCv / Cv / TrigIn, rejects FmIn, and caps at MAX_MOBIUS_PER_ZONE.
+    let mut mbs_ok = RackPatch::default_synth();
+    mbs_ok.zones[0].modules.push(RackModule::new(
+        8,
+        "Mobius",
+        ModuleKind::Mobius(MobiusModule::default()),
+    ));
+    mbs_ok.zones[0]
+        .cables
+        .push(PatchCable::new(94, 1, 8, InPort::In, 1.0));
+    mbs_ok.zones[0]
+        .cables
+        .push(PatchCable::new(95, 4, 8, InPort::Cv, 0.35));
+    mbs_ok.zones[0]
+        .cables
+        .push(PatchCable::new(96, 4, 8, InPort::PitchCv, 12.0));
+    mbs_ok.zones[0]
+        .cables
+        .push(PatchCable::new(97, 4, 8, InPort::TrigIn, 1.0));
+    assert!(mbs_ok.validate().is_ok());
+
+    let mut bad_mbs_port = mbs_ok.clone();
+    bad_mbs_port.zones[0]
+        .cables
+        .push(PatchCable::new(98, 1, 8, InPort::FmIn, 0.5));
+    assert!(bad_mbs_port.validate().is_err());
+
+    let mut too_many_mbs = RackPatch::default_synth();
+    for k in 0..=MAX_MOBIUS_PER_ZONE {
+        too_many_mbs.zones[0].modules.push(RackModule::new(
+            (30 + k) as u16,
+            format!("Mobius {k}"),
+            ModuleKind::Mobius(MobiusModule::default()),
+        ));
+    }
+    assert!(too_many_mbs.validate().is_err());
+
     // 5. Out-of-range cable amount & NaN rejected.
     let mut bad_amt = RackPatch::default_synth();
     bad_amt.zones[0].cables[0].amount = 5.0; // Audio In max is 2.0

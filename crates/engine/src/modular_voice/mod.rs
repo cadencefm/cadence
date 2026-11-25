@@ -9,22 +9,25 @@ mod nodes;
 use cadence_core::dsp::{
     control_stride_mask, decay_coeff_60db_ms, flush_denormal_f64, fm_depth_from_amount,
     glide_coeff_ms, one_pole_coeff_ms, sanitize_sample, sanitize_sample_rate, smooth_step_f32,
-    smooth_step_f64, stereo_mid_f64, voice_guard_f64, AdsrStage, ModalResonator, CHOKE_MS,
-    FAST_RELEASE_MS, TAIL_SILENCE_FLOOR_F64,
+    smooth_step_f64, stereo_mid_f64, voice_guard_f64, AdsrStage, MobiusDelayBank, MobiusSynth,
+    ModalResonator, CHOKE_MS, FAST_RELEASE_MS, TAIL_SILENCE_FLOOR_F64,
 };
 pub use cadence_core::rack::SamplerParams;
 use cadence_core::rack::{
     denormalize_cable_amount, module_sample_key, CompiledCable, CompiledOp, CompiledZoneGraph,
-    DriveModule, EnvModule, FilterMode, FilterModule, InPort, LfoModule, LoFiModule, ModuleKind,
-    ModuleKindTag, ModuleParam, NoiseModule, OutModule, OutPort, PitchTracking, RackZone,
-    ResonatorModule, SampleLoopMode, TriggerMode, UpdatePolicy, VcaModule, VcoModule, VoiceMode,
-    VoiceSettings, MAX_CABLES_PER_ZONE, MAX_MODULES_PER_ZONE, MAX_RESONATORS_PER_ZONE,
+    DriveModule, EnvModule, FilterMode, FilterModule, InPort, LfoModule, LoFiModule, MobiusModule,
+    ModuleKind, ModuleKindTag, ModuleParam, NoiseModule, OutModule, OutPort, PitchTracking,
+    RackZone, ResonatorModule, SampleLoopMode, TriggerMode, UpdatePolicy, VcaModule, VcoModule,
+    VoiceMode, VoiceSettings, MAX_CABLES_PER_ZONE, MAX_MOBIUS_PER_ZONE, MAX_MODULES_PER_ZONE,
+    MAX_RESONATORS_PER_ZONE,
 };
 #[cfg(test)]
 use cadence_core::rack::{LfoShape, ResonatorMode, SamplerModule};
 use cadence_core::runtime::SampleBank;
 use cadence_core::sampler::SampleData;
-use nodes::{ModuleNode, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks};
+use nodes::{
+    ModuleNode, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks, VoiceModule,
+};
 use std::sync::Arc;
 
 const VOICE_CONTROL_RATE_HZ: f64 = 3_000.0;
@@ -36,6 +39,8 @@ const MAX_RESONATOR_TAIL_SEC: f64 = 28.0;
 /// Multiplier from base resonator `decay_ms` to fallback tail timeout (`1.455x` max
 /// brightness stretch × `2.0x` for `-120 dB` quiet threshold + headroom).
 const RESONATOR_TAIL_SAFETY_MULT: f64 = 3.2;
+/// Upper host safety ceiling for pure `mu = 0` cubic-atom tails on very low stiffness settings.
+const MAX_MOBIUS_TAIL_SEC: f64 = 18.0;
 
 /// Maximum number of inline per-voice P-locks tracked without heap allocation.
 pub const MAX_VOICE_LOCKS: usize = 32;
@@ -75,7 +80,7 @@ pub enum VoiceLockKey {
     Cable { cable_id: u16 },
 }
 
-/// Zero-allocation `Copy` parameter snapshot for any of the 11 Eurorack module kinds.
+/// Zero-allocation `Copy` parameter snapshot for any of the 12 Eurorack module kinds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ModuleParams {
     Vco(VcoModule),
@@ -88,6 +93,7 @@ pub enum ModuleParams {
     Drive(DriveModule),
     LoFi(LoFiModule),
     Resonator(ResonatorModule),
+    Mobius(MobiusModule),
     Out(OutModule),
 }
 
@@ -111,6 +117,7 @@ impl ModuleParams {
             ModuleKind::Drive(m) => Self::Drive(*m),
             ModuleKind::LoFi(m) => Self::LoFi(*m),
             ModuleKind::Resonator(m) => Self::Resonator(*m),
+            ModuleKind::Mobius(m) => Self::Mobius(*m),
             ModuleKind::Out(m) => Self::Out(*m),
         }
     }
@@ -128,6 +135,7 @@ impl ModuleParams {
             Self::Drive(_) => ModuleKindTag::Drive,
             Self::LoFi(_) => ModuleKindTag::LoFi,
             Self::Resonator(_) => ModuleKindTag::Resonator,
+            Self::Mobius(_) => ModuleKindTag::Mobius,
             Self::Out(_) => ModuleKindTag::Out,
         }
     }
@@ -153,6 +161,7 @@ impl ModuleParams {
             Self::Drive(m) => ModuleKind::Drive(m),
             Self::LoFi(m) => ModuleKind::LoFi(m),
             Self::Resonator(m) => ModuleKind::Resonator(m),
+            Self::Mobius(m) => ModuleKind::Mobius(m),
             Self::Out(m) => ModuleKind::Out(m),
         };
         if !kind.write_normalized(param, norm, total_frames) {
@@ -214,6 +223,7 @@ pub struct ModularVoice {
     tail_frames: u32,
     tail_elapsed_frames: u32,
     has_resonator: bool,
+    has_mobius: bool,
 
     // Fallback gate/choke envelope used when a zone has no lifetime Env modules.
     fallback_env: f64,
@@ -222,6 +232,8 @@ pub struct ModularVoice {
     sampler_only: bool,
     sampler_only_one_shot: bool,
     any_sampler_has_trig_in: bool,
+    mobius_self_gated: bool,
+    any_mobius_has_trig_in: bool,
 
     // Compiled flat DAG snapshot (zero heap pointers).
     ops: [CompiledOp; MAX_MODULES_PER_ZONE],
@@ -239,6 +251,8 @@ pub struct ModularVoice {
     post_gate_tail_count: usize,
     sampler_slots: [u8; MAX_MODULES_PER_ZONE],
     sampler_slot_count: usize,
+    mobius_slots: [u8; MAX_MODULES_PER_ZONE],
+    mobius_slot_count: usize,
 
     // Smoothed cable attenuverters and self-contained per-slot module nodes.
     cable_current: [f32; MAX_CABLES_PER_ZONE],
@@ -246,6 +260,8 @@ pub struct ModularVoice {
     nodes: [ModuleNode; MAX_MODULES_PER_ZONE],
     // Heap-hosted 32-mode physical resonator banks (pre-allocated once per voice, zero RT allocs).
     resonator_banks: Box<[ModalResonator]>,
+    // Heap-hosted Mobius cubic-atom synthesizer banks (compact cores; delay slabs pooled by VoicePool).
+    mobius_banks: Box<[MobiusSynth]>,
 
     // Stereo audio/CV slot buffers (`prev_slots` serves `z⁻¹` feedback edges).
     slots: [[f64; 2]; MAX_MODULES_PER_ZONE],
@@ -257,9 +273,30 @@ pub struct ModularVoice {
 }
 
 impl ModularVoice {
-    /// Allocate an inactive [`ModularVoice`] directly on the heap (stack-safe in debug builds).
+    /// Allocate an inactive standalone [`ModularVoice`] directly on the heap with owned
+    /// Mobius delay banks (stack-safe in debug builds).
     pub fn new_boxed_inactive(sample_rate: f64) -> Box<Self> {
+        Self::new_boxed_inactive_with_delays(sample_rate, true)
+    }
+
+    /// Allocate an inactive pooled [`ModularVoice`] with lightweight Mobius cores (`0 B` delay
+    /// buffers per voice); `VoicePool` attaches pre-allocated [`MobiusDelayBank`] slabs in O(1).
+    pub(crate) fn new_boxed_inactive_pooled(sample_rate: f64) -> Box<Self> {
+        Self::new_boxed_inactive_with_delays(sample_rate, false)
+    }
+
+    fn new_boxed_inactive_with_delays(sample_rate: f64, own_mobius_delays: bool) -> Box<Self> {
         let sr = sanitize_sample_rate(sample_rate).clamp(8_000.0, 384_000.0);
+        let mobius_banks = (0..MAX_MOBIUS_PER_ZONE)
+            .map(|_| {
+                if own_mobius_delays {
+                    MobiusSynth::new(sr)
+                } else {
+                    MobiusSynth::new_core(sr)
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         Box::new(Self {
             active: false,
             released: true,
@@ -285,12 +322,15 @@ impl ModularVoice {
             tail_frames: (sr * DEFAULT_TAIL_TIMEOUT_SEC) as u32,
             tail_elapsed_frames: 0,
             has_resonator: false,
+            has_mobius: false,
             fallback_env: 0.0,
             fallback_releasing: false,
             fallback_release_coeff: decay_coeff_60db_ms(FAST_RELEASE_MS, sr),
             sampler_only: false,
             sampler_only_one_shot: false,
             any_sampler_has_trig_in: false,
+            mobius_self_gated: false,
+            any_mobius_has_trig_in: false,
             ops: [EMPTY_OP; MAX_MODULES_PER_ZONE],
             op_count: 0,
             cables: [EMPTY_CABLE; MAX_CABLES_PER_ZONE],
@@ -306,16 +346,47 @@ impl ModularVoice {
             post_gate_tail_count: 0,
             sampler_slots: [0; MAX_MODULES_PER_ZONE],
             sampler_slot_count: 0,
+            mobius_slots: [0; MAX_MODULES_PER_ZONE],
+            mobius_slot_count: 0,
             cable_current: [0.0; MAX_CABLES_PER_ZONE],
             cable_target: [0.0; MAX_CABLES_PER_ZONE],
             nodes: [ModuleNode::default(); MAX_MODULES_PER_ZONE],
             resonator_banks: vec![ModalResonator::new(sr); MAX_RESONATORS_PER_ZONE]
                 .into_boxed_slice(),
+            mobius_banks,
             slots: [[0.0; 2]; MAX_MODULES_PER_ZONE],
             prev_slots: [[0.0; 2]; MAX_MODULES_PER_ZONE],
             locked_keys: [None; MAX_VOICE_LOCKS],
             locked_count: 0,
         })
+    }
+
+    #[inline]
+    pub(crate) fn mobius_bank_has_delay(&self, idx: usize) -> bool {
+        self.mobius_banks
+            .get(idx)
+            .is_some_and(MobiusSynth::has_delay_bank)
+    }
+
+    #[inline]
+    pub(crate) fn attach_mobius_delay_bank(
+        &mut self,
+        idx: usize,
+        bank: Box<MobiusDelayBank>,
+    ) -> Option<Box<MobiusDelayBank>> {
+        let Some(slot) = self.mobius_banks.get_mut(idx) else {
+            return Some(bank);
+        };
+        let prev = slot.take_delay_bank();
+        slot.attach_delay_bank(bank);
+        prev
+    }
+
+    #[inline]
+    pub(crate) fn take_mobius_delay_bank(&mut self, idx: usize) -> Option<Box<MobiusDelayBank>> {
+        self.mobius_banks
+            .get_mut(idx)
+            .and_then(MobiusSynth::take_delay_bank)
     }
 
     /// Convenience constructor allocating a triggered [`ModularVoice`] on the heap.
@@ -358,6 +429,17 @@ impl ModularVoice {
                     _ => true,
                 });
         }
+        if self.mobius_self_gated && self.mobius_slot_count > 0 {
+            return self.mobius_slots[..self.mobius_slot_count]
+                .iter()
+                .all(|&s| match self.nodes.get(usize::from(s)) {
+                    Some(ModuleNode::Mobius(node)) => self
+                        .mobius_banks
+                        .get(node.bank_idx())
+                        .is_none_or(MobiusSynth::is_exciter_released),
+                    _ => true,
+                });
+        }
         self.fallback_releasing
     }
 
@@ -385,6 +467,17 @@ impl ModularVoice {
                 }
             }
             return (max_s * self.velocity) as f32;
+        }
+        if self.mobius_self_gated && self.mobius_slot_count > 0 {
+            let mut max_e = 0.0_f64;
+            for &s in &self.mobius_slots[..self.mobius_slot_count] {
+                if let Some(ModuleNode::Mobius(node)) = self.nodes.get(usize::from(s)) {
+                    if let Some(bank) = self.mobius_banks.get(node.bank_idx()) {
+                        max_e = max_e.max(bank.current_energy());
+                    }
+                }
+            }
+            return max_e as f32;
         }
         (self.fallback_env * self.velocity) as f32
     }
@@ -611,6 +704,10 @@ impl ModularVoice {
         self.sampler_slots[..self.sampler_slot_count]
             .copy_from_slice(&graph.sampler_slots[..self.sampler_slot_count]);
 
+        self.mobius_slot_count = graph.mobius_slots.len().min(MAX_MODULES_PER_ZONE);
+        self.mobius_slots[..self.mobius_slot_count]
+            .copy_from_slice(&graph.mobius_slots[..self.mobius_slot_count]);
+
         same_topology
     }
 
@@ -742,12 +839,28 @@ impl ModularVoice {
         // Compute source classification for lifecycle & one-shot semantics.
         let op_count = self.op_count;
         let cable_count = self.cable_count;
+        let mut has_continuous_osc = false;
         let mut has_non_sampler_source = false;
         let mut all_samplers_one_shot = self.sampler_slot_count > 0;
         let mut any_sampler_trig = false;
+        let mut any_mobius_trig = false;
         for (s, node) in self.nodes.iter().take(op_count).enumerate() {
             match node {
-                ModuleNode::Vco(_) | ModuleNode::Noise(_) => has_non_sampler_source = true,
+                ModuleNode::Vco(_) | ModuleNode::Noise(_) => {
+                    has_continuous_osc = true;
+                    has_non_sampler_source = true;
+                }
+                ModuleNode::Mobius(_) => {
+                    has_non_sampler_source = true;
+                    if slot_has_in_port(
+                        &self.ops[..op_count],
+                        &self.cables[..cable_count],
+                        s,
+                        InPort::TrigIn,
+                    ) {
+                        any_mobius_trig = true;
+                    }
+                }
                 ModuleNode::Sampler(smp) => {
                     if slot_has_in_port(
                         &self.ops[..op_count],
@@ -768,6 +881,11 @@ impl ModularVoice {
         self.sampler_only_one_shot =
             self.sampler_only && all_samplers_one_shot && !any_sampler_trig;
         self.any_sampler_has_trig_in = any_sampler_trig;
+        self.mobius_self_gated = self.lifetime_env_count == 0
+            && !self.sampler_only
+            && self.mobius_slot_count > 0
+            && !has_continuous_osc;
+        self.any_mobius_has_trig_in = any_mobius_trig;
 
         self.active = true;
         self.released = false;
@@ -806,6 +924,8 @@ impl ModularVoice {
         let mut tstate = TriggerState {
             resonator_banks: &mut self.resonator_banks,
             next_res_bank: 0,
+            mobius_banks: &mut self.mobius_banks,
+            next_mobius_bank: 0,
         };
         for s in 0..op_count {
             let acid_vel_amount = if ops[s].kind == ModuleKindTag::Env {
@@ -833,15 +953,21 @@ impl ModularVoice {
             self.nodes[s].on_trigger(&tctx, &mut tstate);
         }
         self.has_resonator = tstate.next_res_bank > 0;
+        self.has_mobius = tstate.next_mobius_bank > 0;
+        let use_post_gate_only = self.lifetime_env_count > 0
+            && !(self.sampler_only && !self.any_sampler_has_trig_in)
+            && self.all_env_gates_closed();
         let max_tail_res_decay_ms = if self.has_resonator {
-            let use_post_gate_only = self.lifetime_env_count > 0
-                && !(self.sampler_only && !self.any_sampler_has_trig_in)
-                && self.all_env_gates_closed();
             self.max_tail_resonator_decay_ms(use_post_gate_only)
         } else {
             0.0
         };
-        self.tail_frames = self.compute_tail_frames(max_tail_res_decay_ms);
+        let min_mobius_xi = if self.has_mobius {
+            self.min_tail_mobius_stiffness(use_post_gate_only)
+        } else {
+            None
+        };
+        self.tail_frames = self.compute_tail_frames(max_tail_res_decay_ms, min_mobius_xi);
     }
 
     /// Retarget an active voice cleanly in-place (preserving glide, phases, filter
@@ -947,7 +1073,7 @@ impl ModularVoice {
             return;
         }
         self.released = true;
-        if !has_lifetime_envs {
+        if !has_lifetime_envs && !self.mobius_self_gated {
             self.fallback_releasing = true;
         }
         for node in &mut self.nodes[..self.op_count] {
@@ -1064,11 +1190,14 @@ impl ModularVoice {
             velocity: self.velocity,
             zone_pan: self.zone_pan,
             control_tick,
-            use_fallback_gate: self.lifetime_env_count == 0 && !self.sampler_only,
+            use_fallback_gate: self.lifetime_env_count == 0
+                && !self.sampler_only
+                && !self.mobius_self_gated,
             fallback_env: self.fallback_env,
             bank,
             preview,
             resonator_banks: &mut self.resonator_banks,
+            mobius_banks: &mut self.mobius_banks,
         };
 
         for s in 0..op_count {
@@ -1135,7 +1264,7 @@ impl ModularVoice {
 
     #[inline]
     fn max_tail_resonator_decay_ms(&self, use_post_gate_only: bool) -> f64 {
-        if self.lifetime_env_count == 0 && !self.sampler_only {
+        if self.lifetime_env_count == 0 && !self.sampler_only && !self.mobius_self_gated {
             // Fallback gate attenuates `Out` directly; no resonator sits post-gate.
             return 0.0;
         }
@@ -1157,14 +1286,41 @@ impl ModularVoice {
     }
 
     #[inline]
-    fn compute_tail_frames(&self, max_res_decay_ms: f64) -> u32 {
-        let tail_sec = if max_res_decay_ms > 0.0 {
+    fn min_tail_mobius_stiffness(&self, use_post_gate_only: bool) -> Option<f64> {
+        if self.lifetime_env_count == 0 && !self.sampler_only && !self.mobius_self_gated {
+            return None;
+        }
+        let mut min_xi: Option<f64> = None;
+        if use_post_gate_only {
+            for &slot in &self.post_gate_tail_slots[..self.post_gate_tail_count] {
+                if let Some(ModuleNode::Mobius(mbs)) = self.nodes.get(usize::from(slot)) {
+                    let xi = mbs.min_effective_stiffness();
+                    min_xi = Some(min_xi.map_or(xi, |b| b.min(xi)));
+                }
+            }
+        } else {
+            for node in &self.nodes[..self.op_count] {
+                if let ModuleNode::Mobius(mbs) = node {
+                    let xi = mbs.min_effective_stiffness();
+                    min_xi = Some(min_xi.map_or(xi, |b| b.min(xi)));
+                }
+            }
+        }
+        min_xi
+    }
+
+    #[inline]
+    fn compute_tail_frames(&self, max_res_decay_ms: f64, min_mobius_xi: Option<f64>) -> u32 {
+        let res_sec = if max_res_decay_ms > 0.0 {
             (max_res_decay_ms * 0.001 * RESONATOR_TAIL_SAFETY_MULT)
                 .clamp(DEFAULT_TAIL_TIMEOUT_SEC, MAX_RESONATOR_TAIL_SEC)
         } else {
             DEFAULT_TAIL_TIMEOUT_SEC
         };
-        (self.sample_rate * tail_sec) as u32
+        let mobius_sec = min_mobius_xi.map_or(0.0, |xi| {
+            (1.5 / xi.max(0.01)).clamp(4.0, MAX_MOBIUS_TAIL_SEC)
+        });
+        (self.sample_rate * res_sec.max(mobius_sec)) as u32
     }
 
     #[inline]
@@ -1191,6 +1347,20 @@ impl ModularVoice {
             true
         };
 
+        let mobius_exciters_done = if self.mobius_slot_count > 0 {
+            self.mobius_slots[..self.mobius_slot_count]
+                .iter()
+                .all(|&s| match self.nodes.get(usize::from(s)) {
+                    Some(ModuleNode::Mobius(node)) => self
+                        .mobius_banks
+                        .get(node.bank_idx())
+                        .is_none_or(MobiusSynth::is_exciter_released),
+                    _ => true,
+                })
+        } else {
+            true
+        };
+
         let sources_done = if self.lifetime_env_count > 0 {
             let auto_finish_on_samplers = self.sampler_only && !self.any_sampler_has_trig_in;
             envs_done || (auto_finish_on_samplers && samplers_done)
@@ -1200,6 +1370,12 @@ impl ModularVoice {
             } else {
                 samplers_done
             }
+        } else if self.mobius_self_gated {
+            if self.any_mobius_has_trig_in {
+                mobius_exciters_done && self.released
+            } else {
+                mobius_exciters_done
+            }
         } else {
             self.fallback_releasing && self.fallback_env <= TAIL_SILENCE_FLOOR_F64
         };
@@ -1208,15 +1384,38 @@ impl ModularVoice {
             return;
         }
 
-        if self.has_resonator
+        if (self.has_resonator || self.has_mobius)
             && (self.tail_elapsed_frames == 0 || control_tick || self.tail_frames <= 1)
         {
             let use_post_gate_only = envs_done && self.all_env_gates_closed();
-            let budget =
-                self.compute_tail_frames(self.max_tail_resonator_decay_ms(use_post_gate_only));
+            let res_ms = if self.has_resonator {
+                self.max_tail_resonator_decay_ms(use_post_gate_only)
+            } else {
+                0.0
+            };
+            let mobius_xi = if self.has_mobius {
+                self.min_tail_mobius_stiffness(use_post_gate_only)
+            } else {
+                None
+            };
+            let budget = self.compute_tail_frames(res_ms, mobius_xi);
             let needed = budget.saturating_sub(self.tail_elapsed_frames);
             if needed > self.tail_frames {
                 self.tail_frames = needed;
+            }
+        }
+
+        // Engage a gentle 15 ms output micro-fade right before hitting the Mobius safety cap
+        // so retiring a low-stiffness ringing tail never produces a step discontinuity.
+        if self.has_mobius {
+            let fade_window = ((FAST_RELEASE_MS * 0.001 * self.sample_rate).round() as u32).max(16);
+            if self.tail_frames == fade_window {
+                let fade_coeff = decay_coeff_60db_ms(FAST_RELEASE_MS, self.sample_rate);
+                for node in &mut self.nodes[..self.op_count] {
+                    if let ModuleNode::Mobius(mbs) = node {
+                        mbs.on_force_release(self.sample_rate, fade_coeff);
+                    }
+                }
             }
         }
 
@@ -1229,25 +1428,25 @@ impl ModularVoice {
 
     #[inline]
     fn tails_quiet(&self, envs_done: bool) -> bool {
-        if self.lifetime_env_count == 0 && !self.sampler_only {
+        if self.lifetime_env_count == 0 && !self.sampler_only && !self.mobius_self_gated {
             let out_idx = usize::from(self.out_slot).min(self.op_count.saturating_sub(1));
             return self
                 .nodes
                 .get(out_idx)
-                .is_none_or(|node| node.is_tail_quiet(&self.resonator_banks));
+                .is_none_or(|node| node.is_tail_quiet(&self.resonator_banks, &self.mobius_banks));
         }
         if envs_done && self.all_env_gates_closed() {
             self.post_gate_tail_slots[..self.post_gate_tail_count]
                 .iter()
                 .all(|&s| {
-                    self.nodes
-                        .get(usize::from(s))
-                        .is_none_or(|node| node.is_tail_quiet(&self.resonator_banks))
+                    self.nodes.get(usize::from(s)).is_none_or(|node| {
+                        node.is_tail_quiet(&self.resonator_banks, &self.mobius_banks)
+                    })
                 })
         } else {
             self.nodes[..self.op_count]
                 .iter()
-                .all(|node| node.is_tail_quiet(&self.resonator_banks))
+                .all(|node| node.is_tail_quiet(&self.resonator_banks, &self.mobius_banks))
         }
     }
 }

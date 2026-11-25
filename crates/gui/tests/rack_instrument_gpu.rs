@@ -20,9 +20,10 @@ use cadence_core::params::{InstrumentParam, ValueMode};
 use cadence_core::presets::PresetCatalog;
 use cadence_core::rack::{
     DriveModule, EnvModule, FilterMode, FilterModule, InPort, LfoModule, LfoShape, LoFiModule,
-    ModuleKind, ModuleParam, NoiseColor, NoiseModule, OutModule, PanelPin, PatchCable,
-    PitchTracking, RackModule, RackPatch, RackZone, ResonatorMode, ResonatorModule, SamplerModule,
-    TriggerMode, VcaModule, VcoModule, VoiceSettings, Waveform,
+    MobiusDispersion, MobiusExciter, MobiusModule, MobiusTopology, ModuleKind, ModuleParam,
+    NoiseColor, NoiseModule, OutModule, PanelPin, PatchCable, PitchTracking, RackModule, RackPatch,
+    RackZone, ResonatorMode, ResonatorModule, SamplerModule, TriggerMode, VcaModule, VcoModule,
+    VoiceSettings, Waveform,
 };
 use cadence_core::runtime::AudioSnapshot;
 use cadence_core::sampler::SampleLoopMode;
@@ -191,6 +192,28 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
                 }),
             ),
             RackModule::new(
+                13,
+                "Mobius Choir",
+                ModuleKind::Mobius(MobiusModule {
+                    exciter: MobiusExciter::Dipole,
+                    brightness: 0.84,
+                    shape: 0.68,
+                    chirality: 0.22,
+                    atoms: 4,
+                    dispersion: MobiusDispersion::Formant,
+                    structure: 0.50,
+                    stiffness: 0.22,
+                    stiffness_tilt: -1.8,
+                    kerr_semitones: 2.2,
+                    kerr_spread: -0.65,
+                    topology: MobiusTopology::Star,
+                    coupling: 0.84,
+                    distance_ms: 24.0,
+                    feedback: 0.0,
+                    ..MobiusModule::default()
+                }),
+            ),
+            RackModule::new(
                 11,
                 "Out",
                 ModuleKind::Out(OutModule {
@@ -213,6 +236,7 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
             PatchCable::new(10, 9, 10, InPort::In, 1.0), // Crush LoFi -> Ring VCA (Audio)
             PatchCable::new(11, 2, 10, InPort::Cv, 0.85), // FM Mod -> Ring VCA (RingMod CV!)
             PatchCable::new(14, 10, 12, InPort::In, 0.85), // Ring VCA -> Bronze Plate (Audio)
+            PatchCable::new(15, 13, 12, InPort::In, 0.55), // Mobius Choir -> Bronze Plate (Audio)
             PatchCable::new(12, 12, 11, InPort::In, 1.0), // Bronze Plate -> Out (Audio)
             // Cross-column feedback loop: Fold Drive (col 2) -> VCO 1.FmIn (col 0) (cycle back-edge -> z-1 dashed!)
             PatchCable::new(13, 8, 1, InPort::FmIn, -0.32),
@@ -445,6 +469,7 @@ fn gpu_renders_rack_panel_patchbay_zones_preset_categories_and_signal_graph() {
         ("Crush LoFi", "10-rack-panel-lofi.png"),
         ("Ring VCA", "11-rack-panel-vca-ringmod.png"),
         ("Bronze Plate", "12b-rack-panel-resonator.png"),
+        ("Mobius Choir", "12c-rack-panel-mobius.png"),
         ("Out", "12-rack-panel-out.png"),
     ];
     let mut prev_px = px_pinned_dark;

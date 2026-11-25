@@ -73,7 +73,7 @@ impl Voice {
             track: u8::MAX,
             track_id: 0,
             zone_id: 0,
-            modular: ModularVoice::new_boxed_inactive(sr),
+            modular: ModularVoice::new_boxed_inactive_pooled(sr),
             rack_locks: 0,
             zone_locks: 0,
             rack_gain_db: 0.0,

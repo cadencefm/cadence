@@ -2,8 +2,8 @@
 //! - Header + mode tabs (`Panel | Patchbay | Zones`), active zone badge, channel output badge,
 //!   and contextual shortcut hints.
 //! - `Panel`: scrollable horizontal module pill strip (`Quick` pins + zone modules) + dedicated
-//!   live GPU visualizers for all 12 `ModuleVisualView` variants (`PinnedOverview`, `Vco`,
-//!   `Sampler`, `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`) + control list.
+//!   live GPU visualizers for all 13 `ModuleVisualView` variants (`PinnedOverview`, `Vco`,
+//!   `Sampler`, `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Mobius`, `Out`) + control list.
 //! - `Patchbay`: multi-column Eurorack node-and-cable graph delegated strictly to
 //!   [`crate::decks::cable_graph`] (SPOT) with semantic cable colors, inline attenuverter pills,
 //!   ASCII `"z-1"` dashed feedback cables, selected-cable halo, and footer summary + live scope.
@@ -219,6 +219,7 @@ pub(super) fn module_tag_accent(tag: ModuleKindTag, theme: &Theme) -> Color {
         ModuleKindTag::Drive => theme.accent.alert,
         ModuleKindTag::LoFi => theme.accent.warning_key.mix(theme.accent.alert, 0.45),
         ModuleKindTag::Resonator => theme.accent.routing.mix(theme.accent.playhead, 0.48),
+        ModuleKindTag::Mobius => theme.accent.modulation.mix(theme.accent.focus, 0.45),
         ModuleKindTag::Out => theme.accent.focus,
     }
 }

@@ -1,0 +1,145 @@
+{
+  "version": 1,
+  "name": "Mobius Vocal Choir",
+  "category": "Pad",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "Vocal Choir",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 60,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Mobius",
+            "kind": {
+              "type": "mobius",
+              "exciter": "dipole",
+              "brightness": 0.84,
+              "shape": 0.70,
+              "chirality": 0.18,
+              "attack_ms": 45.0,
+              "decay_ms": 260.0,
+              "sustain": 0.88,
+              "atoms": 4,
+              "dispersion": "formant",
+              "structure": 0.50,
+              "stiffness": 0.22,
+              "stiffness_tilt": -1.8,
+              "kerr_semitones": 1.0,
+              "kerr_spread": 0.0,
+              "topology": "cascade",
+              "coupling": 1.0,
+              "distance_ms": 0.0,
+              "feedback": 0.0,
+              "fb_lock": true,
+              "fb_cycles": 1.5,
+              "fb_ms": 8.4,
+              "pitch_tracking": "chromatic",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 440.0,
+              "key_tracking": 1.0,
+              "stereo_width": 0.78,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      }
+    ],
+    "gain_db": 0.0,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "structure"
+        },
+        "label": "Vowel"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_shape"
+        },
+        "label": "Shape"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "brightness"
+        },
+        "label": "Brightness"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_stiffness"
+        },
+        "label": "Stiffness"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "mobius_kerr"
+        },
+        "label": "Kerr"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "spread"
+        },
+        "label": "Width"
+      }
+    ]
+  }
+}
