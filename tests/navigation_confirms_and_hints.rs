@@ -574,11 +574,16 @@ fn rhythm_staging_links_nonliteral_filehub_hints_and_help_rename_coverage() {
     assert!(bank_hints.iter().any(|(k, _)| k == "Enter/Shift+Enter"));
     assert!(!bank_hints.iter().any(|(k, _)| k.contains("S-Enter")));
 
-    // 6. FileHub `R` reload hint appears ONLY on Import tab.
-    app.open_file_hub(FileHubTab::Open);
+    // 6. FileHub `R` reload hint appears ONLY on Import tab; `Bksp` appears on Browse/Import only.
+    app.open_file_hub(FileHubTab::Quick);
     assert!(!app.hints().iter().any(|(k, _)| k == "R"));
+    assert!(!app.hints().iter().any(|(k, _)| k == "Bksp"));
+    app.open_file_hub(FileHubTab::Browse);
+    assert!(!app.hints().iter().any(|(k, _)| k == "R"));
+    assert!(app.hints().iter().any(|(k, _)| k == "Bksp"));
     app.open_file_hub(FileHubTab::Import);
     assert!(app.hints().iter().any(|(k, _)| k == "R"));
+    assert!(app.hints().iter().any(|(k, _)| k == "Bksp"));
     app.press_keys("<Esc>").unwrap();
 
     // 7. `?` Help documents rename across entities cleanly.

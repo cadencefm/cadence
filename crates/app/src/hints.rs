@@ -416,32 +416,48 @@ impl App {
                 ]
             }
             Mode::FileHub => {
-                let mut items = vec![
-                    ("H/L Tab", "tab"),
-                    ("j/k", "select"),
-                    ("Alt+h/l ,/.", "export opt"),
-                    ("Enter", "open/run"),
-                    ("/", "filter"),
-                ];
-                if self
+                use crate::file_hub::FileHubTab;
+                let (tab, has_query) = self
                     .modal
                     .file_hub()
-                    .is_some_and(|h| h.tab == crate::file_hub::FileHubTab::Import)
-                {
-                    items.push(("R", "reload presets"));
+                    .map_or((FileHubTab::Quick, false), |h| (h.tab, !h.query.is_empty()));
+                let mut items = vec![("H/L 1–5", "tab"), ("j/k", "select")];
+                match tab {
+                    FileHubTab::Quick => {
+                        items.extend([("Enter", "open"), ("/", "search all")]);
+                    }
+                    FileHubTab::Browse => {
+                        items.extend([
+                            ("Enter", "open/dir"),
+                            ("Bksp", "up"),
+                            ("~ / .", "home/proj"),
+                            ("/", "filter"),
+                        ]);
+                    }
+                    FileHubTab::Import => {
+                        items.extend([
+                            ("Enter", "import/dir"),
+                            ("Bksp", "up"),
+                            ("~ / .", "home/proj"),
+                            ("/", "filter"),
+                            ("R", "reload"),
+                        ]);
+                    }
+                    FileHubTab::Save => {
+                        items.extend([("Enter", "run"), ("e", "edit path")]);
+                    }
+                    FileHubTab::Export => {
+                        items.extend([
+                            ("Alt+h/l ,/.", "adjust"),
+                            ("e", "edit path"),
+                            ("Enter", "render"),
+                        ]);
+                    }
                 }
                 items.extend([
-                    ("e", "edit path"),
                     ("F", "Finder"),
                     ("Space", "play/pause"),
-                    (
-                        "Esc",
-                        if self.modal.file_hub().is_some_and(|h| !h.query.is_empty()) {
-                            "clear filter"
-                        } else {
-                            "close"
-                        },
-                    ),
+                    ("Esc", if has_query { "clear filter" } else { "close" }),
                 ]);
                 items
             }

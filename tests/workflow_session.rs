@@ -425,7 +425,7 @@ fn action_new_honors_user_config_defaults_clears_overlays_and_supports_kit_place
         default_root_midi: 62, // D4
         ..UserConfig::default()
     };
-    a.open_file_hub(FileHubTab::Open);
+    a.open_file_hub(FileHubTab::Quick);
     assert!(matches!(
         a.frame_view(&AudioSnapshot::default(), "silent").overlay,
         Some(OverlayView::FileHub(_))

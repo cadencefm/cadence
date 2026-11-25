@@ -56,23 +56,26 @@ pub fn current_dir() -> Result<PathBuf> {
     std::env::current_dir().context("Reading current working directory")
 }
 
+/// Resolve the user's home directory from `HOME` (or `USERPROFILE` on Windows).
+pub fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
 /// Expand a leading `~` or `~/` using `HOME` (or `USERPROFILE`), leaving other paths unchanged.
 pub fn expand_tilde(raw: &str) -> PathBuf {
     let trimmed = raw.trim();
-    let home = || {
-        std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
-            .map(PathBuf::from)
-    };
     if trimmed == "~" {
-        if let Some(dir) = home() {
+        if let Some(dir) = home_dir() {
             return dir;
         }
     } else if let Some(rest) = trimmed
         .strip_prefix("~/")
         .or_else(|| trimmed.strip_prefix("~\\"))
     {
-        if let Some(dir) = home() {
+        if let Some(dir) = home_dir() {
             return dir.join(rest);
         }
     }

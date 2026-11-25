@@ -1,7 +1,8 @@
 //! Tabbed Project & File Hub (`gf`, `Ctrl+Shift+o`, `Ctrl+Shift+s`, `Ctrl+Shift+e`, `:files`):
-//! Open/Recent/Examples browser, Save & Portable Bundle exporter, `.rbs` & Preset importer,
-//! and Master / Per-Channel Stems WAV exporter — 100% pure data (native OS dialogs stay
-//! behind `HostBridge` via `FileDialogRequest`).
+//! Quick Open (New/Recent/Examples/Takes), dedicated Browse directory manager,
+//! Save & Portable Bundle exporter, `.rbs` & Preset importer, and Master / Per-Channel
+//! Stems WAV exporter — 100% pure data (native OS dialogs stay behind `HostBridge` via
+//! `FileDialogRequest`).
 mod actions;
 mod browse;
 
@@ -11,18 +12,26 @@ use std::collections::HashMap;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FileHubTab {
     #[default]
-    Open,
+    Quick,
+    Browse,
     Save,
     Import,
     Export,
 }
 
 impl FileHubTab {
-    pub const ALL: [Self; 4] = [Self::Open, Self::Save, Self::Import, Self::Export];
+    pub const ALL: [Self; 5] = [
+        Self::Quick,
+        Self::Browse,
+        Self::Save,
+        Self::Import,
+        Self::Export,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Open => "Open / Recent",
+            Self::Quick => "Quick Open",
+            Self::Browse => "Browse",
             Self::Save => "Save & Bundle",
             Self::Import => "Import",
             Self::Export => "Export Audio",
@@ -31,10 +40,11 @@ impl FileHubTab {
 
     pub fn index(self) -> usize {
         match self {
-            Self::Open => 0,
-            Self::Save => 1,
-            Self::Import => 2,
-            Self::Export => 3,
+            Self::Quick => 0,
+            Self::Browse => 1,
+            Self::Save => 2,
+            Self::Import => 3,
+            Self::Export => 4,
         }
     }
 
@@ -42,6 +52,16 @@ impl FileHubTab {
         let idx = self.index() as isize;
         let len = Self::ALL.len() as isize;
         Self::ALL[(idx + dir).rem_euclid(len) as usize]
+    }
+
+    /// True for list/filterable tabs (`Quick`, `Browse`, `Import`) as opposed to form tabs (`Save`, `Export`).
+    pub fn is_list_tab(self) -> bool {
+        matches!(self, Self::Quick | Self::Browse | Self::Import)
+    }
+
+    /// True for tabs that browse `hub.dir` directly (`Browse`, `Import`).
+    pub fn has_dir_browser(self) -> bool {
+        matches!(self, Self::Browse | Self::Import)
     }
 }
 
@@ -273,6 +293,10 @@ impl App {
             preview_cache: HashMap::new(),
         };
         self.refresh_file_hub_entries(&mut state);
+        if tab == FileHubTab::Browse {
+            state.cursor = browse::first_dir_entry_cursor(&state.entries);
+            self.warm_file_hub_preview(&mut state);
+        }
         self.modal = ActiveModal::FileHub(Box::new(state));
         self.input.mode = Mode::FileHub;
         self.status = format!(
@@ -281,9 +305,26 @@ impl App {
         );
     }
 
-    /// Open File Hub on the Open tab focused on `.take.jsonl` live takes when present.
+    /// Switch active File Hub tab cleanly, clearing any search filter and setting
+    /// the initial cursor (`Browse` lands on the first child entry rather than `..`).
+    pub(super) fn switch_file_hub_tab(&self, hub: &mut FileHubState, tab: FileHubTab) {
+        hub.tab = tab;
+        hub.query.clear();
+        hub.searching = false;
+        self.refresh_file_hub_entries(hub);
+        hub.cursor = if tab == FileHubTab::Browse {
+            browse::first_dir_entry_cursor(&hub.entries)
+        } else {
+            0
+        };
+        if tab.is_list_tab() {
+            self.warm_file_hub_preview(hub);
+        }
+    }
+
+    /// Open File Hub on the Quick Open tab focused on `.take.jsonl` live takes when present.
     pub fn open_file_hub_for_take_load(&mut self) {
-        self.open_file_hub(FileHubTab::Open);
+        self.open_file_hub(FileHubTab::Quick);
         if let Some(mut hub) = self.modal.take_file_hub() {
             if let Some(idx) = hub
                 .entries
@@ -405,14 +446,19 @@ impl App {
             }
         }
 
-        // 2. Live search filter on Open / Import tabs.
+        // 2. Live search filter on Quick / Browse / Import tabs.
         if hub.searching {
             match key.code {
                 KeyCode::Esc => {
                     hub.searching = false;
                     hub.query.clear();
-                    hub.cursor = 0;
                     self.refresh_file_hub_entries(hub);
+                    hub.cursor = if hub.tab == FileHubTab::Browse {
+                        browse::first_dir_entry_cursor(&hub.entries)
+                    } else {
+                        0
+                    };
+                    self.warm_file_hub_preview(hub);
                     return Ok(Outcome::default());
                 }
                 KeyCode::Enter | KeyCode::Tab => {
@@ -433,12 +479,22 @@ impl App {
                 }
                 KeyCode::Backspace => {
                     hub.query.pop();
+                    hub.cursor = 0;
                     self.refresh_file_hub_entries(hub);
+                    if hub.query.is_empty() && hub.tab == FileHubTab::Browse {
+                        hub.cursor = browse::first_dir_entry_cursor(&hub.entries);
+                        self.warm_file_hub_preview(hub);
+                    }
                     return Ok(Outcome::default());
                 }
                 KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                     hub.query.clear();
+                    hub.cursor = 0;
                     self.refresh_file_hub_entries(hub);
+                    if hub.tab == FileHubTab::Browse {
+                        hub.cursor = browse::first_dir_entry_cursor(&hub.entries);
+                        self.warm_file_hub_preview(hub);
+                    }
                     return Ok(Outcome::default());
                 }
                 KeyCode::Char(c)
@@ -449,6 +505,7 @@ impl App {
                         && hub.query.len() < 64 =>
                 {
                     hub.query.push(c);
+                    hub.cursor = 0;
                     self.refresh_file_hub_entries(hub);
                     return Ok(Outcome::default());
                 }
@@ -458,10 +515,10 @@ impl App {
             }
         }
 
-        // 3. Global File Hub keys: Esc clears active filter first then closes, H/L / Tab / 1-4 switch tabs,
+        // 3. Global File Hub keys: Esc clears active filter first then closes, H/L / Tab / 1-5 switch tabs,
         //    Space toggles transport, 0/$/G/End/PgUp/PgDn navigate rows, F native OS Finder.
         let row_count = match hub.tab {
-            FileHubTab::Open | FileHubTab::Import => hub.entries.len(),
+            FileHubTab::Quick | FileHubTab::Browse | FileHubTab::Import => hub.entries.len(),
             FileHubTab::Save => 6,
             FileHubTab::Export => 5,
         };
@@ -470,8 +527,13 @@ impl App {
             KeyCode::Esc => {
                 if !hub.query.is_empty() {
                     hub.query.clear();
-                    hub.cursor = 0;
                     self.refresh_file_hub_entries(hub);
+                    hub.cursor = if hub.tab == FileHubTab::Browse {
+                        browse::first_dir_entry_cursor(&hub.entries)
+                    } else {
+                        0
+                    };
+                    self.warm_file_hub_preview(hub);
                     return Ok(Outcome::default());
                 }
                 self.input.mode = Mode::Normal;
@@ -484,51 +546,45 @@ impl App {
             }
             KeyCode::Char('0') => {
                 hub.cursor = 0;
-                if matches!(hub.tab, FileHubTab::Open | FileHubTab::Import) {
+                if hub.tab.is_list_tab() {
                     self.warm_file_hub_preview(hub);
                 }
                 return Ok(Outcome::default());
             }
             KeyCode::Char('$' | 'G') | KeyCode::End => {
                 hub.cursor = max_row;
-                if matches!(hub.tab, FileHubTab::Open | FileHubTab::Import) {
+                if hub.tab.is_list_tab() {
                     self.warm_file_hub_preview(hub);
                 }
                 return Ok(Outcome::default());
             }
             KeyCode::PageUp => {
                 hub.cursor = hub.cursor.saturating_sub(8);
-                if matches!(hub.tab, FileHubTab::Open | FileHubTab::Import) {
+                if hub.tab.is_list_tab() {
                     self.warm_file_hub_preview(hub);
                 }
                 return Ok(Outcome::default());
             }
             KeyCode::PageDown => {
                 hub.cursor = (hub.cursor + 8).min(max_row);
-                if matches!(hub.tab, FileHubTab::Open | FileHubTab::Import) {
+                if hub.tab.is_list_tab() {
                     self.warm_file_hub_preview(hub);
                 }
                 return Ok(Outcome::default());
             }
             KeyCode::Tab | KeyCode::Char('L') => {
-                hub.tab = hub.tab.cycle(1);
-                hub.cursor = 0;
-                hub.query.clear();
-                self.refresh_file_hub_entries(hub);
+                let next = hub.tab.cycle(1);
+                self.switch_file_hub_tab(hub, next);
                 return Ok(Outcome::default());
             }
             KeyCode::BackTab | KeyCode::Char('H') => {
-                hub.tab = hub.tab.cycle(-1);
-                hub.cursor = 0;
-                hub.query.clear();
-                self.refresh_file_hub_entries(hub);
+                let prev = hub.tab.cycle(-1);
+                self.switch_file_hub_tab(hub, prev);
                 return Ok(Outcome::default());
             }
-            KeyCode::Char(c @ '1'..='4') => {
-                hub.tab = FileHubTab::ALL[(c as u8 - b'1') as usize];
-                hub.cursor = 0;
-                hub.query.clear();
-                self.refresh_file_hub_entries(hub);
+            KeyCode::Char(c @ '1'..='5') => {
+                let next = FileHubTab::ALL[(c as u8 - b'1') as usize];
+                self.switch_file_hub_tab(hub, next);
                 return Ok(Outcome::default());
             }
             KeyCode::Char('F') => {
@@ -539,7 +595,9 @@ impl App {
 
         // 4. Per-tab interaction.
         match hub.tab {
-            FileHubTab::Open | FileHubTab::Import => self.handle_file_hub_browse_key(hub, key),
+            FileHubTab::Quick | FileHubTab::Browse | FileHubTab::Import => {
+                self.handle_file_hub_browse_key(hub, key)
+            }
             FileHubTab::Save => self.handle_file_hub_save_key(hub, key),
             FileHubTab::Export => self.handle_file_hub_export_key(hub, key),
         }
@@ -557,16 +615,17 @@ mod tests {
         let proj_path = dir.path().join("demo.json");
         let mut app = App::new(Project::demo(), proj_path.clone()).unwrap();
 
-        // 1. `gf` opens File Hub on Open/Recent tab; `F` emits native OpenProject dialog request!
+        // 1. `gf` opens File Hub on Quick Open tab; `F` emits native OpenProject dialog request!
         app.press_keys("gf").unwrap();
         assert_eq!(app.input.mode, Mode::FileHub);
+        assert_eq!(app.modal.file_hub().unwrap().tab, FileHubTab::Quick);
         let dlg_out = app
             .handle_key(KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT))
             .unwrap();
         assert_eq!(dlg_out.file_dialog, Some(FileDialogRequest::OpenProject));
 
-        // 2. Switch to Export Audio tab with `4`, toggle Master+Stems, cycle rate to 96k, render!
-        app.press_keys("4").unwrap();
+        // 2. Switch to Export Audio tab with `5`, toggle Master+Stems, cycle rate to 96k, render!
+        app.press_keys("5").unwrap();
         assert_eq!(app.modal.file_hub().unwrap().tab, FileHubTab::Export);
         app.press_keys("<m-l>").unwrap(); // Toggle Master+Stems on row 0 via Tier 3
         assert_eq!(
@@ -683,8 +742,8 @@ mod tests {
         app.execute_command("bpm 133").unwrap();
         assert!(app.dirty(), "project must be dirty before opening FileHub");
 
-        // 1. Selecting corrupt `.preset.json` inside FileHub Open tab returns real error & stays in FileHub.
-        app.open_file_hub(FileHubTab::Open);
+        // 1. Selecting corrupt `.preset.json` inside FileHub Browse tab returns real error & stays in FileHub.
+        app.open_file_hub(FileHubTab::Browse);
         let preset_idx = app
             .modal
             .file_hub()
@@ -692,7 +751,7 @@ mod tests {
             .entries
             .iter()
             .position(|e| e.label == "broken.preset.json")
-            .expect("broken.preset.json listed in Open tab");
+            .expect("broken.preset.json listed in Browse tab");
         app.modal.file_hub_mut().unwrap().cursor = preset_idx;
         let err = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(
@@ -754,8 +813,8 @@ mod tests {
 
         let mut app = App::new(Project::demo(), proj_path).unwrap();
 
-        // 1. Valid `.midi.json` via FileHub Open tab closes FileHub and installs custom profile.
-        app.open_file_hub(FileHubTab::Open);
+        // 1. Valid `.midi.json` via FileHub Browse tab closes FileHub and installs custom profile.
+        app.open_file_hub(FileHubTab::Browse);
         let idx = app
             .modal
             .file_hub()
@@ -763,7 +822,7 @@ mod tests {
             .entries
             .iter()
             .position(|e| e.label == "studio.midi.json")
-            .expect("studio.midi.json listed in Open tab");
+            .expect("studio.midi.json listed in Browse tab");
         app.modal.file_hub_mut().unwrap().cursor = idx;
         app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .expect("valid .midi.json must load cleanly");
@@ -795,14 +854,14 @@ mod tests {
         assert!(app.modal.file_hub().is_none());
 
         // 3. Ambiguously named `.json` containing a valid MidiProfile via Finder also auto-closes FileHub.
-        app.open_file_hub(FileHubTab::Open);
+        app.open_file_hub(FileHubTab::Quick);
         app.apply_file_dialog_result(FileDialogRequest::OpenProject, ambig_midi)
             .expect("valid MidiProfile .json via Finder must load cleanly");
         assert_eq!(app.input.mode, Mode::Normal);
         assert!(app.modal.file_hub().is_none());
 
-        // 4. Corrupt `.midi.json` via FileHub stays in FileHub and surfaces error without clobbering state.
-        app.open_file_hub(FileHubTab::Open);
+        // 4. Corrupt `.midi.json` via FileHub Browse stays in FileHub and surfaces error without clobbering state.
+        app.open_file_hub(FileHubTab::Browse);
         let bad_idx = app
             .modal
             .file_hub()
@@ -810,7 +869,7 @@ mod tests {
             .entries
             .iter()
             .position(|e| e.label == "corrupt.midi.json")
-            .expect("corrupt.midi.json listed in Open tab");
+            .expect("corrupt.midi.json listed in Browse tab");
         app.modal.file_hub_mut().unwrap().cursor = bad_idx;
         let err = app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         assert!(err.is_err(), "corrupt .midi.json must surface error");
@@ -828,5 +887,156 @@ mod tests {
             Some("Studio Rig"),
             "failed load must preserve previously loaded MIDI profile"
         );
+    }
+
+    #[test]
+    fn file_hub_five_tabs_directory_cursor_memory_recent_cap_and_quick_jumps() {
+        let io = Arc::new(MemoryHostIo::new("/virtual/studio"));
+        io.set_home_dir("/virtual/home");
+        io.insert_file("/virtual/home/home-sketch.json", b"{}");
+        io.create_dir("/virtual/studio/alpha");
+        io.create_dir("/virtual/studio/beta/deep");
+        io.insert_file("/virtual/studio/beta/deep/nested.json", b"{}");
+        io.create_dir("/virtual/studio/empty");
+        io.insert_file("/virtual/studio/gamma.json", b"{}");
+
+        // Populate 11 existing recent projects to verify Quick caps unfiltered RECENT at 8
+        // while `/` search matches across all recents + current folder.
+        let mut recent_paths = Vec::new();
+        for idx in 0..11 {
+            let p = PathBuf::from(format!("/virtual/recents/song-{idx:02}.json"));
+            io.insert_file(&p, b"{}");
+            recent_paths.push(p);
+        }
+
+        let mut app = App::new_with_host_io(
+            Project::demo(),
+            PathBuf::from("/virtual/studio/session.json"),
+            Arc::clone(&io) as Arc<dyn HostIo>,
+        )
+        .unwrap();
+        app.config.recent_projects = recent_paths;
+
+        // 1. `gf` opens Quick Open: zero directory clutter, capped at 8 RECENT entries.
+        app.press_keys("gf").unwrap();
+        {
+            let hub = app.modal.file_hub().unwrap();
+            assert_eq!(hub.tab, FileHubTab::Quick);
+            assert_eq!(hub.entries[0].kind, FileEntryKind::NewProject);
+            assert!(
+                hub.entries.iter().all(|e| e.section != "FILES"),
+                "Quick Open must not stack FILES below Recent/Examples"
+            );
+            let recent_count = hub.entries.iter().filter(|e| e.section == "RECENT").count();
+            assert_eq!(
+                recent_count, 8,
+                "Unfiltered Quick Open caps RECENT at 8 entries"
+            );
+        }
+
+        // 2. `/` search on Quick matches older recents (>8) AND current-folder files/dirs!
+        app.press_keys("/song-10<Enter>").unwrap();
+        assert!(app
+            .modal
+            .file_hub()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|e| e.section == "RECENT" && e.label == "song-10.json"));
+        app.press_keys("<Esc>").unwrap(); // clears filter, stays in FileHub
+        assert_eq!(app.input.mode, Mode::FileHub);
+        app.press_keys("/gamma<Enter>").unwrap();
+        assert!(app
+            .modal
+            .file_hub()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|e| e.section == "CURRENT FOLDER" && e.label == "gamma.json"));
+        app.press_keys("<Esc>").unwrap();
+
+        // 3. `2` switches to dedicated Browse tab; cursor lands on first child (`alpha/`), NOT `..`.
+        app.press_keys("2").unwrap();
+        {
+            let hub = app.modal.file_hub().unwrap();
+            assert_eq!(hub.tab, FileHubTab::Browse);
+            assert_eq!(hub.entries[0].kind, FileEntryKind::ParentDir);
+            assert_eq!(hub.cursor, 1, "Browse must land on first real child entry");
+            assert_eq!(hub.entries[hub.cursor].label, "alpha/");
+        }
+
+        // 4. Move to `beta/`, Enter -> lands on `deep/` (index 1); Enter -> lands on `nested.json` (index 1).
+        app.press_keys("j<Enter>").unwrap();
+        {
+            let hub = app.modal.file_hub().unwrap();
+            assert_eq!(hub.dir, PathBuf::from("/virtual/studio/beta"));
+            assert_eq!(hub.cursor, 1);
+            assert_eq!(hub.entries[hub.cursor].label, "deep/");
+        }
+        app.press_keys("<Enter>").unwrap();
+        {
+            let hub = app.modal.file_hub().unwrap();
+            assert_eq!(hub.dir, PathBuf::from("/virtual/studio/beta/deep"));
+            assert_eq!(hub.cursor, 1);
+            assert_eq!(hub.entries[hub.cursor].label, "nested.json");
+        }
+
+        // 5. Backspace restores focus onto `deep/`; Enter on `..` restores focus onto `beta/`!
+        app.press_keys("<Backspace>").unwrap();
+        {
+            let hub = app.modal.file_hub().unwrap();
+            assert_eq!(hub.dir, PathBuf::from("/virtual/studio/beta"));
+            assert_eq!(
+                hub.entries[hub.cursor].label, "deep/",
+                "Backspace must restore cursor onto exited folder"
+            );
+        }
+        app.press_keys("0<Enter>").unwrap(); // index 0 = `.. (Parent Directory)`
+        {
+            let hub = app.modal.file_hub().unwrap();
+            assert_eq!(hub.dir, PathBuf::from("/virtual/studio"));
+            assert_eq!(
+                hub.entries[hub.cursor].label, "beta/",
+                "Enter on .. must restore cursor onto exited folder"
+            );
+        }
+
+        // 6. Entering an empty folder lands cleanly on `..` (index 0); Backspace restores onto `empty/`.
+        app.press_keys("j<Enter>").unwrap(); // `empty/` is right after `beta/`
+        {
+            let hub = app.modal.file_hub().unwrap();
+            assert_eq!(hub.dir, PathBuf::from("/virtual/studio/empty"));
+            assert_eq!(hub.cursor, 0);
+            assert_eq!(hub.entries[0].kind, FileEntryKind::ParentDir);
+        }
+        app.press_keys("<Backspace>").unwrap();
+        assert_eq!(
+            app.modal.file_hub().unwrap().entries[app.modal.file_hub().unwrap().cursor].label,
+            "empty/"
+        );
+
+        // 7. `~` jumps to Home directory and `.` jumps back to project directory.
+        app.press_keys("~").unwrap();
+        {
+            let hub = app.modal.file_hub().unwrap();
+            assert_eq!(hub.dir, PathBuf::from("/virtual/home"));
+            assert_eq!(hub.entries[hub.cursor].label, "home-sketch.json");
+        }
+        app.press_keys(".").unwrap();
+        {
+            let hub = app.modal.file_hub().unwrap();
+            assert_eq!(hub.dir, PathBuf::from("/virtual/studio"));
+            assert_eq!(hub.entries[hub.cursor].label, "alpha/");
+        }
+
+        // 8. Numeric tab shortcuts `1`..=`5` switch cleanly across all 5 tabs.
+        app.press_keys("3").unwrap();
+        assert_eq!(app.modal.file_hub().unwrap().tab, FileHubTab::Save);
+        app.press_keys("4").unwrap();
+        assert_eq!(app.modal.file_hub().unwrap().tab, FileHubTab::Import);
+        app.press_keys("5").unwrap();
+        assert_eq!(app.modal.file_hub().unwrap().tab, FileHubTab::Export);
+        app.press_keys("1").unwrap();
+        assert_eq!(app.modal.file_hub().unwrap().tab, FileHubTab::Quick);
     }
 }

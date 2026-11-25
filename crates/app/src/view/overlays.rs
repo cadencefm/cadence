@@ -698,7 +698,7 @@ impl App {
             .collect();
 
         let (rows, preview) = match hub.tab {
-            crate::FileHubTab::Open | crate::FileHubTab::Import => {
+            crate::FileHubTab::Quick | crate::FileHubTab::Browse | crate::FileHubTab::Import => {
                 let cursor = if hub.entries.is_empty() {
                     0
                 } else {
@@ -726,12 +726,17 @@ impl App {
                     .entries
                     .get(cursor)
                     .and_then(|e| hub.preview_cache.get(&e.path).cloned())
-                    .unwrap_or_else(|| {
-                        if hub.tab == crate::FileHubTab::Import {
+                    .unwrap_or_else(|| match hub.tab {
+                        crate::FileHubTab::Import => {
                             "Select an .rbs song, Instrument preset, or MIDI profile · press F for native Finder"
                                 .into()
-                        } else {
-                            "Select a recent project, example, or file · press F for native Finder"
+                        }
+                        crate::FileHubTab::Browse => {
+                            "Browse folders & projects · Backspace parent · ~ home · . project · F Finder"
+                                .into()
+                        }
+                        _ => {
+                            "Start a new project or open a recent song, demo, or take · 2 Browse · F Finder"
                                 .into()
                         }
                     });

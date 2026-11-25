@@ -989,11 +989,20 @@ impl App {
         push(
             &mut entries,
             "FILE",
-            "Open File Hub (Open Project / Recent)",
-            "Browse recent projects, examples, bundles, and takes",
-            "file hub open project load recent examples",
+            "Open File Hub (Quick Open / Recent)",
+            "Start a blank project or open recent projects, examples, and takes",
+            "file hub open project load recent examples quick takes",
             "gf / Ctrl+Shift+o",
-            PaletteAction::OpenFileHub(FileHubTab::Open),
+            PaletteAction::OpenFileHub(FileHubTab::Quick),
+        );
+        push(
+            &mut entries,
+            "FILE",
+            "Browse Files & Folders",
+            "Navigate directories, portable bundles, projects, and .rbs files on disk",
+            "browse files folders directory filesystem open bundle",
+            "gf → 2 Browse",
+            PaletteAction::OpenFileHub(FileHubTab::Browse),
         );
         push(
             &mut entries,
@@ -1001,7 +1010,7 @@ impl App {
             "Import… (.rbs / Preset / MIDI / Take)",
             "Open File Hub Import tab for ReBirth .rbs, Instrument Presets, MIDI Profiles, or Takes",
             "import rbs preset midi profile take file hub",
-            "gf → Import",
+            "gf → 4 Import",
             PaletteAction::OpenFileHub(FileHubTab::Import),
         );
         push(

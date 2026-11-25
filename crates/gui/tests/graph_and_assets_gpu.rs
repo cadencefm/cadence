@@ -342,7 +342,63 @@ fn gpu_renders_signal_graph_filehub_settings_authoring_and_rack_out_faceplate() 
     common::maybe_save_png(DUMP_ENV, "01-signal-graph-fx-cables.png", 1440, 860, &px1);
     app.press_keys("zz").unwrap();
 
-    // 2. FileHub Import tab showing `PRESET LIBRARY` entries.
+    // 2. FileHub Quick Open, Browse (with directory cursor restoration), and Import tabs (Dark & Light).
+    let light = Theme::studio_light();
+    io.set_home_dir("/virtual/home");
+    io.insert_file(
+        "/virtual/studio/session.json",
+        b"{\"title\":\"Afterglow\",\"bpm\":128.0,\"bars\":16,\"instruments\":[],\"patterns\":[]}",
+    );
+    io.create_dir("/virtual/studio/archive");
+    io.insert_file("/virtual/studio/songs/ambient/cathedral.json", b"{}");
+    app.config.recent_projects = vec!["/virtual/studio/session.json".into()];
+
+    app.open_file_hub(FileHubTab::Quick);
+    let fv_quick = app.frame_view(&snap, status);
+    let px_quick = gpu.render_rgba8(&fv_quick, &dark).unwrap();
+    assert!(distinct_pixel_ratio(&px_quick, dark.surface.canvas) > 0.20);
+    common::maybe_save_png(
+        DUMP_ENV,
+        "02a-file-hub-quick-dark.png",
+        1440,
+        860,
+        &px_quick,
+    );
+
+    // Switch to Browse (`2`), enter `songs/`, then press Backspace -> focus restores onto `songs/`.
+    app.press_keys("2").unwrap();
+    if let Some(OverlayView::FileHub(fh)) = app.frame_view(&snap, status).overlay {
+        if let Some(songs_idx) = fh.rows.iter().position(|r| r.label == "songs/") {
+            let cur = fh.cursor;
+            if songs_idx > cur {
+                app.press_keys(&"j".repeat(songs_idx - cur)).unwrap();
+            } else if cur > songs_idx {
+                app.press_keys(&"k".repeat(cur - songs_idx)).unwrap();
+            }
+            app.press_keys("<Enter><Backspace>").unwrap();
+        }
+    }
+    let fv_browse = app.frame_view(&snap, status);
+    let px_browse_dark = gpu.render_rgba8(&fv_browse, &dark).unwrap();
+    assert!(distinct_pixel_ratio(&px_browse_dark, dark.surface.canvas) > 0.20);
+    common::maybe_save_png(
+        DUMP_ENV,
+        "02b-file-hub-browse-dark.png",
+        1440,
+        860,
+        &px_browse_dark,
+    );
+    let px_browse_light = gpu.render_rgba8(&fv_browse, &light).unwrap();
+    assert!(distinct_pixel_ratio(&px_browse_light, light.surface.canvas) > 0.20);
+    common::maybe_save_png(
+        DUMP_ENV,
+        "02c-file-hub-browse-light.png",
+        1440,
+        860,
+        &px_browse_light,
+    );
+    app.press_keys("<Esc>").unwrap();
+
     app.open_file_hub(FileHubTab::Import);
     let fv2 = app.frame_view(&snap, status);
     let px2 = gpu.render_rgba8(&fv2, &dark).unwrap();
