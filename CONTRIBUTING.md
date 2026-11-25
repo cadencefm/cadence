@@ -20,7 +20,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the full 6-crate map. Changes must re
   - Always compose `cadence_core::dsp::*` — never duplicate DSP math inside `cadence-engine`.
   - **Real-time safety:** Zero heap allocations, zero locks (`Mutex`/`RwLock`), zero unbounded channels, and zero `.unwrap()` / `.expect()` / `panic!` on audio-thread paths.
   - **Unclipped 32-bit float signal chain:** Preserve internal float headroom (`hot` when `> 1.0`), fire `clipped` strictly on Master post-fader `> 1.0` or non-finite samples, and clamp `[-1.0, 1.0]` exclusively at the final DAC/WAV output boundary.
-  - **Debug stack safety:** Heap-box large engine structs (`MixerEngine`, `Engine`, `Shared`, `Box<ModularVoice>` slots, delay pools) so debug builds never overflow test stacks.
+  - **Debug stack safety:** Heap-box large engine structs (`MixerEngine`, `MixerBlockScratch`, `VoiceBlockOut`, `Engine`, `Shared`, `Box<ModularVoice>` slots, and `Box<ActiveEffect>` instances) so debug builds never overflow test stacks.
 - **`crates/app` (`cadence-app`):** Pure zero-I/O modeless session controller.
   - `Cargo.toml` depends **only** on `anyhow`, `cadence-core`, `cadence-formats` (feature-gated `rbs`), `serde`, and `serde_json` (plus dev-deps). Route all external I/O through `HostIo` (`crates/app/src/host_io.rs`).
   - Route `ParamAddress` resolution, parsing, formatting, and nudging through `crates/app/src/param_ops.rs` and live modulation/Macro resolution through `crates/app/src/view/live_params.rs`.
@@ -62,7 +62,7 @@ cargo test -p cadence-gui --tests
 
 Several GPU integration tests in `crates/gui/tests/` also support optional screenshot dump environment variables (for example, `CADENCE_DUMP_METERING_DIR=/tmp/cadence-gpu-check cargo test -p cadence-gui --test float_metering_gpu`) so you can inspect rendered Metal/Vulkan frames directly without launching an interactive window.
 
-Record verified milestone evidence in [docs/verification.md](docs/verification.md) rather than repeating test logs across user-facing docs.
+Keep [docs/verification.md](docs/verification.md) aligned with the automated test layers and gates rather than duplicating per-song numeric render logs across docs.
 
 ## Examples, Presets & Docs
 

@@ -8,10 +8,10 @@ This chapter gets you listening, navigating decks, switching themes, controlling
 
 ## 1. Launch a Showcase Project
 
-Start Cadence with the built-in **Afterglow 3.0** demo or open any showcase directly:
+Start Cadence with the built-in **Afterglow** demo or open any showcase directly:
 
 ```sh
-# Built-in demo (Afterglow 3.0)
+# Built-in demo (Afterglow)
 cargo run --release
 
 # Or open an explicit showcase project
@@ -21,7 +21,7 @@ cargo run --release -- --project examples/iron-circuit/project.json
 
 Press **`Space`** to start playback and **`Space`** again to pause. Press **`Home`** (or **`ts`**) to stop and return to bar 1.
 
-![Afterglow 3.0 Arrange workspace with Bank launchpad and 32-bit float Output monitor](../screenshots/01-arrange.png)
+![Afterglow Arrange workspace with Bank launchpad and 32-bit float Output monitor](../screenshots/01-arrange.png)
 
 ### Discover Everything Without Leaving the App
 - Press **`:`** or **`Ctrl+Shift+p`** anywhere to open the **Fuzzy Action Palette**—search any deck, layout, workflow, FX, theme, section, pattern, or instrument by name (`↑`/`↓`/`Tab` select, `Enter` run, `Esc` close). Power users can also type any Ex command directly (e.g., `bpm 132`, `derive Moving add Motif Harmony`) and run it from the live top **`▶ Run command:`** slot!
@@ -30,9 +30,9 @@ Press **`Space`** to start playback and **`Space`** again to pause. Press **`Hom
 - Press **`gP`** (or **`Ctrl+Shift+i`**) to open **Song Properties**—edit song Title, Tempo (BPM), Key Root, Scale (all **13** named scales), Length (Bars), End Rule, and Live Timing on the normal `u` undo stack without memorizing `:key` or `:bpm` commands.
 - Press **`g,`** (or **`Ctrl+,`**) to configure **Global Settings**—focus **GPU Theme** with `j`/`k`, cycle live between **Cadence Dark**, **Midnight Neon**, and **Studio Light** with **`Alt+h`/`l`** or **`,`/`.`**, and press **`Ctrl+s`** to save (see [Chapter 6 · Audio Devices, Live Recording & Hardware MIDI](06-devices-audio-and-midi.md#4-global-settings--gpu-themes-g--ctrl) for all settings and themes).
 
-![Afterglow 3.0 Fuzzy Action Palette filtering effects, patterns, and modulations over Arrange](../screenshots/16-action-palette.png)
+![Afterglow Fuzzy Action Palette filtering effects, patterns, and modulations over Arrange](../screenshots/16-action-palette.png)
 
-![Afterglow 3.0 rendered in the Studio Light GPU theme](../screenshots/10-studio-light.png)
+![Afterglow rendered in the Studio Light GPU theme](../screenshots/10-studio-light.png)
 
 ---
 

@@ -28,14 +28,14 @@ Once open:
 
 ## Musical Structure (6 Sections × 8 Bars)
 
-| Section | Bars | Key | RMS | Musical Arc |
-| --- | --- | --- | --- | --- |
-| **1. Boot** | 1–8 | `⌥1` | `-16.67 dBFS` | Syncopated TR-808 electro break + dub-echoed brass chord stab + bar-5 Fold Bass teaser |
-| **2. Circuit** | 9–16 | `⌥2` | `-12.52 dBFS` | TR-909 crash, swung hats & snare lock in + funky `Drive(Fold)` bassline + dark 303 bar-13 entry |
-| **3. Acid Line** | 17–24 | `⌥3` | `-11.96 dBFS` | Resonant `Acid 303` lead (native `vel ≥ 0.95` accents + mono slides) + `FilterEnv`-gated electro pad |
-| **4. Overload** | 25–32 | `⌥4` | `-12.04 dBFS` | Peak electro climax: 808 Euclidean cowbell, 909 Euclidean ride, screaming 303, dub turnaround throws |
-| **5. Voltage Drop** | 33–40 | `⌥5` | `-18.51 dBFS` | Stripped hypnotic breakdown: tuned 808 congas & cowbell, blooming `FilterEnv` pad, 303 riser & 909 snare roll |
-| **6. Surge & Out** | 41–48 | `⌥6` | `-13.98 dBFS` | Explosive final groove return → bar-47 impact chord → clean dub/room decay (`-59.18 dBFS` tail) |
+| Section | Bars | Key | Musical Arc |
+| --- | --- | --- | --- |
+| **1. Boot** | 1–8 | `⌥1` | Syncopated TR-808 electro break + dub-echoed brass chord stab + bar-5 Fold Bass teaser |
+| **2. Circuit** | 9–16 | `⌥2` | TR-909 crash, swung hats & snare lock in + funky `Drive(Fold)` bassline + dark 303 bar-13 entry |
+| **3. Acid Line** | 17–24 | `⌥3` | Resonant `Acid 303` lead (native `vel ≥ 0.95` accents + mono slides) + `FilterEnv`-gated electro pad |
+| **4. Overload** | 25–32 | `⌥4` | Peak electro climax: 808 Euclidean cowbell, 909 Euclidean ride, screaming 303, dub turnaround throws |
+| **5. Voltage Drop** | 33–40 | `⌥5` | Stripped hypnotic breakdown: tuned 808 congas & cowbell, blooming `FilterEnv` pad, 303 riser & 909 snare roll |
+| **6. Surge & Out** | 41–48 | `⌥6` | Explosive final groove return → bar-47 impact chord → clean dub/room decay |
 
 ## Modern Cadence Capabilities Showcased
 
@@ -58,13 +58,6 @@ Once open:
   - `M7 Wide Field` — Chorus width/mix, counter-balanced equal-power channel pan (`Electro Stab` / `Gate Pad`) & room width
   - `M8 Bus Glue` — Percussion comp mix, tape drive, **inverted** Rhythm comp threshold & makeup gain
 - **Retained Pattern Algebra:** Single 4-bar `Circuit Harmony` (`Am → F → G → E`) drives `Fold Bass` (`AddDegrees` + `RangeFold(33..45)` + `Mask`), `Electro Stab` (`AddDegrees` + `Mask`), and `Gate Pad` (`AddDegrees`), alongside `Mini` swung congas, `Euclidean(5, 16)` cowbell, `Euclidean(7, 16)` ride, `Ratchet` snare fills/risers, `Swing`, `Every`, `Stack`, `Shape`, `SeededValues`, and `Ramp` automation curves.
-
-## Measured 48 kHz Mastering Specs
-
-- **True Output Peak:** `-0.80 dBFS` (`[0.9120, 0.9120]`, `0` full-scale clips, `hot: false` & `clipped: false` on every channel & Master)
-- **Integrated RMS (L / R):** `-13.62 / -13.72 dBFS` (`0.10 dB` stereo balance)
-- **DC Offset:** `0.000014`
-- **Final Tail Peak (last 0.5 s):** `-59.18 dBFS`
 
 ## Explore Further
 

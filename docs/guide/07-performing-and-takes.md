@@ -43,7 +43,7 @@ Press **`gb`** (`Ctrl+b`) to focus the **Bank** deck (`v` toggles between **Part
 ### Modal Jam Mode (`gj` / `Ctrl+Shift+j`) & the Universal `Alt` Layer
 Press **`gj`** or **`Ctrl+Shift+j`** to toggle modal **Jam Mode**—framed by a glowing electric **violet** deck border and floating performance HUD (`Esc` or `Ctrl+Shift+j` leaves Jam and releases held notes).
 
-![Afterglow 3.0 Live Jam Mode HUD with keyboard layout and Bank Launchpad](../screenshots/09-jam-perform.png)
+![Afterglow Live Jam Mode HUD with keyboard layout and Bank Launchpad](../screenshots/09-jam-perform.png)
 
 - **`1–0` (number row):** Jump to Sections 1–10 in the current bank (looping the section automatically if loop is enabled!).
 - **`q w e r t y u i o p` (lane row):** Open a **Lane Layer** for Lanes 1–10:

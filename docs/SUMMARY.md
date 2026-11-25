@@ -24,4 +24,4 @@
 # Engineering
 
 - [Design Decisions](design-decisions.md)
-- [Verification Log](verification.md)
+- [Verification & Testing](verification.md)

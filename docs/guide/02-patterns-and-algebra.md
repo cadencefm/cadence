@@ -114,7 +114,7 @@ Open any pattern in the **Pattern deck (`gp` / `Ctrl+p`)**. Pattern editing foll
 
 Cadence includes a pure, deterministic Strudel/Tidal-inspired mini-notation engine with true fractional sub-step timing—every triplet, quintuplet, Euclidean hit, and ratchet renders directly onto the Pattern roll and audio engine with zero rounding loss.
 
-![Afterglow 3.0 Bell Mini pattern showing inline :mini code bar and fractional sub-step piano roll](../screenshots/08-pattern-mini.png)
+![Afterglow Bell Mini pattern showing inline :mini code bar and fractional sub-step piano roll](../screenshots/08-pattern-mini.png)
 
 ### Dedicated Live-Validated Mini-Notation Editor (`Enter` on `Mini`)
 - **Open editor:** Select any `Mini` pattern in `gp` and press **`Enter`** (or run **Edit Mini-Notation** from the `:` / `Ctrl+Shift+p` Action Palette) to launch the dedicated **`MINI EDITOR`** modal.
@@ -143,7 +143,7 @@ Modifiers chain cleanly in any order—for instance, `c4(3,8)*2?0.8!` distribute
 
 ### Real Recipes from the Showcase Projects
 
-- **Afterglow 3.0 (`Bell Mini`, 16 steps)** — syncopated sub-step grace notes and a 32nd-note double tap (`eb5*2`):
+- **Afterglow (`Bell Mini`, 16 steps)** — syncopated sub-step grace notes and a 32nd-note double tap (`eb5*2`):
   ```text
   :mini "Bell Mini" 16 ~ c5 ~ [eb5 f5] ~ ~ [g5 f5] eb5 ~ c5 ~ [bb4 c5] eb5*2 ~ [f5 g5] ~
   ```

@@ -25,12 +25,12 @@ Once open:
 
 ## Musical Structure (4 Sections × 8 Bars)
 
-| Section | Bars | Key | 48 kHz RMS / Peak | Musical Arc |
-| --- | --- | --- | --- | --- |
-| **1. Nave** | 1–8 | `⌥1` | `-16.21 / -1.72 dBFS` | Chorused D-Dorian 9th pad opens inside the stone vault; mono legato Cello drone & 7×11 Glass Marimba enter at Bar 5 |
-| **2. Refraction** | 9–16 | `⌥2` | `-13.87 / -1.50 dBFS` | Celesta-voiced `Crystal Chime` Mini bells enter on the right; `Euclidean(5,16)` Soft Pulse & swung Micro Dust arrive at Bar 13 |
-| **3. Resonance** | 17–24 | `⌥3` | `-13.69 / -1.50 dBFS` | `Glass 5/11` shifts into cascading `Triplet Rain` (`3/2` random arp); `M1 Vault Bloom` peaks with breathing 5/16 delay swells |
-| **4. Stillness** | 25–32 | `⌥4` | `-15.15 / -1.57 dBFS` | Layers recede gracefully into Pad + Cello; `Pad -> Cathedral` blooms on Bar 31 and Bar 32 dissolves naturally into the 5.8s reverb tail |
+| Section | Bars | Key | Musical Arc |
+| --- | --- | --- | --- |
+| **1. Nave** | 1–8 | `⌥1` | Chorused D-Dorian 9th pad opens inside the stone vault; mono legato Cello drone & 7×11 Glass Marimba enter at Bar 5 |
+| **2. Refraction** | 9–16 | `⌥2` | Celesta-voiced `Crystal Chime` Mini bells enter on the right; `Euclidean(5,16)` Soft Pulse & swung Micro Dust arrive at Bar 13 |
+| **3. Resonance** | 17–24 | `⌥3` | `Glass 5/11` shifts into cascading `Triplet Rain` (`3/2` random arp); `M1 Vault Bloom` peaks with breathing 5/16 delay swells |
+| **4. Stillness** | 25–32 | `⌥4` | Layers recede gracefully into Pad + Cello; `Pad -> Cathedral` blooms on Bar 31 and Bar 32 dissolves naturally into the 5.8s reverb tail |
 
 ## Playable Macros & Automated Spatial Sends
 
@@ -53,8 +53,7 @@ Once open:
 ## Studio Mix & Mastering Chain
 
 - **Spatial Returns:** `Tap` (`5/16` ping-pong `Delay` + `260 Hz` HPF / gentle `3.2 kHz` & high-shelf taming) and `Cathedral` (`5.8s` `Vault Verb`, `3200 Hz` damping + `190 Hz` HPF).
-- **Master Bus (4 Inserts):** `Tape Warmth` (`Drive(Tape)` whisper saturation) → `Cathedral Glue` (`Compressor`, `2.31 dB` max / `1.36 dB` avg GR) → `Master Tone` (`Eq`, `26 Hz` HPF, gentle low warmth & `3.2 kHz` silk dip) → `Master Limiter` (`-1.5 dBFS` ceiling, `1.71 dB` max / `0.04 dB` avg GR).
-- **Verified 48 kHz Render Metrics:** Peak **`-1.50 dBFS`** (`L/R` symmetry `< 0.001 dB`), RMS **`-14.62 dBFS`** (`L/R` balance `0.17 dB`), ending tail peak **`-40.77 dBFS`**, **`0` full-scale clips**, **`0` hot/clipped channels**.
+- **Master Bus (4 Inserts):** `Tape Warmth` (`Drive(Tape)` whisper saturation) → `Cathedral Glue` (`Compressor`) → `Master Tone` (`Eq`, `26 Hz` HPF, gentle low warmth & `3.2 kHz` silk dip) → `Master Limiter` (`-1.5 dBFS` ceiling). Run `--render-report` or `build-glass-cathedral -- --analyze` to inspect live section dynamics and gain reduction.
 
 ## Explore Further
 

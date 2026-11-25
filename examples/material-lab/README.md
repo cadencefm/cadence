@@ -46,6 +46,4 @@ Each session runs headlessly with `--key-script FILE` (add `--project examples/m
 | [deck.keys.jsonl](deck.keys.jsonl) | Pins `Lead` beside source material and exercises Home/end navigation |
 | [performance.keys.jsonl](performance.keys.jsonl) | Opens the evaluated overview and piano roll, follows a source through provenance, edits and undoes the local ending |
 
-The unnormalized 48 kHz render peaks at `-1.82 dBFS` (`0` full-scale samples, zero hot or clipped buses) with `-15.50 dBFS` integrated RMS and a digital-silent final half-second (`-240 dBFS`).
-
 Original notes, patches, arrangement, and scripts are available under the repository's MIT license or CC0 1.0, at your choice; see [LICENSE.md](LICENSE.md).

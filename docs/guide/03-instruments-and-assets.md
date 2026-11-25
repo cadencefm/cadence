@@ -57,7 +57,7 @@ The **`Panel`** tab gives you instant studio ergonomics without diving into cabl
 - **Live GPU Visualizers (`12` Dedicated Painters):** `Quick` shows `PinnedOverview` (oscillator waveform, live modulated filter response curve, primary envelope contour, and live Dry Scope together); selecting any individual module pill switches to its dedicated real-time visualizer (VCO waveform + unison/FM state, Sampler 512-bin peak waveform + trim/loop markers, Noise filter tilt, Multi-Burst Env contour, LFO wave, Filter response + live mod band, Drive transfer curve, LoFi quantized staircase, Resonator 32-mode physical spectrum, VCA/RingMod transfer, or Out stereo spread/scope).
 - **Direct Panel Workflows:** **`a`** opens the **Add Module** picker (`:mod add`), **`x`** removes the focused module (the singular mandatory `Out` module is always protected), **`p`** pins or unpins the focused control on the `Quick` faceplate (`:pin` / `:unpin`), and **`Alt+h`/`l`** / **`,`/`.`** / **`Enter`** sculpt values directly.
 
-![Afterglow 3.0 Anthem Lead Eurorack Quick Panel with live visualizers and modulated cutoff sweep](../screenshots/05-rack-panel.png)
+![Afterglow Anthem Lead Eurorack Quick Panel with live visualizers and modulated cutoff sweep](../screenshots/05-rack-panel.png)
 
 ### All 11 Orthogonal Eurorack Modules (`1..=24` Modules per Zone)
 

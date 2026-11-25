@@ -69,7 +69,7 @@ Press **`g<letter>`** or unshifted **`Ctrl+<letter>`** to jump straight to any o
 ## Showcase Projects & Technical Specs
 
 ### Showcase Projects (100% MIT)
-- [**Afterglow 3.0**](https://github.com/cadencefm/cadence/blob/main/examples/demo/README.md) (`examples/demo/project.json`) — 64-bar modern EDM centerpiece featuring 8 Synth Racks, the 9-zone `EDM Kit` Rack, `Bell Mini` inline `:mini`, 6 automated Project Macros, and studio mastering.
+- [**Afterglow**](https://github.com/cadencefm/cadence/blob/main/examples/demo/README.md) (`examples/demo/project.json`) — 64-bar modern EDM centerpiece featuring 8 Synth Racks, the 9-zone `EDM Kit` Rack, `Bell Mini` inline `:mini`, 6 automated Project Macros, and studio mastering.
 - [**Iron Circuit**](https://github.com/cadencefm/cadence/blob/main/examples/iron-circuit/README.md) (`examples/iron-circuit/project.json`) — 48-bar Acid Electro flagship with `TR-808` & `TR-909` multi-zone Rack kits, Detroit chord `Sampler` Rack, `AcidLowPass` 303, `Fold`/`HardClip` Drive, rhythmic `Filter` PCF, nested `Percussion → Rhythm` groups, and all 8 Macros.
 - [**Glass Cathedral**](https://github.com/cadencefm/cadence/blob/main/examples/glass-cathedral/README.md) (`examples/glass-cathedral/project.json`) — 32-bar generative ambient/IDM showcase with polymetric clocks, `Cathedral Bells` `:mini`, automated Send swells, and 4 Ambient Macros.
 - [**Fivefold Live**](https://github.com/cadencefm/cadence/blob/main/examples/fivefold-live/README.md) (`examples/fivefold-live/project.json`) — 60-bar live performance set with a replayable `.keys.jsonl` performance script and deterministic `.take.jsonl` recording.
@@ -81,4 +81,4 @@ Press **`g<letter>`** or unshifted **`Ctrl+<letter>`** to jump straight to any o
 - [Material & Timing Spec](../spec/material-and-timing.md)
 - [DSP & Audio Engine Spec](../spec/dsp-and-audio-engine.md)
 - [Protocols & CLI Spec](../spec/protocols.md)
-- [Design Decisions](../design-decisions.md) · [Verification Suite](../verification.md)
+- [Design Decisions](../design-decisions.md) · [Verification & Testing](../verification.md)

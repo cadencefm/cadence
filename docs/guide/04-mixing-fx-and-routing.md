@@ -10,7 +10,7 @@ Cadence's audio engine runs an **unclipped 32-bit float signal chain** with zero
 
 Press **`gm`** (or **`Ctrl+m`**, or **`z4`** for the Mix layout) to open the Mixer Console, and **`go`** (`Ctrl+o`) to toggle the bottom Output oscilloscope and peak monitor.
 
-![Afterglow 3.0 32-bit float Mixer Console with 0 dB hairline, +6 dB headroom, and gain reduction meters](../screenshots/03-mixer.png)
+![Afterglow 32-bit float Mixer Console with 0 dB hairline, +6 dB headroom, and gain reduction meters](../screenshots/03-mixer.png)
 
 ### How Metering Works
 - **Scale & `0 dB` Hairline:** Every strip meters **`-60..+6 dBFS`** with a crisp **`0 dB` hairline** reference.

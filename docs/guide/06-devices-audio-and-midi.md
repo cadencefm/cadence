@@ -10,7 +10,7 @@ Cadence puts your audio interface, live 24-bit audio recording, hardware MIDI co
 
 Press **`gd`** or **`Ctrl+d`** (or run **`:audio`** to open directly on the `Audio` tab) to configure hardware audio output, input capture, latency, and engine health without restarting Cadence. Switch between the **`Audio`** and **`MIDI`** tabs anytime with **`H`/`L`**.
 
-![Afterglow 3.0 Devices Audio tab showing audio interface, live stereo input meters, CPU load, and engine recovery controls](../screenshots/12-devices-audio.png)
+![Afterglow Devices Audio tab showing audio interface, live stereo input meters, CPU load, and engine recovery controls](../screenshots/12-devices-audio.png)
 
 ### Live Engine Health & Active Stream Panel
 The right-hand health panel monitors your real-time audio callback continuously:
@@ -76,7 +76,7 @@ cargo run --release -- --project examples/demo/project.json \
   --midi-in "MiniLab" --midi-out "MiniLab"
 ```
 
-![Afterglow 3.0 Devices MIDI tab showing Arturia MiniLab 3 DAW profile, RGB performance pads, Focused Smart Macros, live MIDI monitor, and mappings](../screenshots/13-devices-midi.png)
+![Afterglow Devices MIDI tab showing Arturia MiniLab 3 DAW profile, RGB performance pads, Focused Smart Macros, live MIDI monitor, and mappings](../screenshots/13-devices-midi.png)
 
 The **`MIDI`** tab presents **Performance Pads** (live RGB mirrors), **Project + Smart Macros (`Knobs 1–8`)**, vertical **`DEVICE & PROFILE`** rows (`IN`, `OUT`, `Profile`, `Pads`, `Pickup`) above **`MAPPINGS`**, and a **`LIVE MIDI MONITOR`** log on the right:
 
@@ -121,7 +121,7 @@ Press **`R`** (or `:midi rec`, or your hardware **Record** MMC button) to arm re
 
 Press **`g,`** (or **`Ctrl+,`**, or run **`:settings`**) to open **Settings & Live Timing**. Navigate rows with **`j`/`k`** (`w`/`b` jump groups), adjust directly with **`Alt+h`/`l`** or **`,`/`.`**, press **`Enter`** for exact values or toggles, **`Alt+Backspace`** to reset a row, **`r`** to restore defaults, and **`Ctrl+s`** to write your user `config.json`.
 
-![Afterglow 3.0 Settings overlay rendered in the Midnight Neon GPU theme](../screenshots/17-settings-neon.png)
+![Afterglow Settings overlay rendered in the Midnight Neon GPU theme](../screenshots/17-settings-neon.png)
 
 ### Built-In Semantic GPU Themes
 Switch **`GPU Theme`** live with zero restart—every deck, Bezier cable, 32-bit float meter, oscilloscope, visualizer, and HUD updates on the very next frame (zero hardcoded colors exist outside the theme palette):
