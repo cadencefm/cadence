@@ -4305,3 +4305,149 @@ fn kitchen_sink_sleeping_matches_always_awake_across_audio_meters_and_gr() {
     }
     let _ = max_err;
 }
+
+#[test]
+fn runtime_replace_project_coalesces_rapid_effect_adds_kind_swaps_and_boundary_reloads() {
+    use cadence_core::dsp::limiter_lookahead_frames;
+    use cadence_core::mixer::{
+        ChorusPatch, CompressorPatch, DelayPatch, DrivePatch, EffectKind, EqPatch, FilterPatch,
+        LimiterPatch, ReverbPatch,
+    };
+
+    let base_proj = rack_project(vec![note(1); 16], RackPatch::default_synth());
+    let base_score = base_proj.compile().unwrap();
+    let rt = AudioRuntime::start(base_score, true).unwrap();
+    let sr = rt.sample_rate();
+    assert_eq!(rt.snapshot().health.pdc_latency_frames, 0);
+    assert!(rt.transport(TransportIntent::Play { playing: true }));
+    wait_until(|| rt.snapshot().peak > 0.02);
+
+    // Rapidly publish two non-boundary edits back-to-back so publish_merged coalesces them:
+    // Edit 1 adds Delay(10) + Limiter(11); Edit 2 swaps 10 -> Chorus(10), keeps Limiter(11),
+    // and adds Reverb(12) + Compressor(13).
+    let mut edit1 = base_proj.clone();
+    edit1.mixer.channels[0].inserts = vec![
+        EffectDevice {
+            id: 10,
+            name: "Delay".into(),
+            bypassed: false,
+            kind: EffectKind::Delay(DelayPatch::default()),
+        },
+        EffectDevice {
+            id: 11,
+            name: "Lim".into(),
+            bypassed: false,
+            kind: EffectKind::Limiter(LimiterPatch {
+                ceiling_db: -6.0,
+                input_drive_db: 9.0,
+                release_ms: 40.0,
+                mix: 1.0,
+            }),
+        },
+    ];
+    let mut edit2 = edit1.clone();
+    edit2.mixer.channels[0].inserts[0] = EffectDevice {
+        id: 10,
+        name: "Chorus".into(),
+        bypassed: false,
+        kind: EffectKind::Chorus(ChorusPatch::default()),
+    };
+    edit2.mixer.channels[0].inserts.push(EffectDevice {
+        id: 12,
+        name: "Verb".into(),
+        bypassed: false,
+        kind: EffectKind::Reverb(ReverbPatch::default()),
+    });
+    edit2.mixer.master.inserts.push(EffectDevice {
+        id: 13,
+        name: "Comp".into(),
+        bypassed: false,
+        kind: EffectKind::Compressor(CompressorPatch {
+            threshold_db: -24.0,
+            ratio: 6.0,
+            ..CompressorPatch::default()
+        }),
+    });
+
+    rt.replace_project_with_assets(edit1.compile().unwrap(), None, false)
+        .unwrap();
+    rt.replace_project_with_assets(edit2.compile().unwrap(), None, false)
+        .unwrap();
+
+    let expected_pdc = limiter_lookahead_frames(f64::from(sr)) as u32;
+    wait_until(|| {
+        let snap = rt.snapshot();
+        snap.health.pdc_latency_frames == expected_pdc
+            && snap.effect_meters.iter().any(|m| m.device_id == 11)
+            && snap.effect_meters.iter().any(|m| m.device_id == 13)
+            && snap.peak > 0.01
+    });
+
+    // Rapid boundary project reload followed immediately by a non-boundary knob edit while
+    // the boundary load may still be queued: must carry forward both sample bank and fresh FX!
+    let mut reload_proj = rack_project(vec![note(1); 16], RackPatch::default_sampler());
+    {
+        let smp = sampler_mut(&mut reload_proj.instruments[0].rack);
+        smp.path = Some("./test.wav".into());
+        smp.sample_start = 0;
+        smp.sample_end = 4_800;
+        smp.loop_mode = SampleLoopMode::Forward;
+        smp.loop_start = 100;
+        smp.loop_end = 4_400;
+        smp.one_shot = false;
+    }
+    reload_proj.mixer.channels[0].inserts = vec![
+        EffectDevice {
+            id: 20,
+            name: "Eq".into(),
+            bypassed: false,
+            kind: EffectKind::Eq(EqPatch {
+                hpf_hz: 80.0,
+                high_db: 2.0,
+                ..EqPatch::default()
+            }),
+        },
+        EffectDevice {
+            id: 21,
+            name: "Drive".into(),
+            bypassed: false,
+            kind: EffectKind::Drive(DrivePatch::default()),
+        },
+        EffectDevice {
+            id: 22,
+            name: "Filter".into(),
+            bypassed: false,
+            kind: EffectKind::Filter(FilterPatch::default()),
+        },
+    ];
+    reload_proj.mixer.master.inserts = vec![EffectDevice {
+        id: 23,
+        name: "MasterLim".into(),
+        bypassed: false,
+        kind: EffectKind::Limiter(LimiterPatch {
+            ceiling_db: -3.0,
+            input_drive_db: 6.0,
+            release_ms: 40.0,
+            mix: 1.0,
+        }),
+    }];
+    let mut reload_tweak = reload_proj.clone();
+    reload_tweak.bpm = 132.0;
+
+    let sample = synthetic_sample(4_800, sr, 440.0);
+    let bank = vec![(module_sample_key(1, 1, 1), sample)];
+
+    rt.replace_project_with_assets(reload_proj.compile().unwrap(), Some(bank), true)
+        .unwrap();
+    rt.replace_project_with_assets(reload_tweak.compile().unwrap(), None, false)
+        .unwrap();
+
+    wait_until(|| {
+        let snap = rt.snapshot();
+        snap.health.pdc_latency_frames == expected_pdc
+            && snap.effect_meters.iter().any(|m| m.device_id == 23)
+            && !snap.effect_meters.iter().any(|m| m.device_id == 11)
+            && snap.peak > 0.01
+    });
+    assert!(rt.snapshot().peak.is_finite());
+}

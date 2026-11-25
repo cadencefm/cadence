@@ -416,13 +416,13 @@ fn limiter_insert_processes_zero_alloc_enforces_ceiling_and_reports_gr_meter() {
 }
 
 #[test]
-fn lazy_delay_allocation_topological_groups_muted_return_solo_preview_and_pdc() {
-    // 1. Zero Delay devices -> 0 allocated Delay buffers.
+fn prepared_effect_handoff_topological_groups_muted_return_solo_preview_and_pdc() {
+    // 1. Empty project -> 0 allocated effect instances (zero idle FX memory across all 24 slots).
     let mut score = stereo_score();
     let mut mix = MixerEngine::new(&score, RATE);
-    assert_eq!(mix.allocated_delay_count(), 0);
+    assert_eq!(mix.allocated_effect_count(), 0);
 
-    // Off-RT delay handoff installs buffer with ZERO heap operations on RT thread!
+    // Off-RT effect handoff installs a prepared Delay with ZERO heap operations on the RT thread!
     let mut delay = EffectDevice::delay(99);
     delay.kind = EffectKind::Delay(DelayPatch {
         steps: 1.0,
@@ -431,15 +431,17 @@ fn lazy_delay_allocation_topological_groups_muted_return_solo_preview_and_pdc() 
         ..DelayPatch::default()
     });
     score.mixer.channel_mut(4).unwrap().inserts.push(delay);
-    let mut incoming = [Delay::new(RATE)];
+    let mut prepared = prepare_effects_for_score(&score, RATE);
+    let mut retired = Vec::with_capacity(MAX_EFFECT_DEVICES);
     assert_no_heap_operations(|| {
-        mix.install_delay_buffers(&mut incoming);
-        mix.adopt(&score, false);
+        mix.adopt_prepared(&score, false, &mut prepared, &mut retired);
         mix.update_controls(&score, 0.0, 0.0);
     });
-    assert_eq!(mix.allocated_delay_count(), 1);
-    // Drop the unallocated shell off-RT after the zero-alloc block.
-    drop(incoming);
+    assert_eq!(mix.allocated_effect_count(), 1);
+    assert!(retired.is_empty());
+    // Drop the emptied Vec off-RT after the zero-alloc block.
+    drop(prepared);
+    drop(retired);
 
     // 2. Reverse-ordered chained groups (Group B before Group A: Audio -> A -> B -> Master).
     let mut chained = stereo_score();
@@ -1153,10 +1155,11 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
         .inserts
         .push(EffectDevice::delay(device_id));
     let mut mix = MixerEngine::new(&base, RATE);
-    assert_eq!(mix.allocated_delay_count(), 1);
+    assert_eq!(mix.allocated_effect_count(), 1);
 
-    // Pre-build one ScoreWindow per EffectKindTag off the RT thread.
-    let scores: Vec<ScoreWindow> = EffectKindTag::ALL
+    // Pre-build one ScoreWindow, one PreparedEffect, and one pre-sized retirement queue
+    // per EffectKindTag strictly off the RT thread.
+    let mut swaps: Vec<(ScoreWindow, Vec<PreparedEffect>, Vec<ActiveEffect>)> = EffectKindTag::ALL
         .iter()
         .map(|&tag| {
             let mut s = stereo_score();
@@ -1165,7 +1168,8 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
                 .unwrap()
                 .inserts
                 .push(tag.default_device(device_id));
-            s
+            let prep = prepare_effects_for_score(&s, RATE);
+            (s, prep, Vec::with_capacity(MAX_EFFECT_DEVICES))
         })
         .collect();
 
@@ -1173,8 +1177,8 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
     sources[0] = [0.4, -0.3];
 
     assert_no_heap_operations(|| {
-        for score in &scores {
-            mix.adopt(score, false);
+        for (score, prepared, retired) in &mut swaps {
+            mix.adopt_prepared(score, false, prepared, retired);
             mix.update_controls(score, 0.0, 0.0);
             for _ in 0..128 {
                 let y = mix.process(&sources, [0.0; 2], [0.0; 2]);
@@ -1182,6 +1186,12 @@ fn adopt_effect_kind_hot_swap_across_all_eight_effects_performs_zero_heap_ops() 
             }
         }
     });
+    assert_eq!(mix.allocated_effect_count(), 1);
+    // Every hot-swap retired the previous effect off-RT rather than dropping on the RT thread.
+    let total_retired: usize = swaps.iter().map(|(_, _, r)| r.len()).sum();
+    assert_eq!(total_retired, EffectKindTag::ALL.len() - 1);
+    // Drop retired effects off-RT.
+    drop(swaps);
 }
 
 #[test]

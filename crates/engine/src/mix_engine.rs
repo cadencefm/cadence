@@ -9,8 +9,7 @@ use cadence_core::dsp::{
 };
 use cadence_core::mixer::{
     ChannelKind, ChannelParam, ChannelRef, EffectKind, EffectKindTag, MixerParamTarget,
-    MAX_CHANNELS, MAX_DELAY_SECONDS, MAX_DUCKS, MAX_EFFECT_DEVICES, MAX_INSERTS,
-    MAX_MIXER_CHANNELS, MAX_SENDS,
+    MAX_CHANNELS, MAX_DUCKS, MAX_EFFECT_DEVICES, MAX_INSERTS, MAX_MIXER_CHANNELS, MAX_SENDS,
 };
 use cadence_core::runtime::{ChannelMeter, EffectMeter};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
@@ -24,8 +23,9 @@ const _: () = {
     assert!(MAX_EFFECT_DEVICES <= u8::MAX as usize);
 };
 
-/// Count how many `Delay` insert devices exist in `score` (capped at `MAX_EFFECT_DEVICES`).
-pub(crate) fn count_delay_devices(score: &ScoreWindow) -> usize {
+/// Collect `(device_id, EffectKindTag)` pairs for every insert device in `score`
+/// (capped at [`MAX_EFFECT_DEVICES`]). Off-RT helper used for effect preparation.
+pub(crate) fn score_effect_specs(score: &ScoreWindow) -> Vec<(u64, EffectKindTag)> {
     score
         .mixer
         .channels
@@ -34,8 +34,19 @@ pub(crate) fn count_delay_devices(score: &ScoreWindow) -> usize {
         .flat_map(|c| c.inserts.iter())
         .chain(score.mixer.master.inserts.iter())
         .take(MAX_EFFECT_DEVICES)
-        .filter(|d| matches!(d.kind, EffectKind::Delay(_)))
-        .count()
+        .map(|d| (d.id, d.kind.tag()))
+        .collect()
+}
+
+/// Off-RT helper: construct a [`PreparedEffect`] for every insert device in `score`.
+pub(crate) fn prepare_effects_for_score(
+    score: &ScoreWindow,
+    sample_rate: u32,
+) -> Vec<PreparedEffect> {
+    score_effect_specs(score)
+        .into_iter()
+        .map(|(id, tag)| PreparedEffect::new(id, tag, sample_rate))
+        .collect()
 }
 
 #[derive(Clone, Copy, Default)]
@@ -311,128 +322,158 @@ impl ChannelPlan {
     }
 }
 
-macro_rules! dispatch_effect_bank {
-    (&$bank:expr, $tag:expr, $method:ident ( $($arg:expr),* )) => {
-        dispatch_effect_bank!(@arm $bank, $tag, $method, [ $($arg),* ], [])
+macro_rules! dispatch_active_effect {
+    (&$eff:expr, $method:ident ( $($arg:expr),* )) => {
+        match &$eff {
+            ActiveEffect::Delay(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Reverb(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Eq(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Chorus(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Drive(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Filter(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Compressor(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+            ActiveEffect::Limiter(fx) => StereoEffect::$method(fx.as_ref(), $($arg),*),
+        }
     };
-    (&mut $bank:expr, $tag:expr, $method:ident ( $($arg:expr),* )) => {
-        dispatch_effect_bank!(@arm $bank, $tag, $method, [ $($arg),* ], [mut])
-    };
-    (@arm $bank:expr, $tag:expr, $method:ident, [ $($arg:expr),* ], [ $($m:tt)? ]) => {
-        match $tag {
-            EffectKindTag::Delay => StereoEffect::$method(& $($m)? $bank.delay, $($arg),*),
-            EffectKindTag::Reverb => StereoEffect::$method(& $($m)? $bank.reverb, $($arg),*),
-            EffectKindTag::Eq => StereoEffect::$method(& $($m)? $bank.eq, $($arg),*),
-            EffectKindTag::Chorus => StereoEffect::$method(& $($m)? $bank.chorus, $($arg),*),
-            EffectKindTag::Drive => StereoEffect::$method(& $($m)? $bank.drive, $($arg),*),
-            EffectKindTag::Filter => StereoEffect::$method(& $($m)? $bank.filter, $($arg),*),
-            EffectKindTag::Compressor => StereoEffect::$method(& $($m)? $bank.compressor, $($arg),*),
-            EffectKindTag::Limiter => StereoEffect::$method(& $($m)? $bank.limiter, $($arg),*),
+    (&mut $eff:expr, $method:ident ( $($arg:expr),* )) => {
+        match &mut $eff {
+            ActiveEffect::Delay(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Reverb(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Eq(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Chorus(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Drive(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Filter(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Compressor(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
+            ActiveEffect::Limiter(fx) => StereoEffect::$method(fx.as_mut(), $($arg),*),
         }
     };
 }
 
-/// Pre-allocated bank of all 8 native [`StereoEffect`] processors owned by one
-/// [`EffectSlot`]. Keeping every effect instance pre-allocated (with `Delay`
-/// buffers lazily supplied off-RT) allows `adopt()` to hot-swap slot effect
-/// kinds on the audio thread with zero allocations and zero drops.
-struct EffectBank {
-    delay: Delay,
-    reverb: Reverb,
-    eq: Eq,
-    chorus: Chorus,
-    drive: Drive,
-    filter: RhythmicFilter,
-    compressor: Compressor,
-    limiter: Limiter,
+/// Heap-boxed active stereo insert processor owned by one [`EffectSlot`].
+///
+/// Unused mixer slots hold `None` (`0` bytes of idle effect buffers across all
+/// `MAX_EFFECT_DEVICES` slots). Live additions and kind swaps construct new
+/// instances off the real-time thread as [`PreparedEffect`] and retire replaced
+/// instances into a pre-sized queue dropped off-RT, guaranteeing strictly zero
+/// RT allocations and zero RT drops.
+pub(crate) enum ActiveEffect {
+    Delay(Box<Delay>),
+    Reverb(Box<Reverb>),
+    Eq(Box<Eq>),
+    Chorus(Box<Chorus>),
+    Drive(Box<Drive>),
+    Filter(Box<RhythmicFilter>),
+    Compressor(Box<Compressor>),
+    Limiter(Box<Limiter>),
 }
 
-impl EffectBank {
-    fn new(sample_rate: u32) -> Self {
+impl ActiveEffect {
+    /// Off-RT constructor for a single boxed effect instance at `sample_rate` Hz.
+    pub(crate) fn new(tag: EffectKindTag, sample_rate: u32) -> Self {
         let sr = f64::from(sample_rate);
-        Self {
-            delay: Delay::new_unallocated(sample_rate),
-            reverb: Reverb::new(sample_rate),
-            eq: Eq::new(sr),
-            chorus: Chorus::new(sr),
-            drive: Drive::new(sr),
-            filter: RhythmicFilter::new(sr),
-            compressor: Compressor::new(sr),
-            limiter: Limiter::new(sr),
+        match tag {
+            EffectKindTag::Delay => Self::Delay(Box::new(Delay::new(sample_rate))),
+            EffectKindTag::Reverb => Self::Reverb(Box::new(Reverb::new(sample_rate))),
+            EffectKindTag::Eq => Self::Eq(Box::new(Eq::new(sr))),
+            EffectKindTag::Chorus => Self::Chorus(Box::new(Chorus::new(sr))),
+            EffectKindTag::Drive => Self::Drive(Box::new(Drive::new(sr))),
+            EffectKindTag::Filter => Self::Filter(Box::new(RhythmicFilter::new(sr))),
+            EffectKindTag::Compressor => Self::Compressor(Box::new(Compressor::new(sr))),
+            EffectKindTag::Limiter => Self::Limiter(Box::new(Limiter::new(sr))),
         }
     }
 
-    fn reset_all(&mut self) {
-        StereoEffect::reset(&mut self.delay);
-        StereoEffect::reset(&mut self.reverb);
-        StereoEffect::reset(&mut self.eq);
-        StereoEffect::reset(&mut self.chorus);
-        StereoEffect::reset(&mut self.drive);
-        StereoEffect::reset(&mut self.filter);
-        StereoEffect::reset(&mut self.compressor);
-        StereoEffect::reset(&mut self.limiter);
+    #[inline]
+    fn tag(&self) -> EffectKindTag {
+        match self {
+            Self::Delay(_) => EffectKindTag::Delay,
+            Self::Reverb(_) => EffectKindTag::Reverb,
+            Self::Eq(_) => EffectKindTag::Eq,
+            Self::Chorus(_) => EffectKindTag::Chorus,
+            Self::Drive(_) => EffectKindTag::Drive,
+            Self::Filter(_) => EffectKindTag::Filter,
+            Self::Compressor(_) => EffectKindTag::Compressor,
+            Self::Limiter(_) => EffectKindTag::Limiter,
+        }
+    }
+
+    #[inline]
+    fn reset(&mut self) {
+        dispatch_active_effect!(&mut *self, reset());
     }
 
     #[inline]
     fn process_block_with_gr(
         &mut self,
-        active: EffectKindTag,
         buf: &mut [[f32; 2]],
         bypassed: bool,
         gr_out: &mut [f32],
     ) -> bool {
-        dispatch_effect_bank!(
-            &mut self,
-            active,
-            process_block_with_gr(buf, bypassed, gr_out)
-        )
+        dispatch_active_effect!(&mut *self, process_block_with_gr(buf, bypassed, gr_out))
     }
 
     #[inline]
-    fn latency_frames(&self, active: EffectKindTag) -> usize {
-        dispatch_effect_bank!(&self, active, latency_frames())
+    fn latency_frames(&self) -> usize {
+        dispatch_active_effect!(&*self, latency_frames())
     }
 
     #[inline]
-    fn gain_reduction_db(&self, active: EffectKindTag) -> Option<f32> {
-        dispatch_effect_bank!(&self, active, gain_reduction_db())
+    fn gain_reduction_db(&self) -> Option<f32> {
+        dispatch_active_effect!(&*self, gain_reduction_db())
     }
 
     #[inline]
-    fn is_quiet(&self, active: EffectKindTag, bypassed: bool) -> bool {
-        dispatch_effect_bank!(&self, active, is_quiet(bypassed))
+    fn is_quiet(&self, bypassed: bool) -> bool {
+        dispatch_active_effect!(&*self, is_quiet(bypassed))
     }
 
     #[inline]
-    fn advance_silent_frames(&mut self, active: EffectKindTag, frames: usize, bypassed: bool) {
-        dispatch_effect_bank!(&mut self, active, advance_silent_frames(frames, bypassed))
+    fn advance_silent_frames(&mut self, frames: usize, bypassed: bool) {
+        dispatch_active_effect!(&mut *self, advance_silent_frames(frames, bypassed));
     }
 
     fn set_parameters(&mut self, id: u64, kind: EffectKind, score: &ScoreWindow, clock_pos: f64) {
-        match kind {
-            EffectKind::Delay(patch) => self.delay.set_parameters(patch, score.bpm),
-            EffectKind::Reverb(patch) => self.reverb.set_parameters(patch),
-            EffectKind::Eq(patch) => self.eq.set_parameters(patch),
-            EffectKind::Chorus(patch) => self.chorus.set_parameters(patch),
-            EffectKind::Drive(patch) => self.drive.set_parameters(patch),
-            EffectKind::Filter(patch) => {
+        match (self, kind) {
+            (Self::Delay(fx), EffectKind::Delay(patch)) => fx.set_parameters(patch, score.bpm),
+            (Self::Reverb(fx), EffectKind::Reverb(patch)) => fx.set_parameters(patch),
+            (Self::Eq(fx), EffectKind::Eq(patch)) => fx.set_parameters(patch),
+            (Self::Chorus(fx), EffectKind::Chorus(patch)) => fx.set_parameters(patch),
+            (Self::Drive(fx), EffectKind::Drive(patch)) => fx.set_parameters(patch),
+            (Self::Filter(fx), EffectKind::Filter(patch)) => {
                 let compiled = patch
                     .env_pattern_id
                     .and_then(|_| score.mixer.filter_env_trigger(id))
                     .unwrap_or_else(|| score.mixer.resolve_filter_groove(patch.env_pattern));
-                self.filter
-                    .set_parameters_with_clock(patch, compiled, clock_pos, score.bpm);
+                fx.set_parameters_with_clock(patch, compiled, clock_pos, score.bpm);
             }
-            EffectKind::Compressor(patch) => self.compressor.set_parameters(patch),
-            EffectKind::Limiter(patch) => self.limiter.set_parameters(patch),
+            (Self::Compressor(fx), EffectKind::Compressor(patch)) => fx.set_parameters(patch),
+            (Self::Limiter(fx), EffectKind::Limiter(patch)) => fx.set_parameters(patch),
+            _ => {}
+        }
+    }
+}
+
+/// Control-thread pre-allocated effect awaiting zero-alloc/zero-drop RT handoff
+/// in [`MixerEngine::adopt_prepared`].
+pub(crate) struct PreparedEffect {
+    pub(crate) id: u64,
+    pub(crate) tag: EffectKindTag,
+    pub(crate) effect: Option<ActiveEffect>,
+}
+
+impl PreparedEffect {
+    pub(crate) fn new(id: u64, tag: EffectKindTag, sample_rate: u32) -> Self {
+        Self {
+            id,
+            tag,
+            effect: Some(ActiveEffect::new(tag, sample_rate)),
         }
     }
 }
 
 struct EffectSlot {
     id: Option<u64>,
-    bank: EffectBank,
-    active: EffectKindTag,
+    effect: Option<ActiveEffect>,
     bypassed: bool,
     gr_hold: PeakHold,
     render_gr_max_db: f32,
@@ -441,11 +482,10 @@ struct EffectSlot {
 }
 
 impl EffectSlot {
-    fn new(sample_rate: u32) -> Self {
+    fn empty() -> Self {
         Self {
             id: None,
-            bank: EffectBank::new(sample_rate),
-            active: EffectKindTag::Eq,
+            effect: None,
             bypassed: false,
             gr_hold: PeakHold::new(),
             render_gr_max_db: 0.0,
@@ -454,8 +494,15 @@ impl EffectSlot {
         }
     }
 
+    #[inline]
+    fn tag(&self) -> Option<EffectKindTag> {
+        self.effect.as_ref().map(ActiveEffect::tag)
+    }
+
     fn reset(&mut self) {
-        self.bank.reset_all();
+        if let Some(effect) = self.effect.as_mut() {
+            effect.reset();
+        }
         self.clear_gr_meters();
     }
 
@@ -469,7 +516,7 @@ impl EffectSlot {
     #[inline]
     fn latency_frames(&self) -> usize {
         if self.id.is_some() {
-            self.bank.latency_frames(self.active)
+            self.effect.as_ref().map_or(0, ActiveEffect::latency_frames)
         } else {
             0
         }
@@ -482,10 +529,11 @@ impl EffectSlot {
         hold_decay: f32,
         gr_scratch: &mut [f32; AUDIO_SUB_BLOCK_FRAMES],
     ) {
+        let Some(effect) = self.effect.as_mut() else {
+            return;
+        };
         let n = buf.len();
-        let has_gr =
-            self.bank
-                .process_block_with_gr(self.active, buf, self.bypassed, &mut gr_scratch[..n]);
+        let has_gr = effect.process_block_with_gr(buf, self.bypassed, &mut gr_scratch[..n]);
         if has_gr {
             if self.bypassed {
                 self.gr_hold.reset();
@@ -511,7 +559,10 @@ impl EffectSlot {
         if self.bypassed {
             return 0.0;
         }
-        self.bank.gain_reduction_db(self.active).unwrap_or(0.0)
+        self.effect
+            .as_ref()
+            .and_then(ActiveEffect::gain_reduction_db)
+            .unwrap_or(0.0)
     }
 
     #[inline]
@@ -525,20 +576,26 @@ impl EffectSlot {
 
     #[inline]
     fn is_quiet(&self) -> bool {
-        self.id.is_none() || self.bank.is_quiet(self.active, self.bypassed)
+        self.id.is_none()
+            || self
+                .effect
+                .as_ref()
+                .is_none_or(|fx| fx.is_quiet(self.bypassed))
     }
 
     #[inline]
     fn observe_silent_block(&mut self, frames: usize, hold_frames: u32, hold_decay: f32) {
+        let Some(effect) = self.effect.as_mut() else {
+            return;
+        };
         if self.id.is_none() {
             return;
         }
-        self.bank
-            .advance_silent_frames(self.active, frames, self.bypassed);
+        effect.advance_silent_frames(frames, self.bypassed);
         if self.bypassed {
             return;
         }
-        if self.bank.gain_reduction_db(self.active).is_some() {
+        if effect.gain_reduction_db().is_some() {
             if self.gr_hold.value() > 0.0 {
                 for _ in 0..frames {
                     self.gr_hold
@@ -662,7 +719,7 @@ impl MixerEngine {
         // Accommodate stacked limiters across chained Group → Group → Master paths without truncating PDC.
         let pdc_cap = limiter_lookahead_frames(sr).saturating_mul(MAX_EFFECT_DEVICES);
         let effects = (0..MAX_EFFECT_DEVICES)
-            .map(|_| EffectSlot::new(sample_rate))
+            .map(|_| EffectSlot::empty())
             .collect::<Vec<_>>()
             .into_boxed_slice();
         let pdc_lines = (0..MAX_MIXER_CHANNELS)
@@ -702,8 +759,9 @@ impl MixerEngine {
             #[cfg(test)]
             disable_sleep: false,
         });
-        mixer.prepare_delays(score);
-        mixer.adopt(score, true);
+        let mut prepared = prepare_effects_for_score(score, sample_rate);
+        let mut retired = Vec::new();
+        mixer.adopt_prepared(score, true, &mut prepared, &mut retired);
         mixer
     }
 
@@ -744,48 +802,29 @@ impl MixerEngine {
         self.channels[MASTER].meter.output
     }
 
-    /// Number of effect slots that currently hold an allocated stereo `Delay` buffer.
-    pub(crate) fn allocated_delay_count(&self) -> usize {
-        self.effects
-            .iter()
-            .filter(|slot| slot.bank.delay.is_allocated())
-            .count()
+    /// Number of effect slots that currently own a live boxed [`ActiveEffect`].
+    #[cfg(test)]
+    pub(crate) fn allocated_effect_count(&self) -> usize {
+        self.effects.iter().filter(|s| s.effect.is_some()).count()
     }
 
-    /// Off-RT helper: ensure at least as many `Delay` buffers are allocated as `score` needs.
-    pub(crate) fn prepare_delays(&mut self, score: &ScoreWindow) {
-        let needed = count_delay_devices(score);
-        let mut have = self.allocated_delay_count();
-        for slot in self.effects.iter_mut() {
-            if have >= needed {
-                break;
-            }
-            if !slot.bank.delay.is_allocated() {
-                slot.bank.delay.allocate(MAX_DELAY_SECONDS);
-                have += 1;
-            }
-        }
-    }
-
-    /// Zero-alloc / zero-drop RT handoff: swap control-thread pre-allocated `Delay` buffers
-    /// into unallocated slots (leaving empty unallocated shells in `incoming` for off-RT drop).
-    pub(crate) fn install_delay_buffers(&mut self, incoming: &mut [Delay]) {
-        for delay in incoming.iter_mut() {
-            if !delay.is_allocated() {
-                continue;
-            }
-            if let Some(slot) = self
-                .effects
-                .iter_mut()
-                .find(|s| !s.bank.delay.is_allocated())
-            {
-                std::mem::swap(&mut slot.bank.delay, delay);
-                slot.bank.delay.reset();
-            }
-        }
-    }
-
+    #[cfg(test)]
     pub(crate) fn adopt(&mut self, score: &ScoreWindow, boundary: bool) {
+        let mut retired = Vec::new();
+        self.adopt_prepared(score, boundary, &mut [], &mut retired);
+    }
+
+    /// Zero-alloc, zero-drop RT adoption of a new `ScoreWindow`: keeps unchanged
+    /// live effects in place, moves newly prepared [`ActiveEffect`] instances out of
+    /// `prepared`, and pushes evicted instances into `retired` (pre-sized off-RT to
+    /// `>= MAX_EFFECT_DEVICES`) for off-RT deallocation.
+    pub(crate) fn adopt_prepared(
+        &mut self,
+        score: &ScoreWindow,
+        boundary: bool,
+        prepared: &mut [PreparedEffect],
+        retired: &mut Vec<ActiveEffect>,
+    ) {
         let mut wanted = [(None::<u64>, EffectKindTag::Eq); MAX_EFFECT_DEVICES];
         let mut wanted_count = 0usize;
         let devices = score
@@ -799,67 +838,62 @@ impl MixerEngine {
             wanted[wanted_count] = (Some(device.id), device.kind.tag());
             wanted_count += 1;
         }
+
+        // Pass 1: keep live matching `(id, tag)` slots (resetting on boundary unless a
+        // freshly prepared replacement is provided), and retire removed or re-typed slots.
         for slot in self.effects.iter_mut() {
-            let keep = !boundary
-                && slot.id.is_some()
-                && wanted[..wanted_count].iter().any(|(id, _)| *id == slot.id);
-            if !keep {
-                slot.id = None;
-                slot.reset();
-            }
-        }
-        for &(id_opt, active) in &wanted[..wanted_count] {
-            let Some(id) = id_opt else {
+            let Some(id) = slot.id else {
                 continue;
             };
-            if let Some(slot) = self.effects.iter_mut().find(|slot| slot.id == Some(id)) {
-                if slot.active != active {
+            let matches_wanted = wanted[..wanted_count]
+                .iter()
+                .any(|&(wid, wtag)| wid == Some(id) && slot.tag() == Some(wtag));
+            let has_fresh_replacement = boundary
+                && slot.tag().is_some_and(|tag| {
+                    prepared
+                        .iter()
+                        .any(|p| p.id == id && p.tag == tag && p.effect.is_some())
+                });
+            if matches_wanted && !has_fresh_replacement {
+                if boundary {
                     slot.reset();
-                    slot.active = active;
                 }
-                continue;
-            }
-            // Prefer an allocated Delay slot for Delay devices and unallocated slots for others.
-            let target_idx = if active == EffectKindTag::Delay {
-                self.effects
-                    .iter()
-                    .position(|s| s.id.is_none() && s.bank.delay.is_allocated())
-                    .or_else(|| self.effects.iter().position(|s| s.id.is_none()))
             } else {
-                self.effects
-                    .iter()
-                    .position(|s| s.id.is_none() && !s.bank.delay.is_allocated())
-                    .or_else(|| self.effects.iter().position(|s| s.id.is_none()))
-            };
-            if let Some(idx) = target_idx {
-                self.effects[idx].id = Some(id);
-                self.effects[idx].active = active;
-                self.effects[idx].reset();
+                if let Some(old) = slot.effect.take() {
+                    debug_assert!(
+                        retired.len() < retired.capacity(),
+                        "retired_effects must be pre-sized off-RT to >= MAX_EFFECT_DEVICES"
+                    );
+                    retired.push(old);
+                }
+                slot.id = None;
+                slot.bypassed = false;
+                slot.clear_gr_meters();
             }
         }
 
-        // Zero-alloc donor swap: ensure every active Delay device owns an allocated buffer
-        // whenever any free or non-Delay slot holds one.
-        for i in 0..self.effects.len() {
-            let needs_buf = self.effects[i].id.is_some()
-                && self.effects[i].active == EffectKindTag::Delay
-                && !self.effects[i].bank.delay.is_allocated();
-            if !needs_buf {
+        // Pass 2: install newly added, kind-swapped, or boundary-replaced effects from `prepared`.
+        for &(id_opt, tag) in &wanted[..wanted_count] {
+            let Some(id) = id_opt else {
+                continue;
+            };
+            if self.effects.iter().any(|slot| slot.id == Some(id)) {
                 continue;
             }
-            let donor = self.effects.iter().position(|s| {
-                s.bank.delay.is_allocated() && (s.id.is_none() || s.active != EffectKindTag::Delay)
-            });
-            if let Some(j) = donor {
-                if i < j {
-                    let (left, right) = self.effects.split_at_mut(j);
-                    std::mem::swap(&mut left[i].bank.delay, &mut right[0].bank.delay);
-                } else if j < i {
-                    let (left, right) = self.effects.split_at_mut(i);
-                    std::mem::swap(&mut right[0].bank.delay, &mut left[j].bank.delay);
-                }
-                self.effects[i].bank.delay.reset();
-            }
+            let Some(prep) = prepared
+                .iter_mut()
+                .find(|p| p.id == id && p.tag == tag && p.effect.is_some())
+            else {
+                continue;
+            };
+            let Some(idx) = self.effects.iter().position(|s| s.id.is_none()) else {
+                break;
+            };
+            let slot = &mut self.effects[idx];
+            slot.id = Some(id);
+            slot.effect = prep.effect.take();
+            slot.bypassed = false;
+            slot.clear_gr_meters();
         }
 
         let previous = self.channels;
@@ -1443,12 +1477,9 @@ impl MixerEngine {
                     param.write_kind(&mut kind, value);
                 }
             }
-            let active = kind.tag();
-            if slot.active != active {
-                slot.reset();
-                slot.active = active;
+            if let Some(effect) = slot.effect.as_mut() {
+                effect.set_parameters(id, kind, score, clock_pos);
             }
-            slot.bank.set_parameters(id, kind, score, clock_pos);
             slot.bypassed = device.bypassed;
             if slot.bypassed {
                 slot.gr_hold.reset();
@@ -1549,7 +1580,7 @@ impl MixerEngine {
             .filter_map(|&idx| {
                 let slot = &self.effects[idx];
                 let id = slot.id?;
-                slot.bank.gain_reduction_db(slot.active)?;
+                slot.effect.as_ref()?.gain_reduction_db()?;
                 if slot.bypassed && slot.render_gr_frames == 0 {
                     return None;
                 }

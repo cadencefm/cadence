@@ -11,7 +11,7 @@ use super::voices::Voice;
 use super::*;
 use crate::mix_engine::MixerEngine;
 use cadence_core::dsp::{control_stride_mask, stereo_mid_f32, AUDIO_SUB_BLOCK_FRAMES};
-use cadence_core::mixer::ChannelRef;
+use cadence_core::mixer::{ChannelRef, MAX_EFFECT_DEVICES};
 use cadence_core::runtime::{AudioInputStatus, CapturePhase};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
 use std::sync::atomic::{fence, Ordering};
@@ -78,9 +78,7 @@ impl Engine {
         let mixer = MixerEngine::new(&project, sample_rate);
         shared.publish_input_tracks(&project);
         shared.sample_rate.store(sample_rate, Ordering::Release);
-        shared
-            .prepared_delays
-            .store(mixer.allocated_delay_count(), Ordering::Release);
+        shared.sync_prepared_effects(&project, sample_rate);
         shared.pdc_latency_frames.store(
             mixer.total_output_latency_frames().min(u32::MAX as usize) as u32,
             Ordering::Release,
@@ -92,7 +90,8 @@ impl Engine {
             publication: Box::new(ProjectPublication {
                 project: None,
                 samples: None,
-                extra_delays: Vec::new(),
+                prepared_effects: Vec::new(),
+                retired_effects: Vec::with_capacity(MAX_EFFECT_DEVICES),
                 generation: project_generation,
             }),
             project_generation,
@@ -146,13 +145,17 @@ impl Engine {
 
     /// Stage a score update into the lock-free publication slot for the current generation.
     pub(super) fn publish_score_update(&self, score: ScoreWindow) {
-        let extra_delays = self.shared.prepare_extra_delays(&score);
-        self.shared.project_slot.publish(ProjectPublication {
-            project: Some(Box::new(score)),
-            samples: None,
-            extra_delays,
-            generation: self.project_generation,
-        });
+        let prepared_effects = self.shared.prepare_effects(&score, false);
+        self.shared.project_slot.publish_merged(
+            ProjectPublication {
+                project: Some(Box::new(score)),
+                samples: None,
+                prepared_effects,
+                retired_effects: Vec::with_capacity(MAX_EFFECT_DEVICES),
+                generation: self.project_generation,
+            },
+            ProjectPublication::merge_from_previous,
+        );
     }
 
     /// Collect whole-render channel and effect telemetry against the active score.
@@ -201,12 +204,13 @@ impl Engine {
             if let Some(samples) = self.publication.samples.take() {
                 self.publication.samples = Some(std::mem::replace(&mut self.samples, samples));
             }
-            if !self.publication.extra_delays.is_empty() {
-                self.mixer
-                    .install_delay_buffers(&mut self.publication.extra_delays);
-            }
             let boundary = self.project_generation != self.publication.generation;
-            self.mixer.adopt(&self.project, boundary);
+            self.mixer.adopt_prepared(
+                &self.project,
+                boundary,
+                &mut self.publication.prepared_effects,
+                &mut self.publication.retired_effects,
+            );
             self.shared.pdc_latency_frames.store(
                 self.mixer
                     .total_output_latency_frames()

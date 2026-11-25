@@ -980,7 +980,7 @@ impl AudioRuntime {
         } else {
             self.shared.input_generation.load(Ordering::Acquire)
         };
-        let extra_delays = self.shared.prepare_extra_delays(&project);
+        let prepared_effects = self.shared.prepare_effects(&project, project_boundary);
         self.shared.publish_input_tracks(&project);
         self.shared.project_slot.publish_merged(
             ProjectPublication {
@@ -990,21 +990,11 @@ impl AudioRuntime {
                 } else {
                     samples.map(Box::new)
                 },
-                extra_delays,
+                prepared_effects,
+                retired_effects: Vec::with_capacity(MAX_EFFECT_DEVICES),
                 generation,
             },
-            |next, previous| {
-                // A routine edit following an unadopted load must carry its bank.
-                if next.samples.is_none() && next.generation == previous.generation {
-                    next.samples = previous.samples.take();
-                }
-                // Preserve any off-RT pre-allocated Delay buffers across coalesced publishes.
-                if !previous.extra_delays.is_empty() {
-                    let mut merged = std::mem::take(&mut previous.extra_delays);
-                    merged.append(&mut next.extra_delays);
-                    next.extra_delays = merged;
-                }
-            },
+            ProjectPublication::merge_from_previous,
         );
         Ok(())
     }
