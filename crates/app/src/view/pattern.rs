@@ -1,7 +1,7 @@
 //! Semantic Pattern deck view (Notes, Rhythm, Values, Derived sources, smooth multi-use playheads).
 use crate::{kind_label, App, EditScope, Mode};
 use cadence_core::material::{
-    Boundary, Id, ModulationTarget, PatternKind, PatternType, PatternValue, ValueUnit,
+    Boundary, Id, ModulationTarget, PatternKind, PatternType, PatternValue, Project, ValueUnit,
 };
 use cadence_core::mixer::EffectKind;
 use cadence_core::music::{note_name, scale_name};
@@ -310,15 +310,7 @@ impl App {
                 } else {
                     (0.0_f32, 1.0_f32)
                 };
-                let samples = (page_steps * 4).clamp(32, 256);
-                let mut curve = Vec::with_capacity(samples + 1);
-                for i in 0..=samples {
-                    let rel = page_steps as f64 * (i as f64 / samples as f64);
-                    let v = project
-                        .value_at(pattern.id, page_start as f64 + rel)
-                        .unwrap_or(0.0);
-                    curve.push((rel, v));
-                }
+                let curve = sample_value_curve(project, pattern.id, page_start, page_steps);
                 let visible_points = points
                     .iter()
                     .filter(|p| {
@@ -361,19 +353,14 @@ impl App {
                         _ => ValueUnit::Normalized,
                     };
                     let mode = project.value_mode(pattern.id).unwrap_or(ValueMode::Hold);
-                    let mut curve = Vec::with_capacity(page_steps);
+                    let curve = sample_value_curve(project, pattern.id, page_start, page_steps);
                     let mut points = Vec::with_capacity(page_steps);
                     let (mut lo, mut hi) = if unit == ValueUnit::Degrees {
                         (-7.0_f32, 7.0_f32)
                     } else {
                         (0.0_f32, 1.0_f32)
                     };
-                    for offset in 0..page_steps {
-                        let step_index = page_start + offset;
-                        let v = match self.value_of(Some(pattern.id), scope, step_index) {
-                            Ok(PatternValue::Value(v)) => v,
-                            _ => 0.0,
-                        };
+                    for &(_, v) in &curve {
                         if unit == ValueUnit::Degrees {
                             lo = lo.min(v - 1.0);
                             hi = hi.max(v + 1.0);
@@ -381,16 +368,25 @@ impl App {
                             lo = lo.min(v);
                             hi = hi.max(v);
                         }
-                        curve.push((offset as f64, v));
+                    }
+                    for offset in 0..page_steps {
+                        let step_index = page_start + offset;
+                        let v = project
+                            .value_at(pattern.id, step_index as f64)
+                            .unwrap_or(0.0);
+                        if unit == ValueUnit::Degrees {
+                            lo = lo.min(v - 1.0);
+                            hi = hi.max(v + 1.0);
+                        } else {
+                            lo = lo.min(v);
+                            hi = hi.max(v);
+                        }
                         points.push((offset as f64, v));
                     }
                     if (hi - lo).abs() < 1e-4 {
                         hi = lo + 1.0;
                     }
-                    let cursor_value = match self.value_of(Some(pattern.id), scope, cursor) {
-                        Ok(PatternValue::Value(v)) => v,
-                        _ => 0.0,
-                    };
+                    let cursor_value = project.value_at(pattern.id, cursor as f64).unwrap_or(0.0);
                     PatternContentView::Values {
                         unit,
                         mode,
@@ -874,6 +870,24 @@ impl App {
     }
 }
 
+fn sample_value_curve(
+    project: &Project,
+    pattern_id: Id,
+    page_start: usize,
+    page_steps: usize,
+) -> Vec<(f64, f32)> {
+    let samples = (page_steps * 4).clamp(32, 256);
+    let mut curve = Vec::with_capacity(samples + 1);
+    for i in 0..=samples {
+        let rel = page_steps as f64 * (i as f64 / samples as f64);
+        let v = project
+            .value_at(pattern_id, page_start as f64 + rel)
+            .unwrap_or(0.0);
+        curve.push((rel, v));
+    }
+    curve
+}
+
 fn format_placed_bars(spans: &[(u32, u32)]) -> String {
     let mut bars: Vec<(u32, u32)> = spans
         .iter()
@@ -903,5 +917,97 @@ fn format_placed_bars(spans: &[(u32, u32)]) -> String {
         }
     } else {
         "Placed · idle here".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host_io::MemoryHostIo;
+    use crate::view::DeckView;
+    use cadence_core::material::Project;
+    use cadence_core::runtime::AudioSnapshot;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    fn open_pattern_view(app: &mut App, name: &str) -> PatternDeckView {
+        app.execute_command(&format!("open {name}")).unwrap();
+        app.press_keys("gp").unwrap();
+        let snap = AudioSnapshot::default();
+        let frame = app.frame_view(&snap, "");
+        frame
+            .decks
+            .into_iter()
+            .find_map(|d| match d.view {
+                DeckView::Pattern(pv) => Some(pv),
+                _ => None,
+            })
+            .expect("Pattern deck")
+    }
+
+    #[test]
+    fn derived_and_seeded_value_curves_span_full_page_steps_width() {
+        let mut app = App::new_with_host_io(
+            Project::empty(),
+            PathBuf::from("/workspace/project.json"),
+            Arc::new(MemoryHostIo::new("/workspace")),
+        )
+        .unwrap();
+        app.execute_command("pattern values Sweep 16 ramp 0:0.0 8:1.0 12:0.5")
+            .unwrap();
+        app.execute_command("derive ShiftedSweep shift Sweep 4")
+            .unwrap();
+        app.execute_command("derive RevSweep reverse Sweep")
+            .unwrap();
+        app.execute_command("pattern seed SeedNorm 16 42 0.1 0.9")
+            .unwrap();
+        app.execute_command("pattern seed-degrees SeedDeg 16 7 -9 9")
+            .unwrap();
+
+        for name in ["ShiftedSweep", "RevSweep", "SeedNorm", "SeedDeg"] {
+            let pv = open_pattern_view(&mut app, name);
+            assert!(
+                !pv.editable_literal,
+                "{name} must not report editable_literal"
+            );
+            let PatternContentView::Values {
+                curve,
+                points,
+                range: (lo, hi),
+                cursor_authored,
+                ..
+            } = pv.content
+            else {
+                panic!("{name} should render PatternContentView::Values");
+            };
+            assert!(!cursor_authored, "{name} should not mark cursor authored");
+            let expected_samples = (pv.page_steps * 4).clamp(32, 256) + 1;
+            assert_eq!(curve.len(), expected_samples, "{name} curve sample count");
+            assert_eq!(curve.first().map(|(x, _)| *x), Some(0.0));
+            assert_eq!(curve.last().map(|(x, _)| *x), Some(pv.page_steps as f64));
+            assert_eq!(points.len(), pv.page_steps, "{name} integer step markers");
+            for &(_, v) in &curve {
+                assert!(
+                    v >= lo && v <= hi,
+                    "{name} value {v} must fall inside range ({lo}, {hi})"
+                );
+            }
+        }
+
+        // Verify derived Ramp sub-step interpolation matches Project::value_at cleanly.
+        let pv = open_pattern_view(&mut app, "ShiftedSweep");
+        let pat_id = pv.pattern_id.expect("pattern id");
+        let PatternContentView::Values { curve, .. } = pv.content else {
+            panic!("expected Values content");
+        };
+        let &(rx, rv) = &curve[2]; // rel = 0.5 step on a 16-step page
+        let expected = app
+            .project()
+            .value_at(pat_id, pv.page_start as f64 + rx)
+            .unwrap();
+        assert!(
+            (rv - expected).abs() < 1e-6,
+            "derived ramp sample at rel={rx}: got {rv}, expected {expected}"
+        );
     }
 }

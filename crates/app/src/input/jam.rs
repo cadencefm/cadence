@@ -143,10 +143,7 @@ impl App {
 
     /// The key that names a lane in the current bank.
     fn lane_key(&self, lane: Id) -> Option<char> {
-        self.play_bank_lanes()
-            .iter()
-            .position(|l| *l == lane)
-            .map(|i| LANE_KEYS[i])
+        self.lane_key_char(lane)
     }
 
     /// The key after a lane key, in any mode: a digit launches that part

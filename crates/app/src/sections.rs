@@ -423,4 +423,104 @@ mod tests {
             .expect_err("slot 5 beyond 4 sections must report missing");
         assert!(format!("{err:#}").contains("No section on 5"));
     }
+
+    #[test]
+    fn bank_2_for_many_sections_with_few_lanes_keeps_bank_1_lanes_accessible() {
+        let mut app = app_with_sections_and_lanes(12, 4);
+        app.press_keys("gb").unwrap();
+        app.press_keys("gj<Tab>").unwrap();
+        assert_eq!(app.clamped_bank(), 1);
+        assert!(app.bank_lanes().is_empty());
+        assert_eq!(app.play_bank_lanes().len(), 4);
+
+        let snap = AudioSnapshot::default();
+        let frame = app.frame_view(&snap, "");
+        let hud = frame.jam_hud.expect("Jam HUD on Bank 2");
+        assert_eq!(hud.lanes.len(), 4);
+        assert_eq!(hud.lanes[0].0, 'q');
+        assert_eq!(hud.lanes[3].0, 'r');
+
+        let bank = frame
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Bank(v) => Some(v),
+                _ => None,
+            })
+            .expect("Bank deck");
+        assert_eq!(bank.lanes.len(), 4);
+        assert_eq!(bank.lanes[0].key_char, Some('q'));
+        assert_eq!(bank.lanes[3].key_char, Some('r'));
+
+        app.open_lane_layer('r').unwrap();
+        assert_eq!(app.lane_layer(), Some(app.project().lanes[3].id));
+        let err = app
+            .open_lane_layer('t')
+            .expect_err("slot t beyond 4 lanes must report missing");
+        assert!(format!("{err:#}").contains("No lane on t"));
+    }
+
+    #[test]
+    fn bank_deck_selection_and_badges_stay_aligned_across_bank_2_lanes() {
+        let mut app = app_with_sections_and_lanes(4, 12);
+        app.press_keys("gb").unwrap();
+        let snap = AudioSnapshot::default();
+
+        // Jump to the last lane (Lane 12, index 11) in Bank 1 Normal mode.
+        app.press_keys("G").unwrap();
+        assert_eq!(app.view_state.bank_lane_idx, 11);
+        let frame1 = app.frame_view(&snap, "");
+        let bank1 = frame1
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Bank(v) => Some(v),
+                _ => None,
+            })
+            .expect("Bank deck");
+        assert_eq!(bank1.lanes.len(), 12);
+        assert_eq!(bank1.selected_lane_idx, 11);
+        assert_eq!(bank1.lanes[0].key_char, Some('q'));
+        assert_eq!(bank1.lanes[9].key_char, Some('p'));
+        assert_eq!(bank1.lanes[10].key_char, None);
+        assert_eq!(bank1.lanes[11].key_char, None);
+
+        // Move up one lane to Lane 11 (index 10) and switch to Bank 2 in Jam Mode.
+        app.press_keys("k").unwrap();
+        assert_eq!(app.view_state.bank_lane_idx, 10);
+        app.press_keys("gj<Tab>").unwrap();
+        assert_eq!(app.clamped_bank(), 1);
+        assert_eq!(app.play_bank_lanes().len(), 2);
+
+        let frame2 = app.frame_view(&snap, "");
+        let bank2 = frame2
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Bank(v) => Some(v),
+                _ => None,
+            })
+            .expect("Bank deck on Bank 2");
+        assert_eq!(bank2.lanes.len(), 12);
+        assert_eq!(bank2.selected_lane_idx, 10);
+        assert_eq!(bank2.lanes[0].key_char, None);
+        assert_eq!(bank2.lanes[9].key_char, None);
+        assert_eq!(bank2.lanes[10].key_char, Some('q'));
+        assert_eq!(bank2.lanes[11].key_char, Some('w'));
+
+        let hud2 = frame2.jam_hud.expect("Jam HUD on Bank 2");
+        assert_eq!(hud2.lanes.len(), 2);
+        assert_eq!(hud2.lanes[0].0, 'q');
+        assert_eq!(hud2.lanes[0].1, "Lane 11");
+        assert_eq!(hud2.lanes[1].0, 'w');
+        assert_eq!(hud2.lanes[1].1, "Lane 12");
+
+        // Bank 2 slot 'q' targets Lane 11; empty Bank 2 slot 'e' must not leak Bank 1 Lane 3!
+        app.open_lane_layer('q').unwrap();
+        assert_eq!(app.lane_layer(), Some(app.project().lanes[10].id));
+        let err = app
+            .open_lane_layer('e')
+            .expect_err("empty Bank 2 lane slot must not leak Bank 1 Lane 3");
+        assert!(format!("{err:#}").contains("No lane on e"));
+    }
 }

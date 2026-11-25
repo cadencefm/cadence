@@ -37,7 +37,7 @@ pub const BANK_VISIBLE_PART_SLOTS: usize = 9;
 pub struct BankLaneGroup {
     pub lane_id: Id,
     pub lane_name: String,
-    pub key_char: char,
+    pub key_char: Option<char>,
     pub muted: bool,
     pub solo: bool,
     pub staged_mute: Option<bool>,
@@ -111,12 +111,14 @@ impl App {
         let selected_lane_idx = self
             .view_state
             .bank_lane_idx
-            .min(bank_lanes.len().saturating_sub(1));
-        let mut lanes = Vec::new();
-        for (index, lane_id) in bank_lanes.into_iter().enumerate() {
-            let Some(lane) = self.lane(lane_id) else {
-                continue;
-            };
+            .min(project.lanes.len().saturating_sub(1));
+        let mut lanes = Vec::with_capacity(project.lanes.len());
+        for (index, lane) in project.lanes.iter().enumerate() {
+            let lane_id = lane.id;
+            let key_char = bank_lanes
+                .iter()
+                .position(|&id| id == lane_id)
+                .and_then(|pos| LANE_KEYS.get(pos).copied());
             let overriding = self.live.lane_state(lane_id).map(|s| s.part);
             let staged_launch_part = self.staged_launch_on_lane(lane_id);
             let staged_release = self.staged_release_on_lane(lane_id);
@@ -196,7 +198,7 @@ impl App {
             lanes.push(BankLaneGroup {
                 lane_id,
                 lane_name: lane.name.clone(),
-                key_char: LANE_KEYS[index],
+                key_char,
                 muted: self.flags().lane_muted(lane_id),
                 solo: self.flags().lane_solo(lane_id),
                 staged_mute: self.staged_lane_mute(lane_id),
@@ -225,10 +227,7 @@ impl App {
             jam_active: self.is_jam(),
             zoomed: self.layout.zoomed(),
             staging_count: self.staging().map(<[_]>::len),
-            selected_lane_idx: self
-                .view_state
-                .bank_lane_idx
-                .min(lanes.len().saturating_sub(1)),
+            selected_lane_idx,
             selected_part_idx: self.view_state.bank_part_idx,
             search_query: self.search_line().map(str::to_owned),
             sections,
