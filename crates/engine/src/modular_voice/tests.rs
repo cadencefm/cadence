@@ -2953,3 +2953,627 @@ fn out_node_clamps_gain_db_to_spot_bounds_and_sanitizes_nan() {
         "NaN gain_db must sanitize to 0.0 dB ({peak_nan} vs {peak_zero})"
     );
 }
+
+fn synthetic_rack_zone_for_module_kind(tag: ModuleKindTag) -> RackZone {
+    let fast_env = || EnvModule {
+        mode: EnvMode::Adsr,
+        attack_ms: 1.0,
+        hold_ms: 0.0,
+        decay_ms: 40.0,
+        sustain: 0.65,
+        release_ms: 20.0,
+        trigger_mode: TriggerMode::Gate,
+        delay_ms: 0.0,
+        bursts: 1,
+        burst_spacing_ms: 10.0,
+    };
+    let base_vco = || VcoModule {
+        waveform: Waveform::Saw,
+        unison_voices: 3,
+        unison_detune_cents: 14.0,
+        unison_width: 0.8,
+        level: 0.75,
+        ..VcoModule::default()
+    };
+    match tag {
+        ModuleKindTag::Vco => build_zone(
+            vec![
+                RackModule::new(1, "VCO", ModuleKind::Vco(base_vco())),
+                RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(3, "Env", ModuleKind::Env(fast_env())),
+                RackModule::new(4, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::Sampler => build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "Sampler",
+                    ModuleKind::Sampler(SamplerModule {
+                        path: Some("./test.wav".into()),
+                        sample_start: 0,
+                        sample_end: 2048,
+                        loop_mode: SampleLoopMode::Forward,
+                        loop_start: 128,
+                        loop_end: 1800,
+                        one_shot: false,
+                        ..SamplerModule::default()
+                    }),
+                ),
+                RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(3, "Env", ModuleKind::Env(fast_env())),
+                RackModule::new(4, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::Noise => build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "Noise",
+                    ModuleKind::Noise(NoiseModule {
+                        color: NoiseColor::Pink,
+                        highpass_hz: 120.0,
+                        lowpass_hz: 9_000.0,
+                        level: 0.7,
+                    }),
+                ),
+                RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(3, "Env", ModuleKind::Env(fast_env())),
+                RackModule::new(4, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::Env => build_zone(
+            vec![
+                RackModule::new(1, "VCO", ModuleKind::Vco(base_vco())),
+                RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(
+                    3,
+                    "Env",
+                    ModuleKind::Env(EnvModule {
+                        mode: EnvMode::HoldDecay,
+                        hold_ms: 4.0,
+                        decay_ms: 45.0,
+                        delay_ms: 2.0,
+                        bursts: 3,
+                        burst_spacing_ms: 8.0,
+                        trigger_mode: TriggerMode::OneShot,
+                        ..fast_env()
+                    }),
+                ),
+                RackModule::new(4, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::Lfo => build_zone(
+            vec![
+                RackModule::new(1, "VCO", ModuleKind::Vco(base_vco())),
+                RackModule::new(
+                    2,
+                    "LFO",
+                    ModuleKind::Lfo(LfoModule {
+                        shape: LfoShape::SampleHold,
+                        rate_hz: 9.0,
+                        sync: false,
+                        retrigger: true,
+                        ..LfoModule::default()
+                    }),
+                ),
+                RackModule::new(3, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(4, "Env", ModuleKind::Env(fast_env())),
+                RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 3, InPort::In, 1.0),
+                PatchCable::new(2, 2, 1, InPort::PitchCv, 0.35),
+                PatchCable::new(3, 4, 3, InPort::Cv, 1.0),
+                PatchCable::new(4, 3, 5, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::Filter => build_zone(
+            vec![
+                RackModule::new(1, "VCO", ModuleKind::Vco(base_vco())),
+                RackModule::new(
+                    2,
+                    "Filter",
+                    ModuleKind::Filter(FilterModule {
+                        mode: FilterMode::AcidLowPass,
+                        cutoff_hz: 700.0,
+                        resonance: 0.65,
+                        drive: 0.4,
+                        vel_amount: 2.5,
+                        ..FilterModule::default()
+                    }),
+                ),
+                RackModule::new(3, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(4, "Env", ModuleKind::Env(fast_env())),
+                RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 4, 2, InPort::Cv, 2.0),
+                PatchCable::new(3, 2, 3, InPort::In, 1.0),
+                PatchCable::new(4, 4, 3, InPort::Cv, 1.0),
+                PatchCable::new(5, 3, 5, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::Vca => build_zone(
+            vec![
+                RackModule::new(1, "Carrier", ModuleKind::Vco(base_vco())),
+                RackModule::new(
+                    2,
+                    "Mod",
+                    ModuleKind::Vco(VcoModule {
+                        waveform: Waveform::Sine,
+                        tune_semitones: 7.0,
+                        ..VcoModule::default()
+                    }),
+                ),
+                RackModule::new(
+                    3,
+                    "Ring",
+                    ModuleKind::Vca(VcaModule {
+                        bias: 0.15,
+                        ..VcaModule::default()
+                    }),
+                ),
+                RackModule::new(4, "Amp", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(5, "Env", ModuleKind::Env(fast_env())),
+                RackModule::new(6, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 3, InPort::In, 1.0),
+                PatchCable::new(2, 2, 3, InPort::Cv, 1.0),
+                PatchCable::new(3, 3, 4, InPort::In, 1.0),
+                PatchCable::new(4, 5, 4, InPort::Cv, 1.0),
+                PatchCable::new(5, 4, 6, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::Drive => build_zone(
+            vec![
+                RackModule::new(1, "VCO", ModuleKind::Vco(base_vco())),
+                RackModule::new(
+                    2,
+                    "Drive",
+                    ModuleKind::Drive(DriveModule {
+                        mode: DriveMode::Fold,
+                        drive: 0.72,
+                        asymmetry: 0.4,
+                        tone_hz: 6_500.0,
+                        output_db: -2.0,
+                        mix: 0.8,
+                    }),
+                ),
+                RackModule::new(3, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(4, "Env", ModuleKind::Env(fast_env())),
+                RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 2, 3, InPort::In, 1.0),
+                PatchCable::new(3, 4, 3, InPort::Cv, 1.0),
+                PatchCable::new(4, 3, 5, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::LoFi => build_zone(
+            vec![
+                RackModule::new(1, "VCO", ModuleKind::Vco(base_vco())),
+                RackModule::new(
+                    2,
+                    "LoFi",
+                    ModuleKind::LoFi(LoFiModule {
+                        bits: 6.5,
+                        rate_hz: 5_400.0,
+                        mix: 0.85,
+                    }),
+                ),
+                RackModule::new(3, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(4, "Env", ModuleKind::Env(fast_env())),
+                RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 2, 3, InPort::In, 1.0),
+                PatchCable::new(3, 4, 3, InPort::Cv, 1.0),
+                PatchCable::new(4, 3, 5, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::Resonator => build_zone(
+            vec![
+                RackModule::new(1, "Noise", ModuleKind::Noise(NoiseModule::default())),
+                RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(
+                    3,
+                    "Env",
+                    ModuleKind::Env(EnvModule {
+                        attack_ms: 0.5,
+                        decay_ms: 12.0,
+                        sustain: 0.0,
+                        release_ms: 10.0,
+                        trigger_mode: TriggerMode::OneShot,
+                        ..fast_env()
+                    }),
+                ),
+                RackModule::new(
+                    4,
+                    "Resonator",
+                    ModuleKind::Resonator(ResonatorModule {
+                        mode: ResonatorMode::Plate,
+                        decay_ms: 90.0,
+                        brightness: 0.65,
+                        structure: 0.45,
+                        position: 0.3,
+                        mix: 1.0,
+                        ..ResonatorModule::default()
+                    }),
+                ),
+                RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+                PatchCable::new(4, 4, 5, InPort::In, 1.0),
+            ],
+        ),
+        ModuleKindTag::Out => build_zone(
+            vec![
+                RackModule::new(1, "VCO", ModuleKind::Vco(base_vco())),
+                RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(3, "Env", ModuleKind::Env(fast_env())),
+                RackModule::new(
+                    4,
+                    "Out",
+                    ModuleKind::Out(OutModule {
+                        gain_db: 3.0,
+                        pan: -0.35,
+                        spread: 0.6,
+                    }),
+                ),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+            ],
+        ),
+    }
+}
+
+#[test]
+fn all_module_kinds_and_modes_satisfy_render_block_parity_and_zero_alloc() {
+    let sr = 48_000.0;
+    let sample = synthetic_sample(2048, sr as u32, 330.0);
+    let bank = vec![(module_sample_key(1, 1, 1), sample)];
+
+    let mut cases: Vec<(String, RackZone, bool)> = Vec::new();
+    // 1. Exhaustive ModuleKindTag::ALL.
+    for &tag in ModuleKindTag::ALL {
+        cases.push((
+            format!("ModuleKind::{tag:?}"),
+            synthetic_rack_zone_for_module_kind(tag),
+            false,
+        ));
+    }
+    // 2. Exhaustive FilterMode::ALL.
+    for &mode in FilterMode::ALL {
+        let mut z = synthetic_rack_zone_for_module_kind(ModuleKindTag::Filter);
+        if let ModuleKind::Filter(ref mut flt) = z.modules[1].kind {
+            flt.mode = mode;
+        }
+        cases.push((format!("FilterMode::{mode:?}"), z, false));
+    }
+    // 3. Exhaustive DriveMode::ALL.
+    for mode in DriveMode::ALL {
+        let mut z = synthetic_rack_zone_for_module_kind(ModuleKindTag::Drive);
+        if let ModuleKind::Drive(ref mut drv) = z.modules[1].kind {
+            drv.mode = mode;
+        }
+        cases.push((format!("DriveMode::{mode:?}"), z, false));
+    }
+    // 4. Exhaustive SampleLoopMode::ALL.
+    for &loop_mode in SampleLoopMode::ALL {
+        let mut z = synthetic_rack_zone_for_module_kind(ModuleKindTag::Sampler);
+        if let ModuleKind::Sampler(ref mut smp) = z.modules[0].kind {
+            smp.loop_mode = loop_mode;
+            smp.one_shot = loop_mode == SampleLoopMode::Off;
+        }
+        cases.push((format!("SampleLoopMode::{loop_mode:?}"), z, false));
+    }
+    // 5. Exhaustive VoiceMode::ALL (including Mono legato glide).
+    for &voice_mode in VoiceMode::ALL {
+        let mut z = synthetic_rack_zone_for_module_kind(ModuleKindTag::Filter);
+        z.voice.voice_mode = voice_mode;
+        z.voice.glide_ms = if voice_mode == VoiceMode::Mono {
+            24.0
+        } else {
+            0.0
+        };
+        cases.push((
+            format!("VoiceMode::{voice_mode:?}"),
+            z,
+            voice_mode == VoiceMode::Mono,
+        ));
+    }
+    // 6. Exhaustive ResonatorMode::ALL.
+    for &res_mode in ResonatorMode::ALL {
+        let mut z = synthetic_rack_zone_for_module_kind(ModuleKindTag::Resonator);
+        if let ModuleKind::Resonator(ref mut res) = z.modules[3].kind {
+            res.mode = res_mode;
+        }
+        cases.push((format!("ResonatorMode::{res_mode:?}"), z, false));
+    }
+    // 7. Feedback z^-1 loop topology (VCO self-FM + Filter -> Drive -> Filter.In).
+    let fb_zone = build_zone(
+        vec![
+            RackModule::new(1, "VCO", ModuleKind::Vco(VcoModule::default())),
+            RackModule::new(
+                2,
+                "Filter",
+                ModuleKind::Filter(FilterModule {
+                    cutoff_hz: 1_100.0,
+                    resonance: 0.72,
+                    ..FilterModule::default()
+                }),
+            ),
+            RackModule::new(
+                3,
+                "Drive",
+                ModuleKind::Drive(DriveModule {
+                    mode: DriveMode::Tape,
+                    drive: 0.7,
+                    ..DriveModule::default()
+                }),
+            ),
+            RackModule::new(4, "VCA", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(5, "Env", ModuleKind::Env(EnvModule::default())),
+            RackModule::new(6, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 1, InPort::FmIn, 0.3),
+            PatchCable::new(2, 1, 2, InPort::In, 1.0),
+            PatchCable::new(3, 2, 3, InPort::In, 1.0),
+            PatchCable::new(4, 3, 2, InPort::In, 0.8),
+            PatchCable::new(5, 3, 4, InPort::In, 1.0),
+            PatchCable::new(6, 5, 4, InPort::Cv, 1.0),
+            PatchCable::new(7, 4, 6, InPort::In, 1.0),
+        ],
+    );
+    cases.push(("FeedbackTopology".into(), fb_zone, false));
+
+    let mut frame_voice = ModularVoice::new_boxed_inactive(sr);
+    let mut block_voice = ModularVoice::new_boxed_inactive(sr);
+    let mut blk_buf = [[0.0_f32; 2]; 64];
+    let mut ref_buf = [[0.0_f32; 2]; 64];
+
+    for (name, zone, test_legato) in &cases {
+        let graph = compile_zone_graph(zone).unwrap_or_else(|e| panic!("{name} compile: {e}"));
+        let zspec = spec(zone, &graph, sr, 124.0);
+        let mut peak = 0.0_f32;
+
+        assert_no_heap_operations(|| {
+            let onset = start(60, Some(640));
+            frame_voice.begin_trigger_from_zone(&zspec);
+            frame_voice.finalize_trigger(onset, false, false);
+            block_voice.begin_trigger_from_zone(&zspec);
+            block_voice.finalize_trigger(onset, false, false);
+
+            let chunks = [1usize, 7, 13, 64, 31, 64, 19, 64, 64, 64];
+            for (ci, &chunk) in chunks.iter().enumerate() {
+                if ci == 3 {
+                    frame_voice.update_continuous_from_zone(zone, 0.1, 0.0, 128.0);
+                    block_voice.update_continuous_from_zone(zone, 0.1, 0.0, 128.0);
+                }
+                if ci == 5 && *test_legato {
+                    let next_note = start(67, Some(320));
+                    frame_voice.retarget_from_zone(&zspec, next_note, true);
+                    block_voice.retarget_from_zone(&zspec, next_note, true);
+                }
+                if ci == 7 {
+                    frame_voice.note_off();
+                    block_voice.note_off();
+                }
+
+                let mut ref_written = 0usize;
+                for slot in ref_buf.iter_mut().take(chunk) {
+                    if !frame_voice.is_active() {
+                        break;
+                    }
+                    *slot = frame_voice.next_frame(&bank, None);
+                    ref_written += 1;
+                }
+                let blk_written = block_voice.render_block(&bank, None, &mut blk_buf[..chunk]);
+                assert_eq!(
+                    blk_written, ref_written,
+                    "{name} chunk {ci} ({chunk}): written mismatch {blk_written} vs {ref_written}"
+                );
+                assert_eq!(
+                    block_voice.is_active(),
+                    frame_voice.is_active(),
+                    "{name} chunk {ci}: active flag mismatch"
+                );
+                for i in 0..blk_written {
+                    let b = blk_buf[i];
+                    let r = ref_buf[i];
+                    assert!(
+                        b[0].is_finite()
+                            && b[1].is_finite()
+                            && b[0].abs() < VOICE_GUARD_CEILING as f32 * 2.0
+                            && b[1].abs() < VOICE_GUARD_CEILING as f32 * 2.0,
+                        "{name} chunk {ci} frame {i}: non-finite or unbounded {b:?}"
+                    );
+                    assert_eq!(
+                        [b[0].to_bits(), b[1].to_bits()],
+                        [r[0].to_bits(), r[1].to_bits()],
+                        "{name} chunk {ci} frame {i}: render_block {b:?} != next_frame {r:?}"
+                    );
+                    peak = peak.max(b[0].abs()).max(b[1].abs());
+                }
+            }
+        });
+
+        assert!(
+            peak > 1e-4,
+            "{name}: synthetic rack produced silent output (peak={peak})"
+        );
+    }
+}
+
+#[test]
+fn all_post_vca_tail_topologies_ring_out_and_retire_cleanly() {
+    let sr = 48_000.0;
+    let bank = Vec::new();
+    let short_env = EnvModule {
+        mode: EnvMode::Adsr,
+        attack_ms: 0.5,
+        decay_ms: 8.0,
+        sustain: 0.0,
+        release_ms: 5.0,
+        trigger_mode: TriggerMode::OneShot,
+        ..EnvModule::default()
+    };
+
+    let mut post_vca_zones: Vec<(String, RackZone, bool)> = Vec::new();
+    // 1. Post-VCA Resonator across every ResonatorMode::ALL.
+    for &mode in ResonatorMode::ALL {
+        let z = build_zone(
+            vec![
+                RackModule::new(1, "Noise", ModuleKind::Noise(NoiseModule::default())),
+                RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(3, "Env", ModuleKind::Env(short_env)),
+                RackModule::new(
+                    4,
+                    "Resonator",
+                    ModuleKind::Resonator(ResonatorModule {
+                        mode,
+                        decay_ms: 140.0,
+                        brightness: 0.5,
+                        structure: 0.4,
+                        mix: 1.0,
+                        ..ResonatorModule::default()
+                    }),
+                ),
+                RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+                PatchCable::new(4, 4, 5, InPort::In, 1.0),
+            ],
+        );
+        post_vca_zones.push((format!("PostVca::Resonator::{mode:?}"), z, true));
+    }
+    // 2. Post-VCA resonant Filter across every FilterMode::ALL.
+    for &mode in FilterMode::ALL {
+        let z = build_zone(
+            vec![
+                RackModule::new(1, "VCO", ModuleKind::Vco(VcoModule::default())),
+                RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(3, "Env", ModuleKind::Env(short_env)),
+                RackModule::new(
+                    4,
+                    "Filter",
+                    ModuleKind::Filter(FilterModule {
+                        mode,
+                        cutoff_hz: 600.0,
+                        resonance: 0.88,
+                        ..FilterModule::default()
+                    }),
+                ),
+                RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+                PatchCable::new(4, 4, 5, InPort::In, 1.0),
+            ],
+        );
+        let expect_ring = mode != FilterMode::LowPass6;
+        post_vca_zones.push((format!("PostVca::Filter::{mode:?}"), z, expect_ring));
+    }
+    // 3. Post-VCA Drive across every DriveMode::ALL + LoFi.
+    for mode in DriveMode::ALL {
+        let z = build_zone(
+            vec![
+                RackModule::new(1, "VCO", ModuleKind::Vco(VcoModule::default())),
+                RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+                RackModule::new(3, "Env", ModuleKind::Env(short_env)),
+                RackModule::new(
+                    4,
+                    "Drive",
+                    ModuleKind::Drive(DriveModule {
+                        mode,
+                        drive: 0.6,
+                        ..DriveModule::default()
+                    }),
+                ),
+                RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+                PatchCable::new(3, 2, 4, InPort::In, 1.0),
+                PatchCable::new(4, 4, 5, InPort::In, 1.0),
+            ],
+        );
+        post_vca_zones.push((format!("PostVca::Drive::{mode:?}"), z, false));
+    }
+
+    let mut voice = ModularVoice::new_boxed_inactive(sr);
+    let mut blk = [[0.0_f32; 2]; 64];
+    let env_done_frames = (sr * 0.012) as usize;
+    let max_retire_frames = (sr * 1.5) as usize;
+
+    for (name, zone, expect_post_env_ring) in &post_vca_zones {
+        let graph = compile_zone_graph(zone).unwrap();
+        let zspec = spec(zone, &graph, sr, 120.0);
+        let mut total = 0usize;
+        let mut post_env_peak = 0.0_f32;
+
+        assert_no_heap_operations(|| {
+            voice.begin_trigger_from_zone(&zspec);
+            voice.finalize_trigger(start(60, Some(240)), false, false);
+            while voice.is_active() && total < max_retire_frames {
+                let n = voice.render_block(&bank, None, &mut blk);
+                for frame in &blk[..n] {
+                    assert!(frame[0].is_finite() && frame[1].is_finite());
+                    if total >= env_done_frames {
+                        post_env_peak = post_env_peak.max(frame[0].abs()).max(frame[1].abs());
+                    }
+                    total += 1;
+                }
+            }
+        });
+
+        assert!(
+            !voice.is_active(),
+            "{name}: voice failed to retire within {max_retire_frames} frames"
+        );
+        if *expect_post_env_ring {
+            assert!(
+                post_env_peak > 1e-4,
+                "{name}: expected audible post-VCA tail past envelope end, got {post_env_peak}"
+            );
+        }
+    }
+}

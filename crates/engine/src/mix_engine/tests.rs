@@ -999,10 +999,20 @@ fn fader_headroom_boost_channel_gain_scale_and_automated_macro_sweep() {
 
     // 3. Automated Project Macro targeting ChannelParam::Gain compiles and sweeps 0.0 -> +6.02 dB
     //    with zero RT allocations!
-    let mut proj = Project::demo();
-    let target_ch = proj.mixer.channels[0].id;
-    let ch_ref = ChannelRef::Channel(target_ch);
+    let mut proj = Project::empty();
+    proj.bars = 1;
     proj.mixer.master.strip.gain = 1.0;
+    proj.mixer
+        .channels
+        .push(Channel::new(1, ChannelKind::Audio, "Lead"));
+    proj.instruments.push(InstrumentInstance {
+        id: 1,
+        name: "Lead".into(),
+        rack: RackPatch::default_synth(),
+        channel: 1,
+    });
+    let target_ch = 1;
+    let ch_ref = ChannelRef::Channel(target_ch);
     let ramp_id = proj.max_id() + 1;
     proj.patterns.push(Pattern {
         id: ramp_id,

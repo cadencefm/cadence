@@ -133,6 +133,12 @@ impl Engine {
         self.voice_pool.voices()
     }
 
+    #[cfg(test)]
+    #[inline]
+    pub(super) fn set_disable_sleep(&mut self, disable: bool) {
+        self.mixer.set_disable_sleep(disable);
+    }
+
     #[inline]
     pub(super) fn play_step(&self) -> u64 {
         self.play_step

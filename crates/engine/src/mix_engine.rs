@@ -652,6 +652,8 @@ pub(crate) struct MixerEngine {
     meter_decay: f32,
     hold_frames: u32,
     hold_decay: f32,
+    #[cfg(test)]
+    disable_sleep: bool,
 }
 
 impl MixerEngine {
@@ -697,6 +699,8 @@ impl MixerEngine {
             meter_decay: one_pole_decay_ms(300.0, sr) as f32,
             hold_frames: (1.5 * sr).round().max(1.0) as u32,
             hold_decay: one_pole_decay_ms(300.0, sr) as f32,
+            #[cfg(test)]
+            disable_sleep: false,
         });
         mixer.prepare_delays(score);
         mixer.adopt(score, true);
@@ -708,6 +712,29 @@ impl MixerEngine {
     #[inline]
     pub(crate) fn total_output_latency_frames(&self) -> usize {
         self.total_output_latency
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn set_disable_sleep(&mut self, disable: bool) {
+        self.disable_sleep = disable;
+    }
+
+    #[inline]
+    fn sleep_enabled(&self) -> bool {
+        #[cfg(test)]
+        {
+            !self.disable_sleep
+        }
+        #[cfg(not(test))]
+        {
+            true
+        }
+    }
+
+    #[inline]
+    fn channel_inserts_quiet(&self, slot: usize) -> bool {
+        self.sleep_enabled() && self.channels[slot].inserts_quiet(&self.effects)
     }
 
     /// Current Master decayed stereo output peaks (300 ms release, observing the exact
@@ -1739,7 +1766,8 @@ impl MixerEngine {
         let wet_only = self.wet_only;
 
         let has_input = bus_active[index];
-        let inserts_quiet = self.channels[slot].inserts_quiet(&self.effects);
+        let sleep_enabled = self.sleep_enabled();
+        let inserts_quiet = self.channel_inserts_quiet(slot);
         let was_pdc_active = self.pdc_active_frames[index] > 0;
         let source_enabled = self.channels[slot].source_enabled;
 
@@ -1935,7 +1963,7 @@ impl MixerEngine {
         // to tap both Return-aligned sends and main output before writing once per frame.
         let needs_pdc_write = plan.max_pdc_delay > 0;
         if needs_pdc_write {
-            if !post_has_audio && !was_pdc_active {
+            if !post_has_audio && !was_pdc_active && sleep_enabled {
                 return;
             }
             if post_has_audio {
@@ -2201,7 +2229,8 @@ impl MixerEngine {
         for &index in &active_returns[..self.active_return_count] {
             let slot = MAX_INSTRUMENTS + index;
             let has_input = return_active[index];
-            let inserts_quiet = self.channels[slot].inserts_quiet(&self.effects);
+            let sleep_enabled = self.sleep_enabled();
+            let inserts_quiet = self.channel_inserts_quiet(slot);
             let was_pdc_active = self.pdc_active_frames[index] > 0;
             let enabled =
                 !self.channels[slot].muted && (!self.wet_only || self.channels[slot].solo);
@@ -2359,7 +2388,7 @@ impl MixerEngine {
                 meter.clipped = true;
             }
             if plan.pdc_delay > 0 {
-                if !post_has_audio && !was_pdc_active {
+                if !post_has_audio && !was_pdc_active && sleep_enabled {
                     continue;
                 }
                 if post_has_audio {
@@ -2401,7 +2430,7 @@ impl MixerEngine {
         }
 
         // Process Master bus.
-        let master_inserts_quiet = self.channels[MASTER].inserts_quiet(&self.effects);
+        let master_inserts_quiet = self.channel_inserts_quiet(MASTER);
         let has_preview = !preview.is_empty();
         let has_monitor = !monitor.is_empty();
         if !master_active && master_inserts_quiet && !has_preview && !has_monitor {

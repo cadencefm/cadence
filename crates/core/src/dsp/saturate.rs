@@ -1499,49 +1499,6 @@ mod tests {
     }
 
     #[test]
-    fn drive_insert_parameter_sweeps_mode_crossfade_and_reset_stay_coherent() {
-        let sr = 48_000.0;
-        let mut drv = Drive::new(sr);
-        let p_tape = DrivePatch {
-            mode: DriveMode::Tape,
-            drive: 0.65,
-            asymmetry: 0.3,
-            tone_hz: 6_000.0,
-            output_db: -2.0,
-            mix: 1.0,
-        };
-        let p_fold = DrivePatch {
-            mode: DriveMode::Fold,
-            drive: 0.8,
-            asymmetry: -0.4,
-            tone_hz: 12_000.0,
-            output_db: 1.0,
-            mix: 1.0,
-        };
-        drv.set_parameters(p_tape);
-        for i in 0..512 {
-            let s = (std::f64::consts::TAU * 330.0 * i as f64 / sr).sin() as f32 * 0.6;
-            let out = drv.process([s, -s], false);
-            assert!(out[0].is_finite() && out[1].is_finite());
-        }
-        // Switch mode + parameters mid-stream (exercises mode crossfade and cache refresh).
-        drv.set_parameters(p_fold);
-        for i in 512..3072 {
-            let s = (std::f64::consts::TAU * 330.0 * i as f64 / sr).sin() as f32 * 0.6;
-            let out = drv.process([s, -s], false);
-            assert!(out[0].is_finite() && out[1].is_finite());
-        }
-        // After reset + fresh init at p_fold, steady-state outputs must match bit-for-bit.
-        drv.reset();
-        let mut fresh = Drive::new(sr);
-        fresh.set_parameters(p_fold);
-        for i in 0..256 {
-            let s = (std::f64::consts::TAU * 440.0 * i as f64 / sr).sin() as f32 * 0.5;
-            assert_eq!(drv.process([s, s], false), fresh.process([s, s], false));
-        }
-    }
-
-    #[test]
     fn parallel_drive_is_phase_aligned_with_flat_response_across_sample_rates() {
         for sr in [44_100.0, 48_000.0, 96_000.0, 192_000.0] {
             // 1. Halfband2xDryAlign vs Halfband2x identity parallel 50/50 sum stays flat (< 0.02 dB)

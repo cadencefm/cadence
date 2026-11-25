@@ -739,23 +739,29 @@ pub fn finalize_recording_wav(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadence_core::material::Project;
 
     #[test]
     fn render_schedule_creates_parent_dirs_and_guards_step_overflow() {
         let dir = tempfile::tempdir().unwrap();
-        let score = Project::demo().compile().unwrap();
+        let fx = crate::test_fixtures::kitchen_sink_fixture(8_000);
 
         // Missing nested parent directories are created automatically by the atomic WAV pipeline.
         let nested_wav = dir.path().join("nested/exports/out.wav");
-        let report =
-            render_schedule_report(&[(0, &score)], 0, 16, Vec::new(), &nested_wav, 8_000).unwrap();
+        let report = render_schedule_report(
+            &[(0, &fx.score)],
+            0,
+            16,
+            fx.samples.clone(),
+            &nested_wav,
+            8_000,
+        )
+        .unwrap();
         assert!(nested_wav.is_file());
         assert_eq!(report.sample_rate, 8_000);
         assert!(report.frames > 0);
 
         // Overflowing `start_step + steps` returns a clean error instead of wrapping or panicking.
-        let err = validate_render_schedule(&[(0, &score)], u64::MAX - 4, 16, &Vec::new(), 8_000);
+        let err = validate_render_schedule(&[(0, &fx.score)], u64::MAX - 4, 16, &fx.samples, 8_000);
         assert!(err.is_err());
     }
 }
