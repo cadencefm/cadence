@@ -356,4 +356,49 @@ fn gpu_renders_float_metering_mixer_output_chrome_and_effect_gr_holds() {
         860,
         &px_warn,
     );
+
+    // 7. Smooth Mixer console scrolling: mid-bank scroll showing BOTH `<` and `>` overflow rails
+    //    beside pinned Master + fixed-height 3-row detail stack with `↓1-3/N` overflow indicator
+    //    (Dark & Light), plus zoomed `zz` full-screen Mixer showing all 14 channels & 5-row detail!
+    app.press_keys("go").unwrap(); // Restore Output Scope
+    let mid_ch = app.channels()[5];
+    for kind in ["eq", "filter", "drive", "chorus"] {
+        let _ = app.apply(cadence_app::Action::AddEffect {
+            channel: mid_ch,
+            kind: kind.into(),
+        });
+    }
+    app.press_keys("gm").unwrap();
+    app.selected_channel = mid_ch;
+    app.view_state.mixer_page_size = 10;
+    app.view_state.mixer_scroll.set(2);
+    let fv_scrolled = app.frame_view(&snap_hot, status);
+    let px_scrolled_dark = gpu.render_rgba8(&fv_scrolled, &dark).unwrap();
+    assert!(distinct_pixel_ratio(&px_scrolled_dark, dark.surface.canvas) > 0.25);
+    maybe_save_png(
+        "10-mixer-scrolled-pinned-master-dark.png",
+        1440,
+        860,
+        &px_scrolled_dark,
+    );
+    let px_scrolled_light = gpu.render_rgba8(&fv_scrolled, &light).unwrap();
+    assert!(distinct_pixel_ratio(&px_scrolled_light, light.surface.canvas) > 0.20);
+    maybe_save_png(
+        "11-mixer-scrolled-pinned-master-light.png",
+        1440,
+        860,
+        &px_scrolled_light,
+    );
+
+    // Zoomed `zz` Mixer: all 14 channels fit without overflow rails + 5-row fixed detail stack!
+    app.press_keys("zz").unwrap();
+    let fv_zoomed = app.frame_view(&snap_hot, status);
+    let px_zoomed_dark = gpu.render_rgba8(&fv_zoomed, &dark).unwrap();
+    assert!(distinct_pixel_ratio(&px_zoomed_dark, dark.surface.canvas) > 0.25);
+    maybe_save_png(
+        "12-mixer-zoomed-5row-detail-dark.png",
+        1440,
+        860,
+        &px_zoomed_dark,
+    );
 }

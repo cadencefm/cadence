@@ -1031,6 +1031,9 @@ impl App {
     fn reset_session_for_document(&mut self, invalidate_cache: bool) -> Result<Outcome> {
         self.follow.clear_anchors();
         self.arrange_ui.viewport_start_step.set(0);
+        self.view_state.mixer_scroll.set(0);
+        self.view_state.mixer_detail_scroll.set(0);
+        self.view_state.mixer_detail_channel.set(None);
         self.arrange_ui.event = None;
         self.arrange_ui.pitch_anchor = None;
         self.arrange_ui.pitch_lane = None;

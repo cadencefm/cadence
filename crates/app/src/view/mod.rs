@@ -40,7 +40,10 @@ pub use midi::{
     AudioDeckRowView, AudioDeckView, AudioInputView, MidiDeckView, MidiDeviceRowView,
     MidiMacroTileView, MidiMappingRowView, MidiPadTileView,
 };
-pub use mixer::{MixerChannelView, MixerDeckView, MixerRole};
+pub use mixer::{
+    mixer_bank_scroll_window, mixer_detail_scroll_window, MixerChannelView, MixerDeckView,
+    MixerRole,
+};
 pub use overlays::{
     FileHubRowView, FileHubView, HelpEntry, HelpTab, HelpView, OverlayView, SettingsRowView,
     SettingsView, HELP_ENTRIES,

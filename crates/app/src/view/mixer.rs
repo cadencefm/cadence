@@ -73,11 +73,72 @@ pub(super) fn strip_dynamics_gr(
     }
 }
 
+/// Compute the leftmost visible bank strip index for smooth horizontal Mixer scrolling.
+///
+/// - When `bank_len <= visible_slots`, returns `0`.
+/// - When `selected_bank_idx` is `Some(sel)`, shifts the viewport minimally so `sel` stays
+///   within the `[first + scrolloff, first + visible_slots - scrolloff)` band (`scrolloff = 1`
+///   whenever `visible_slots >= 4`, `0` otherwise).
+/// - When `selected_bank_idx` is `None` (e.g. pinned `Master` is focused via `$`/`G`), preserves
+///   `prev_first` clamped to `bank_len - visible_slots` so the bank doesn't jump unexpectedly.
+pub fn mixer_bank_scroll_window(
+    selected_bank_idx: Option<usize>,
+    bank_len: usize,
+    visible_slots: usize,
+    prev_first: usize,
+) -> usize {
+    if visible_slots == 0 || bank_len <= visible_slots {
+        return 0;
+    }
+    let max_first = bank_len - visible_slots;
+    let mut first = prev_first.min(max_first);
+    if let Some(sel) = selected_bank_idx {
+        let sel = sel.min(bank_len - 1);
+        let scrolloff = if visible_slots >= 4 { 1 } else { 0 };
+        if sel < first + scrolloff {
+            first = sel.saturating_sub(scrolloff);
+        } else if sel + scrolloff >= first + visible_slots {
+            first = (sel + scrolloff + 1)
+                .saturating_sub(visible_slots)
+                .min(max_first);
+        }
+    }
+    first
+}
+
+/// Compute the top visible row index for smooth edge-following vertical scrolling inside the
+/// Mixer's fixed-height channel detail stack (`FX / SND / OUT / DUCK`).
+pub fn mixer_detail_scroll_window(
+    focused_row: Option<usize>,
+    total_rows: usize,
+    visible_rows: usize,
+    prev_first: usize,
+) -> usize {
+    if visible_rows == 0 || total_rows <= visible_rows {
+        return 0;
+    }
+    let max_first = total_rows - visible_rows;
+    let mut first = prev_first.min(max_first);
+    if let Some(idx) = focused_row {
+        let idx = idx.min(total_rows - 1);
+        if idx < first {
+            first = idx;
+        } else if idx >= first + visible_rows {
+            first = (idx + 1).saturating_sub(visible_rows).min(max_first);
+        }
+    }
+    first
+}
+
 #[derive(Clone, Debug)]
 pub struct MixerDeckView {
     pub channels: Vec<MixerChannelView>,
     pub selected_index: usize,
     pub focused_slot: crate::MixerSlot,
+    /// Leftmost visible non-Master bank strip index (smoothly tracked across frames).
+    pub bank_scroll: usize,
+    /// Top visible row index inside the fixed-height bottom channel detail stack.
+    pub detail_scroll: usize,
     pub pending: bool,
     pub solo_audition: bool,
 }
@@ -135,7 +196,7 @@ impl App {
             .unwrap_or(0);
         let query_time = self.live_query_time(snapshot);
 
-        let channels = all
+        let channels: Vec<MixerChannelView> = all
             .iter()
             .enumerate()
             .map(|(index, &ch)| {
@@ -325,10 +386,68 @@ impl App {
             crate::MixerSlot::Fader
         };
 
+        // Smooth horizontal bank scroll (non-Master channels live in `0..bank_len`, Master is last).
+        let has_master = channels
+            .last()
+            .is_some_and(|ch| ch.role == MixerRole::Master);
+        let bank_len = if has_master {
+            channels.len().saturating_sub(1)
+        } else {
+            channels.len()
+        };
+        let selected_bank_idx = if has_master && selected_index >= bank_len {
+            None
+        } else {
+            Some(selected_index)
+        };
+        let bank_scroll = mixer_bank_scroll_window(
+            selected_bank_idx,
+            bank_len,
+            self.view_state.mixer_page_size.max(1),
+            self.view_state.mixer_scroll.get(),
+        );
+        self.view_state.mixer_scroll.set(bank_scroll);
+
+        // Smooth vertical detail scroll (reset whenever switching selected channel).
+        if self.view_state.mixer_detail_channel.get() != Some(self.selected_channel) {
+            self.view_state
+                .mixer_detail_channel
+                .set(Some(self.selected_channel));
+            self.view_state.mixer_detail_scroll.set(0);
+        }
+        let detail_scroll = if let Some(sel_ch) = channels.get(selected_index) {
+            let has_out = !matches!(sel_ch.role, MixerRole::Master | MixerRole::Return);
+            let ins = sel_ch.inserts.len();
+            let snd = sel_ch.sends.len();
+            let out = usize::from(has_out);
+            let total_rows = ins + snd + out + sel_ch.ducks.len();
+            let focused_row = match focused_slot {
+                crate::MixerSlot::Fader | crate::MixerSlot::Pan => None,
+                crate::MixerSlot::Insert(i) => (i < ins).then_some(i),
+                crate::MixerSlot::Send(i) => (i < snd).then_some(ins + i),
+                crate::MixerSlot::Output => has_out.then_some(ins + snd),
+                crate::MixerSlot::Duck(i) => {
+                    (i < sel_ch.ducks.len()).then_some(ins + snd + out + i)
+                }
+            };
+            let next = mixer_detail_scroll_window(
+                focused_row,
+                total_rows,
+                self.view_state.mixer_detail_rows.max(1),
+                self.view_state.mixer_detail_scroll.get(),
+            );
+            self.view_state.mixer_detail_scroll.set(next);
+            next
+        } else {
+            0
+        };
+
         MixerDeckView {
             channels,
             selected_index,
             focused_slot,
+            bank_scroll,
+            detail_scroll,
             pending: snapshot.pending,
             solo_audition,
         }
@@ -508,5 +627,108 @@ mod tests {
         assert!(v1.automated_gain_scale.is_none());
         assert!((v1.effective_gain.unwrap() - MAX_CHANNEL_GAIN).abs() < 1e-4);
         assert_eq!(v1.effective_gain_db.as_deref(), Some("+6.0"));
+    }
+
+    #[test]
+    fn mixer_bank_scroll_window_slides_smoothly_with_scrolloff_and_preserves_master_jump() {
+        use super::{mixer_bank_scroll_window, mixer_detail_scroll_window};
+
+        // 13 bank strips, 6 visible slots -> scrolloff = 1 (since visible_slots >= 4).
+        assert_eq!(mixer_bank_scroll_window(Some(0), 13, 6, 0), 0);
+        assert_eq!(mixer_bank_scroll_window(Some(4), 13, 6, 0), 0);
+        // Reaching index 5 (rightmost visible slot) slides by 1 to expose lookahead index 6.
+        assert_eq!(mixer_bank_scroll_window(Some(5), 13, 6, 0), 1);
+        assert_eq!(mixer_bank_scroll_window(Some(6), 13, 6, 1), 2);
+        // Stepping back keeps scroll until hitting leading scrolloff margin (first + 1).
+        assert_eq!(mixer_bank_scroll_window(Some(4), 13, 6, 2), 2);
+        assert_eq!(mixer_bank_scroll_window(Some(3), 13, 6, 2), 2);
+        assert_eq!(mixer_bank_scroll_window(Some(2), 13, 6, 2), 1);
+        // Clamped at max_first = 13 - 6 = 7 when at end of bank.
+        assert_eq!(mixer_bank_scroll_window(Some(12), 13, 6, 2), 7);
+        // Focusing pinned Master (`None`) preserves the current bank scroll without jumping.
+        assert_eq!(mixer_bank_scroll_window(None, 13, 6, 2), 2);
+        // Narrow viewport (< 4 visible slots) uses 0 scrolloff (strict edge-following).
+        assert_eq!(mixer_bank_scroll_window(Some(2), 10, 3, 0), 0);
+        assert_eq!(mixer_bank_scroll_window(Some(3), 10, 3, 0), 1);
+
+        // Detail vertical scroll slides smoothly edge-by-edge.
+        assert_eq!(mixer_detail_scroll_window(None, 6, 3, 0), 0);
+        assert_eq!(mixer_detail_scroll_window(Some(2), 6, 3, 0), 0);
+        assert_eq!(mixer_detail_scroll_window(Some(3), 6, 3, 0), 1);
+        assert_eq!(mixer_detail_scroll_window(Some(5), 6, 3, 1), 3);
+        assert_eq!(mixer_detail_scroll_window(Some(3), 6, 3, 3), 3);
+        assert_eq!(mixer_detail_scroll_window(Some(2), 6, 3, 3), 2);
+    }
+
+    #[test]
+    fn mixer_view_tracks_smooth_bank_scroll_and_resets_detail_scroll_on_channel_switch() {
+        let mut project = Project::demo();
+        // Add 6 extra audio channels so we have > 6 bank channels + Master.
+        for i in 0..6 {
+            let id = project.max_id() + 1;
+            project
+                .mixer
+                .channels
+                .push(cadence_core::mixer::Channel::new(
+                    id,
+                    cadence_core::mixer::ChannelKind::Audio,
+                    format!("Aux {i}"),
+                ));
+        }
+        // Add 4 FX inserts onto channel 0 (+ OUT = 5 detail rows > 3 visible).
+        let ch0_id = project.mixer.channels[0].id;
+        project.mixer.channels[0].inserts.clear();
+        for _ in 0..4 {
+            let dev_id = project.max_id() + 1;
+            project.mixer.channels[0]
+                .inserts
+                .push(cadence_core::mixer::EffectDevice::eq(dev_id));
+        }
+
+        let mut app = App::new(project, "scroll.json".into()).unwrap();
+        app.press_keys("gm").unwrap();
+        app.view_state.mixer_page_size = 5;
+        app.view_state.mixer_detail_rows = 3;
+        app.selected_channel = ChannelRef::Channel(ch0_id);
+
+        let snap = AudioSnapshot::default();
+        let get_mixer = |a: &App| -> super::MixerDeckView {
+            a.frame_view(&snap, "silent")
+                .decks
+                .into_iter()
+                .find_map(|d| match d.view {
+                    DeckView::Mixer(m) => Some(m),
+                    _ => None,
+                })
+                .expect("MixerDeckView")
+        };
+
+        // Step down into channel 0 detail slots past 3 visible rows -> detail_scroll advances cleanly.
+        assert_eq!(get_mixer(&app).detail_scroll, 0);
+        app.press_keys("jjjjjj").unwrap(); // Fader -> Pan -> FX0 -> FX1 -> FX2 -> FX3 -> OUT (row 4)
+        assert_eq!(get_mixer(&app).detail_scroll, 2);
+
+        // Jump straight to Master with `$`: bank_scroll stays 0 while Master is selected, detail_scroll resets!
+        app.press_keys("$").unwrap();
+        let m_master = get_mixer(&app);
+        assert_eq!(
+            m_master.channels[m_master.selected_index].role,
+            super::MixerRole::Master
+        );
+        assert_eq!(m_master.bank_scroll, 0);
+        assert_eq!(m_master.detail_scroll, 0);
+
+        // Press `h` from Master: lands on last non-Master strip and slides bank to the right end!
+        app.press_keys("h").unwrap();
+        let m_end = get_mixer(&app);
+        let bank_len = m_end.channels.len() - 1;
+        assert_eq!(m_end.selected_index, bank_len - 1);
+        assert_eq!(m_end.bank_scroll, bank_len - 5);
+
+        // Jump back to start (`0`) -> bank_scroll returns cleanly to 0.
+        app.press_keys("0").unwrap();
+        let m_start = get_mixer(&app);
+        assert_eq!(m_start.selected_index, 0);
+        assert_eq!(m_start.bank_scroll, 0);
     }
 }
