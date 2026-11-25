@@ -5,61 +5,67 @@ impl App {
     pub(super) fn navigation(&self) -> Navigation {
         Navigation {
             layout: self.layout.clone(),
-            arrange_view: self.arrange_ui.view,
-            arrangement_event: self.arrange_ui.event,
-            arrange_pitch_anchor: self.arrange_ui.pitch_anchor,
-            arrange_source_cursor: self.arrange_ui.source_cursor,
-            arrangement_inspecting: self.input.mode == Mode::ArrangementInspect,
-            scope: self.scope,
-            selected_pattern: self.selected_pattern,
-            selected_lane: self.selected_lane,
-            selected_placement: self.selected_placement,
-            selected_part: self.selected_part,
-            selected_instrument: self.selected_instrument,
-            selected_channel: self.selected_channel,
-            mixer_slot: self.view_state.mixer_slot,
-            cursor: self.cursor,
-            note_voice: self.note_voice,
-            arrange_step: self.arrange_ui.step,
-            control_cursor: self.control_cursor,
-            source_cursor: self.source_cursor,
-            macro_binding_cursor: self.view_state.macro_binding_cursor,
+            arrange: ArrangeNav {
+                view: self.arrange_ui.view,
+                step: self.arrange_ui.step,
+                event: self.arrange_ui.event,
+                pitch_anchor: self.arrange_ui.pitch_anchor,
+                source_cursor: self.arrange_ui.source_cursor,
+                inspecting: self.input.mode == Mode::ArrangementInspect,
+            },
+            selection: SelectionNav {
+                scope: self.scope,
+                pattern: self.selected_pattern,
+                lane: self.selected_lane,
+                placement: self.selected_placement,
+                part: self.selected_part,
+                instrument: self.selected_instrument,
+                channel: self.selected_channel,
+            },
+            cursors: CursorNav {
+                step: self.cursor,
+                note_voice: self.note_voice,
+                control: self.control_cursor,
+                source: self.source_cursor,
+                mixer_slot: self.view_state.mixer_slot,
+                macro_binding: self.view_state.macro_binding_cursor,
+            },
             rack_ui: self.rack_ui,
             query: self.query.clone(),
         }
     }
     pub(super) fn restore_navigation(&mut self, n: Navigation) {
-        if self.selected_pattern != n.selected_pattern
-            || self.scope != n.scope
-            || self.cursor != n.cursor
-            || self.arrange_ui.step != n.arrange_step
-            || self.selected_lane != n.selected_lane
-            || self.selected_placement != n.selected_placement
+        if self.selected_pattern != n.selection.pattern
+            || self.scope != n.selection.scope
+            || self.cursor != n.cursors.step
+            || self.arrange_ui.step != n.arrange.step
+            || self.selected_lane != n.selection.lane
+            || self.selected_placement != n.selection.placement
         {
             self.suspend_follow();
         }
-        self.arrange_ui.view = n.arrange_view;
-        self.arrange_ui.event = n.arrangement_event;
-        self.arrange_ui.pitch_anchor = n.arrange_pitch_anchor;
-        self.arrange_ui.pitch_lane = n.selected_lane;
-        self.arrange_ui.source_cursor = n.arrange_source_cursor;
-        if n.arrangement_inspecting {
+        self.arrange_ui.view = n.arrange.view;
+        self.arrange_ui.step = n.arrange.step;
+        self.arrange_ui.event = n.arrange.event;
+        self.arrange_ui.pitch_anchor = n.arrange.pitch_anchor;
+        self.arrange_ui.pitch_lane = n.selection.lane;
+        self.arrange_ui.source_cursor = n.arrange.source_cursor;
+        if n.arrange.inspecting {
             self.input.mode = Mode::ArrangementInspect;
         }
-        self.scope = n.scope;
-        self.selected_pattern = n.selected_pattern;
-        self.selected_lane = n.selected_lane;
-        self.selected_placement = n.selected_placement;
-        self.selected_part = n.selected_part;
-        self.selected_instrument = n.selected_instrument;
-        self.selected_channel = n.selected_channel;
-        self.view_state.mixer_slot = n.mixer_slot;
-        self.cursor = n.cursor;
-        self.note_voice = n.note_voice;
-        self.arrange_ui.step = n.arrange_step;
-        self.control_cursor = n.control_cursor;
-        self.source_cursor = n.source_cursor;
-        self.view_state.macro_binding_cursor = n.macro_binding_cursor;
+        self.scope = n.selection.scope;
+        self.selected_pattern = n.selection.pattern;
+        self.selected_lane = n.selection.lane;
+        self.selected_placement = n.selection.placement;
+        self.selected_part = n.selection.part;
+        self.selected_instrument = n.selection.instrument;
+        self.selected_channel = n.selection.channel;
+        self.cursor = n.cursors.step;
+        self.note_voice = n.cursors.note_voice;
+        self.control_cursor = n.cursors.control;
+        self.source_cursor = n.cursors.source;
+        self.view_state.mixer_slot = n.cursors.mixer_slot;
+        self.view_state.macro_binding_cursor = n.cursors.macro_binding;
         self.rack_ui = n.rack_ui;
         self.query = n.query;
         self.layout = n.layout;

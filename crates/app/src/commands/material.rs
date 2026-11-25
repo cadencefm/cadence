@@ -1,25 +1,25 @@
 //! Material, pattern algebra, part, and audition Ex commands.
 use super::instruments::parse_single_sound_token;
-use super::require_args;
+use super::{require_args, MaterialVerb};
 use crate::*;
 
 impl App {
-    pub(super) fn execute_material_command(
+    pub(super) fn execute_material_verb(
         &mut self,
-        command: &str,
+        verb: MaterialVerb,
         args: &[String],
-    ) -> Option<Result<Outcome>> {
-        let res = match command {
-            "pattern" => self.pattern_command(args),
-            "mini" => self.mini_command(args),
-            "open" => (|| {
+    ) -> Result<Outcome> {
+        match verb {
+            MaterialVerb::Pattern => self.pattern_command(args),
+            MaterialVerb::Mini => self.mini_command(args),
+            MaterialVerb::Open => {
                 require_args(args, 1, ":open PATTERN")?;
                 let id = self.pattern_id(&args[0])?;
                 self.apply(Action::SelectPattern { pattern: id })
-            })(),
-            "part" => self.part_command(args),
-            "derive" => self.derive_command(args),
-            "fork" => (|| {
+            }
+            MaterialVerb::Part => self.part_command(args),
+            MaterialVerb::Derive => self.derive_command(args),
+            MaterialVerb::Fork => {
                 ensure!((1..=2).contains(&args.len()), "Usage: :fork NAME [SOURCE]");
                 let source = args
                     .get(1)
@@ -31,8 +31,8 @@ impl App {
                     source,
                     name: args[0].clone(),
                 })
-            })(),
-            "freeze" => (|| {
+            }
+            MaterialVerb::Freeze => {
                 ensure!(
                     (3..=4).contains(&args.len()),
                     "Usage: :freeze NAME START_STEP LENGTH [SOURCE]"
@@ -49,8 +49,8 @@ impl App {
                     start: args[1].parse()?,
                     length: args[2].parse()?,
                 })
-            })(),
-            "len" => (|| {
+            }
+            MaterialVerb::Len => {
                 require_args(args, 1, ":len STEPS")?;
                 self.apply(Action::Edit {
                     edit: Edit::ResizePattern {
@@ -58,8 +58,8 @@ impl App {
                         length: args[0].parse()?,
                     },
                 })
-            })(),
-            "note" => (|| {
+            }
+            MaterialVerb::Note => {
                 ensure!(
                     (2..=4).contains(&args.len()),
                     "Usage: :note STEP DEGREE[,DEGREE] [VELOCITY] [GATE]"
@@ -86,8 +86,8 @@ impl App {
                 let edit = self.edits_for_current_note(value);
                 self.cursor = old;
                 self.apply(Action::Edit { edit: edit? })
-            })(),
-            "value" => (|| {
+            }
+            MaterialVerb::Value => {
                 // `:value STEP VALUE` edits the selected source; a leading
                 // pattern name edits that source from anywhere, even mid-set.
                 ensure!(
@@ -114,8 +114,8 @@ impl App {
                         },
                     },
                 })
-            })(),
-            "value-mode" => (|| {
+            }
+            MaterialVerb::ValueMode => {
                 ensure!(
                     (1..=2).contains(&args.len()),
                     "Usage: :value-mode [PATTERN] hold|ramp|toggle"
@@ -134,8 +134,8 @@ impl App {
                     Some(ValueMode::parse(mode_arg).context("Value modes: hold, ramp, toggle")?)
                 };
                 self.set_value_mode(pattern, mode)
-            })(),
-            "local" => (|| {
+            }
+            MaterialVerb::Local => {
                 ensure!(args.len() <= 1, "Usage: :local [PLACEMENT_ID]");
                 let id = args
                     .first()
@@ -151,13 +151,13 @@ impl App {
                 self.cursor = 0;
                 self.status = "Placement-relative exceptions · shared sources remain linked".into();
                 Ok(Outcome::default())
-            })(),
-            "source" => (|| {
+            }
+            MaterialVerb::Source => {
                 let id = self.selected_pattern.context("Select material")?;
                 self.select_pattern(id)?;
                 Ok(Outcome::default())
-            })(),
-            "inherit" => (|| {
+            }
+            MaterialVerb::Inherit => {
                 let EditScope::Placement(id) = self.scope else {
                     bail!("Choose a placement-local edit scope first")
                 };
@@ -168,8 +168,8 @@ impl App {
                         value: None,
                     },
                 })
-            })(),
-            "link" => (|| {
+            }
+            MaterialVerb::Link => {
                 require_args(args, 3, ":link PART PARAMETER VALUE_PATTERN")?;
                 let id = self.part_id(&args[0])?;
                 let mut part = self.part(id).context("Part missing")?.clone();
@@ -191,8 +191,8 @@ impl App {
                 self.apply(Action::Edit {
                     edit: Edit::PutPart { part },
                 })
-            })(),
-            "unlink" => (|| {
+            }
+            MaterialVerb::Unlink => {
                 require_args(args, 2, ":unlink PART PARAMETER")?;
                 let mut part = self
                     .part(self.part_id(&args[0])?)
@@ -213,8 +213,9 @@ impl App {
                 self.apply(Action::Edit {
                     edit: Edit::PutPart { part },
                 })
-            })(),
-            "audition" => (|| match args.first().map(|s| s.to_ascii_lowercase()).as_deref() {
+            }
+            MaterialVerb::Audition => match args.first().map(|s| s.to_ascii_lowercase()).as_deref()
+            {
                 Some("stop" | "off") => {
                     ensure!(
                         args.len() == 1,
@@ -256,10 +257,8 @@ impl App {
                         })
                     }
                 }
-            })(),
-            _ => return None,
-        };
-        Some(res)
+            },
+        }
     }
 
     pub(crate) fn pattern_command(&mut self, args: &[String]) -> Result<Outcome> {

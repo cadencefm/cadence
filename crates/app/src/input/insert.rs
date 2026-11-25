@@ -22,8 +22,8 @@ impl App {
                 value = Step::default();
                 0
             }
-            KeyCode::Char(c) if ('1'..='8').contains(&c) => {
-                let deg = c.to_digit(10).unwrap() as i16;
+            KeyCode::Char(c @ '1'..='8') => {
+                let deg = i16::from(c as u8 - b'0');
                 if value.active && !value.chord.is_empty() {
                     let voices = step_voices_sorted(self.doc.project(), &value);
                     let slot = voices

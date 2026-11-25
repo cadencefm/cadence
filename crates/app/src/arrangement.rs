@@ -275,28 +275,25 @@ impl App {
     }
     pub(super) fn inspect_arrangement_key(&self, key: EventKey) -> Result<ArrangementInspection> {
         let mut cached = self.arrange_ui.inspection_cache.borrow_mut();
-        if cached
+        if let Some(entry) = cached
             .as_ref()
-            .is_none_or(|entry| entry.revision != self.doc.revision() || entry.key != key)
+            .filter(|entry| entry.revision == self.doc.revision() && entry.key == key)
         {
-            *cached = Some(CachedArrangementInspection {
-                revision: self.doc.revision(),
-                key,
-                result: arrangement_view::inspect_event(
-                    self.doc.project(),
-                    self.doc.compiled(),
-                    self.doc.flags(),
-                    key,
-                )
-                .map_err(|error| format!("{error:#}")),
-            });
+            return entry.result.clone().map_err(anyhow::Error::msg);
         }
-        cached
-            .as_ref()
-            .unwrap()
-            .result
-            .clone()
-            .map_err(anyhow::Error::msg)
+        let result = arrangement_view::inspect_event(
+            self.doc.project(),
+            self.doc.compiled(),
+            self.doc.flags(),
+            key,
+        )
+        .map_err(|error| format!("{error:#}"));
+        *cached = Some(CachedArrangementInspection {
+            revision: self.doc.revision(),
+            key,
+            result: result.clone(),
+        });
+        result.map_err(anyhow::Error::msg)
     }
     pub fn arrangement_inspection(&self) -> Option<EventInspectionView> {
         if !self.is_arrangement_inspection() {

@@ -141,20 +141,24 @@ impl App {
                 _ => None,
             });
         let bank_lanes = self.play_bank_lanes();
+        let bank_sections = self.effective_bank_sections();
         let staged_section = self.staged_section();
         let sections: Vec<SectionBand> = project
             .sections
             .iter()
-            .enumerate()
-            .map(|(i, s)| {
+            .map(|s| {
                 let start = s.start_step;
                 let len = s.length_steps.max(16);
+                let key_char = bank_sections
+                    .iter()
+                    .position(|&id| id == s.id)
+                    .and_then(|pos| SECTION_KEYS.get(pos).copied());
                 SectionBand {
                     id: s.id,
                     name: s.name.clone(),
                     start_step: start,
                     length_steps: len,
-                    key_char: SECTION_KEYS.get(i).copied(),
+                    key_char,
                     active: (start..start + len).contains(&heard_step),
                     queued: queued_section_start == Some(u64::from(start)),
                     staged: staged_section == Some(s.id),

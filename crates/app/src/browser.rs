@@ -392,16 +392,16 @@ impl App {
         let Some(job) = state.job.clone() else {
             return;
         };
-        if self.assets.browser_loader.is_none() {
-            match BrowserLoader::new(Arc::clone(&self.io)) {
-                Ok(loader) => self.assets.browser_loader = Some(loader),
+        let loader = match self.assets.browser_loader.as_ref() {
+            Some(loader) => loader,
+            None => match BrowserLoader::new(Arc::clone(&self.io)) {
+                Ok(loader) => self.assets.browser_loader.insert(loader),
                 Err(error) => {
                     self.fail_browser_loader(format!("Could not start sample decoder: {error:#}"));
                     return;
                 }
-            }
-        }
-        let loader = self.assets.browser_loader.as_ref().unwrap();
+            },
+        };
         loader.active.store(job.token, Ordering::Release);
         match loader.tx.try_send(job) {
             Ok(()) => {
@@ -469,8 +469,7 @@ impl App {
             }
         }
         let mut out = Outcome::default();
-        if let Some(result) = ready {
-            let state = self.modal.browser_mut().unwrap();
+        if let (Some(result), Some(state)) = (ready, self.modal.browser_mut()) {
             state.loading = false;
             state.job = None;
             state.submitted = false;

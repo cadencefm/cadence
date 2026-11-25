@@ -87,14 +87,15 @@ impl App {
                 _ => None,
             });
         let staged_section = self.staged_section();
-        let sections: Vec<BankSectionItem> = project
-            .sections
-            .iter()
+        let sections: Vec<BankSectionItem> = self
+            .effective_bank_sections()
+            .into_iter()
             .enumerate()
-            .map(|(i, s)| {
+            .filter_map(|(i, id)| {
+                let s = project.sections.iter().find(|s| s.id == id)?;
                 let start = u64::from(s.start_step);
                 let len = u64::from(s.length_steps.max(16));
-                BankSectionItem {
+                Some(BankSectionItem {
                     key_char: SECTION_KEYS.get(i).copied(),
                     name: s.name.clone(),
                     start_bar: s.start_step as usize / 16 + 1,
@@ -102,7 +103,7 @@ impl App {
                     active: (start..start + len).contains(&heard),
                     queued: queued_section_start == Some(start),
                     staged: staged_section == Some(s.id),
-                }
+                })
             })
             .collect();
 

@@ -1,17 +1,17 @@
 //! Mixer, routing, effects, modulation, macros, delete, and export Ex commands.
-use super::{parse_ms, require_args};
+use super::{parse_ms, require_args, MixerVerb};
 use crate::*;
 
 impl App {
-    pub(super) fn execute_mixer_command(
+    pub(super) fn execute_mixer_verb(
         &mut self,
-        command: &str,
+        verb: MixerVerb,
         args: &[String],
-    ) -> Option<Result<Outcome>> {
-        let res = match command {
-            "mod" => self.mod_command(args),
-            "macro" | "macros" => self.execute_macro_command(args),
-            "duck" => (|| {
+    ) -> Result<Outcome> {
+        match verb {
+            MixerVerb::Mod => self.mod_command(args),
+            MixerVerb::Macro => self.execute_macro_command(args),
+            MixerVerb::Duck => {
                 if args.is_empty() {
                     return self.begin_workflow(WorkflowKind::Duck);
                 }
@@ -67,28 +67,28 @@ impl App {
                     depth,
                     recovery_ms,
                 })
-            })(),
-            "param" => (|| {
+            }
+            MixerVerb::Param => {
                 ensure!(args.len() >= 2, "Usage: :param NAME VALUE");
                 self.set_parameter_text(&args[0], &args[1..].join(" "))
-            })(),
-            "channel" => self.channel_command(args),
-            "fx" => self.fx_command(args),
-            "route" => (|| {
+            }
+            MixerVerb::Channel => self.channel_command(args),
+            MixerVerb::Fx => self.fx_command(args),
+            MixerVerb::Route => {
                 require_args(args, 2, ":route CHANNEL MASTER_OR_GROUP")?;
                 self.apply(Action::SetChannelOutput {
                     channel: self.channel_id(&args[0])?,
                     output: self.channel_ref(&args[1])?,
                 })
-            })(),
-            "route-instrument" => (|| {
+            }
+            MixerVerb::RouteInstrument => {
                 require_args(args, 2, ":route-instrument INSTRUMENT AUDIO_CHANNEL")?;
                 self.apply(Action::RouteInstrument {
                     instrument: self.instrument_id(&args[0])?,
                     channel: self.channel_id(&args[1])?,
                 })
-            })(),
-            "send" => (|| {
+            }
+            MixerVerb::Send => {
                 if args.is_empty() {
                     return self.begin_workflow(WorkflowKind::Send);
                 }
@@ -102,8 +102,8 @@ impl App {
                         Some(parse_amount(&args[2])?)
                     },
                 })
-            })(),
-            "clips" => (|| {
+            }
+            MixerVerb::Clips => {
                 ensure!(
                     args == ["clear"] || args == ["clear", "all"],
                     "Usage: :clips clear [all]"
@@ -115,8 +115,8 @@ impl App {
                         Some(self.selected_channel)
                     },
                 })
-            })(),
-            "rename" => (|| {
+            }
+            MixerVerb::Rename => {
                 ensure!(
                     args.len() >= 3,
                     "Usage: :rename instrument|channel|fx|pattern|part|lane ID_OR_NAME NEW_NAME"
@@ -151,14 +151,14 @@ impl App {
                         "Usage: :rename instrument|channel|fx|pattern|part|lane ID_OR_NAME NEW_NAME"
                     ),
                 }
-            })(),
-            "delete" => self.delete_command(args),
-            "mixer" => {
+            }
+            MixerVerb::Delete => self.delete_command(args),
+            MixerVerb::Mixer => {
                 self.show_workspace(Workspace::Mixer);
                 self.follow_deck();
                 Ok(Outcome::default())
             }
-            "wav" => (|| {
+            MixerVerb::Wav => {
                 ensure!(args.len() <= 2, "Usage: :wav [path] [bars]");
                 self.apply(Action::Export {
                     path: args
@@ -166,16 +166,16 @@ impl App {
                         .map_or_else(|| PathBuf::from("cadence-take.wav"), PathBuf::from),
                     bars: args.get(1).map(|s| s.parse()).transpose()?,
                 })
-            })(),
-            "bundle" => (|| {
+            }
+            MixerVerb::Bundle => {
                 if let Some(dir) = args.first() {
                     self.save_portable_bundle_to(&PathBuf::from(dir))?;
                 } else {
                     self.open_file_hub(FileHubTab::Save);
                 }
                 Ok(Outcome::default())
-            })(),
-            "stems" => (|| {
+            }
+            MixerVerb::Stems => {
                 let dir = args
                     .first()
                     .context("Usage: :stems DIR [BARS] [SAMPLE_RATE]")?;
@@ -208,10 +208,8 @@ impl App {
                     export: Some(export),
                     ..Outcome::default()
                 })
-            })(),
-            _ => return None,
-        };
-        Some(res)
+            }
+        }
     }
 
     pub(crate) fn mod_command(&mut self, args: &[String]) -> Result<Outcome> {

@@ -4,143 +4,14 @@ use super::*;
 use cadence_core::config::ThemeId;
 use cadence_core::music::{note_name, scale_label};
 
-/// Ex commands valid with zero OR more arguments (e.g. `:local`, `:undo`, `:w`, `:q`).
-const ZERO_ARG_COMMANDS: &[&str] = &[
-    "new",
-    "new!",
-    "w",
-    "write",
-    "q",
-    "q!",
-    "wq",
-    "inspect",
-    "assets",
-    "deck",
-    "tips",
-    "tutorial",
-    "help",
-    "settings",
-    "config",
-    "files",
-    "hub",
-    "saveas",
-    "stop",
-    "restart",
-    "cue",
-    "play",
-    "monitor",
-    "follow",
-    "loop",
-    "arrange",
-    "inspect-event",
-    "local",
-    "source",
-    "inherit",
-    "audition",
-    "reload-samples",
-    "reload-presets",
-    "samples",
-    "browser",
-    "stage",
-    "unstage",
-    "undo",
-    "redo",
-    "cancel",
-    "keep",
-    "release",
-    "mixer",
-    "audio",
-    "panic",
-    "midi",
-    "quantize",
-    "wav",
-    "bounce",
-    "resample",
-    "rec",
-    "record",
-    "bundle",
-    "macro",
-    "macros",
-    "pin",
-    "unpin",
-];
-
-/// Ex commands that require at least one argument (`verb <args...>`), so typing just
-/// `"preset"` or `"bpm"` or `"key"` fuzzy-matches GUI actions instead of running a broken 0-arg Ex call.
-const ARG_COMMANDS: &[&str] = &[
-    "e",
-    "e!",
-    "open-project",
-    "open-project!",
-    "import-rbs",
-    "import-rbs!",
-    "zone",
-    "clips",
-    "bpm",
-    "bars",
-    "title",
-    "key",
-    "lane",
-    "place",
-    "placement",
-    "section",
-    "end",
-    "pattern",
-    "mini",
-    "open",
-    "part",
-    "derive",
-    "fork",
-    "freeze",
-    "len",
-    "note",
-    "value",
-    "value-mode",
-    "link",
-    "unlink",
-    "instrument",
-    "kit",
-    "sampler",
-    "preset",
-    "preset-save",
-    "preset-load",
-    "tab",
-    "patch",
-    "unpatch",
-    "sample",
-    "launch",
-    "tolerance",
-    "advance",
-    "take",
-    "mod",
-    "duck",
-    "param",
-    "channel",
-    "fx",
-    "route",
-    "route-instrument",
-    "send",
-    "rename",
-    "delete",
-    "stems",
-];
-
 /// Single point of truth deciding whether `raw` should surface the top
 /// `▶ Run command: <raw>` passthrough entry in the Fuzzy Action Palette.
 pub(crate) fn is_recognized_command_line(raw: &str) -> bool {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-    let mut parts = trimmed.split_whitespace();
-    let Some(verb) = parts.next() else {
+    let mut parts = raw.split_whitespace();
+    let Some(verb) = parts.next().and_then(commands::ExVerb::parse) else {
         return false;
     };
-    let has_args = parts.next().is_some();
-    if ZERO_ARG_COMMANDS.contains(&verb) {
-        return true;
-    }
-    has_args && ARG_COMMANDS.contains(&verb)
+    verb.allows_zero_args() || parts.next().is_some()
 }
 
 #[derive(Clone, Debug)]
@@ -2035,26 +1906,9 @@ impl App {
             PaletteAction::Undo => self.apply(Action::Undo),
             PaletteAction::Redo => self.apply(Action::Redo),
             PaletteAction::JumpSection(id) => {
-                if let Some(sec) = self
-                    .doc
-                    .project()
-                    .sections
-                    .iter()
-                    .find(|s| s.id == id)
-                    .cloned()
-                {
-                    if let Some(idx) = self.doc.project().sections.iter().position(|s| s.id == id) {
-                        if idx < SECTION_KEYS.len() {
-                            return self.trigger_section_jump(idx);
-                        }
-                    }
-                    self.arrange_ui.step = sec.start_step;
-                    self.select_at_cursor();
-                    self.status = format!(
-                        "Jumped to section '{}' (bar {})",
-                        sec.name,
-                        sec.start_step / 16 + 1
-                    );
+                if self.doc.project().sections.iter().any(|s| s.id == id) {
+                    let key_hint = self.section_key_char(id);
+                    return self.trigger_section_jump_by_id(id, key_hint);
                 }
                 Ok(Outcome::default())
             }

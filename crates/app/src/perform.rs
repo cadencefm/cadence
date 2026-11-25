@@ -20,7 +20,7 @@ impl App {
             .project()
             .lanes
             .iter()
-            .skip(self.input.bank * LANE_KEYS.len())
+            .skip(self.clamped_bank() * LANE_KEYS.len())
             .take(LANE_KEYS.len())
             .map(|l| l.id)
             .collect()
@@ -720,23 +720,46 @@ impl App {
         Ok(Outcome::default())
     }
 
-    /// Trigger a section jump by 0-based index (in current bank or project sections).
+    /// Trigger a section jump for a number-row key slot (`0..10`) in the active bank.
+    /// Never leaks Bank 1 sections onto empty slots of a partially populated Bank 2+.
+    pub(super) fn trigger_bank_section_key(&mut self, slot: usize) -> Result<Outcome> {
+        let bank = self.effective_bank_sections();
+        let id = bank
+            .get(slot)
+            .copied()
+            .with_context(|| match SECTION_KEYS.get(slot) {
+                Some(key) => format!("No section on {key}"),
+                None => format!("No section {}", slot + 1),
+            })?;
+        self.trigger_section_jump_by_id(id, SECTION_KEYS.get(slot).copied())
+    }
+
+    /// Trigger a section jump by absolute 0-based index across `project.sections`
+    /// (used by MIDI pads, Program Change, and Next/Prev Section transport bindings).
+    pub(super) fn trigger_section_jump(&mut self, index: usize) -> Result<Outcome> {
+        let id = self
+            .doc
+            .project()
+            .sections
+            .get(index)
+            .map(|s| s.id)
+            .with_context(|| format!("No section {}", index + 1))?;
+        let key_hint = self.section_key_char(id);
+        self.trigger_section_jump_by_id(id, key_hint)
+    }
+
+    /// Trigger a section jump by explicit `Section` ID.
     /// When staging is active, queues `StagedChange::JumpSection` instead of mutating
     /// the timeline immediately.
-    pub(super) fn trigger_section_jump(&mut self, index: usize) -> Result<Outcome> {
+    pub(super) fn trigger_section_jump_by_id(
+        &mut self,
+        id: Id,
+        key_hint: Option<char>,
+    ) -> Result<Outcome> {
         if self.staging.is_some() {
-            let bank = self.bank_sections();
-            let id = bank
-                .get(index)
-                .copied()
-                .or_else(|| self.doc.project().sections.get(index).map(|s| s.id))
-                .with_context(|| match SECTION_KEYS.get(index) {
-                    Some(key) => format!("No section on {key}"),
-                    None => format!("No section {}", index + 1),
-                })?;
             return self.stage(StagedChange::JumpSection { section: id });
         }
-        self.section_key(index)
+        self.jump_to_section_id(id, key_hint)
     }
 
     /// Record a gesture in the staged change instead of letting it land.
@@ -1122,16 +1145,17 @@ impl App {
         }
     }
 
-    /// Ex commands for live performance. `None` when the command is not ours.
-    pub(super) fn execute_live_command(
+    /// Ex commands for live performance.
+    pub(super) fn execute_live_verb(
         &mut self,
-        command: &str,
+        verb: crate::commands::LiveVerb,
         args: &[String],
-    ) -> Option<Result<Outcome>> {
-        let result = match command {
-            "launch" => self.launch_command(args),
-            "release" => self.release_command(args),
-            "stage" => match args.first().map(|s| s.to_ascii_lowercase()).as_deref() {
+    ) -> Result<Outcome> {
+        use crate::commands::LiveVerb;
+        match verb {
+            LiveVerb::Launch => self.launch_command(args),
+            LiveVerb::Release => self.release_command(args),
+            LiveVerb::Stage => match args.first().map(|s| s.to_ascii_lowercase()).as_deref() {
                 None | Some("start") => self.apply(Action::Stage),
                 Some("fire") => self.apply(Action::FinishStaging {
                     choice: StageChoice::Fire,
@@ -1141,16 +1165,16 @@ impl App {
                 }),
                 Some(_) => Err(anyhow::anyhow!("Usage: :stage [start|fire|discard]")),
             },
-            "unstage" => self.apply(Action::FinishStaging {
+            LiveVerb::Unstage => self.apply(Action::FinishStaging {
                 choice: StageChoice::Discard,
             }),
-            "undo" => self.apply(Action::Undo),
-            "redo" => self.apply(Action::Redo),
-            "cancel" => self.apply(Action::CancelPending {
+            LiveVerb::Undo => self.apply(Action::Undo),
+            LiveVerb::Redo => self.apply(Action::Redo),
+            LiveVerb::Cancel => self.apply(Action::CancelPending {
                 all: args.first().is_some_and(|a| a == "all"),
             }),
-            "quantize" => self.quantize_command(args),
-            "tolerance" => (|| {
+            LiveVerb::Quantize => self.quantize_command(args),
+            LiveVerb::Tolerance => {
                 let steps: u32 = args
                     .first()
                     .context("Usage: :tolerance STEPS")?
@@ -1161,12 +1185,12 @@ impl App {
                 self.apply(Action::Edit {
                     edit: Edit::SetLiveTiming { timing },
                 })
-            })(),
-            "advance" => (|| {
+            }
+            LiveVerb::Advance => {
                 let steps = parse_duration(&args.join(" "))?;
                 self.apply(Action::Advance { steps })
-            })(),
-            "take" => match args.first().map(|s| s.to_ascii_lowercase()).as_deref() {
+            }
+            LiveVerb::Take => match args.first().map(|s| s.to_ascii_lowercase()).as_deref() {
                 Some("arm" | "on") => self.apply(Action::SetTakeArmed { armed: true }),
                 Some("disarm" | "off") => self.apply(Action::SetTakeArmed { armed: false }),
                 Some("toggle") => self.apply(Action::ToggleTakeArmed),
@@ -1174,31 +1198,29 @@ impl App {
                 Some("save") => self.apply(Action::SaveTake {
                     path: args.get(1).map(std::path::PathBuf::from),
                 }),
-                Some("load" | "open") => (|| {
+                Some("load" | "open") => {
                     let path = args.get(1).context("Usage: :take load PATH.take.jsonl")?;
                     self.apply(Action::LoadTake {
                         path: std::path::PathBuf::from(path),
                     })
-                })(),
+                }
                 _ => Err(anyhow::anyhow!(
                     "Usage: :take arm|disarm|toggle|discard|save [NAME|PATH]|load PATH"
                 )),
             },
-            "keep" => match args {
+            LiveVerb::Keep => match args {
                 [] => self.keep_all_overrides(),
-                [a, b] => (|| {
+                [a, b] => {
                     let start: usize = a.parse().context("Usage: :keep START_BAR END_BAR")?;
                     let end: usize = b.parse().context("Usage: :keep START_BAR END_BAR")?;
                     self.apply(Action::KeepRange {
                         start_bar: start,
                         end_bar: end,
                     })
-                })(),
+                }
                 _ => Err(anyhow::anyhow!("Usage: :keep [START_BAR END_BAR]")),
             },
-            _ => return None,
-        };
-        Some(result)
+        }
     }
 
     fn lane_named(&self, name: &str) -> Result<Id> {

@@ -71,21 +71,17 @@ impl App {
                 }),
             },
             KeyCode::BackTab => {
-                self.input.bank = self.input.bank.saturating_sub(1);
+                self.input.bank = self.clamped_bank().saturating_sub(1);
                 self.status = format!("Bank {}", self.input.bank + 1);
                 Ok(Outcome::default())
             }
             KeyCode::Tab => {
-                let lanes = self.doc.project().lanes.len().div_ceil(LANE_KEYS.len());
-                let sections = self
-                    .doc
-                    .project()
-                    .sections
-                    .len()
-                    .div_ceil(SECTION_KEYS.len());
-                if self.input.bank + 1 < lanes.max(sections).max(1) {
-                    self.input.bank += 1;
-                }
+                let bank = self.clamped_bank();
+                self.input.bank = if bank + 1 < self.jam_bank_count() {
+                    bank + 1
+                } else {
+                    bank
+                };
                 self.status = format!("Bank {}", self.input.bank + 1);
                 Ok(Outcome::default())
             }
@@ -121,7 +117,7 @@ impl App {
             .iter()
             .position(|k| *k == key)
             .context("Not a number key")?;
-        self.trigger_section_jump(index)
+        self.trigger_bank_section_key(index)
     }
 
     /// Name a lane: it becomes the focused lane and the next key chooses a

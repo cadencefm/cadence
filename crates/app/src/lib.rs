@@ -234,29 +234,44 @@ enum Mode {
     /// Choosing from a picker over the working deck.
     Pick,
 }
+#[derive(Clone, Copy, Debug)]
+struct ArrangeNav {
+    view: ArrangeView,
+    step: u32,
+    event: Option<EventKey>,
+    pitch_anchor: Option<u8>,
+    source_cursor: usize,
+    inspecting: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SelectionNav {
+    scope: EditScope,
+    pattern: Option<Id>,
+    lane: Option<Id>,
+    placement: Option<Id>,
+    part: Option<Id>,
+    instrument: Option<Id>,
+    channel: ChannelRef,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CursorNav {
+    step: usize,
+    note_voice: usize,
+    control: usize,
+    source: usize,
+    mixer_slot: MixerSlot,
+    macro_binding: Option<usize>,
+}
+
 /// Navigation history is session state, separate from musical undo.
 #[derive(Clone, Debug)]
 pub(crate) struct Navigation {
     layout: layout::Layout,
-    arrange_view: ArrangeView,
-    arrangement_event: Option<EventKey>,
-    arrange_pitch_anchor: Option<u8>,
-    arrange_source_cursor: usize,
-    arrangement_inspecting: bool,
-    scope: EditScope,
-    selected_pattern: Option<Id>,
-    selected_lane: Option<Id>,
-    selected_placement: Option<Id>,
-    selected_part: Option<Id>,
-    selected_instrument: Option<Id>,
-    selected_channel: ChannelRef,
-    mixer_slot: MixerSlot,
-    cursor: usize,
-    note_voice: usize,
-    arrange_step: u32,
-    control_cursor: usize,
-    source_cursor: usize,
-    macro_binding_cursor: Option<usize>,
+    arrange: ArrangeNav,
+    selection: SelectionNav,
+    cursors: CursorNav,
     rack_ui: RackUiState,
     query: String,
 }

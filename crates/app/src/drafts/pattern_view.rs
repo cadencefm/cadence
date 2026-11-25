@@ -342,11 +342,12 @@ pub(super) fn preview_project(
             preview.patterns.push(source.clone());
         }
     }
-    let root = target.unwrap_or_else(|| {
-        (1..=MAX_PATTERNS as u64 + 1)
+    let root = match target {
+        Some(id) => id,
+        None => (1..=MAX_PATTERNS as u64 + 1)
             .find(|id| !needed.contains(id))
-            .unwrap()
-    });
+            .context("Draft pattern ID space exhausted")?,
+    };
     preview.patterns.push(Pattern {
         id: root,
         name: "Draft result".into(),

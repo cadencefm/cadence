@@ -1,17 +1,17 @@
 //! Instrument, preset, sampler, and kit Ex commands plus sound-argument parsers.
-use super::require_args;
+use super::{require_args, InstrumentVerb};
 use crate::apply::{load_preset_via_io, resolve_preset_file_path_with};
 use crate::*;
 use cadence_core::rack::RackTemplate;
 
 impl App {
-    pub(super) fn execute_instrument_command(
+    pub(super) fn execute_instrument_verb(
         &mut self,
-        command: &str,
+        verb: InstrumentVerb,
         args: &[String],
-    ) -> Option<Result<Outcome>> {
-        let res = match command {
-            "instrument" => (|| {
+    ) -> Result<Outcome> {
+        match verb {
+            InstrumentVerb::Instrument => {
                 if args.is_empty() {
                     return self.begin_workflow(WorkflowKind::Instrument);
                 }
@@ -40,8 +40,8 @@ impl App {
                     sound,
                     channel,
                 })
-            })(),
-            "kit" => (|| {
+            }
+            InstrumentVerb::Kit => {
                 ensure!(
                     !args.is_empty(),
                     "Usage: :kit NAME [blank|{}|folder DIR [CHANNEL]]",
@@ -68,8 +68,8 @@ impl App {
                     sound,
                     channel,
                 })
-            })(),
-            "sampler" => (|| {
+            }
+            InstrumentVerb::Sampler => {
                 ensure!(
                     (1..=3).contains(&args.len()),
                     "Usage: :sampler NAME [PATH|PRESET|blank [CHANNEL]]"
@@ -82,8 +82,8 @@ impl App {
                     sound,
                     channel,
                 })
-            })(),
-            "preset" => (|| {
+            }
+            InstrumentVerb::Preset => {
                 require_args(args, 1, ":preset NAME|PATH")?;
                 if let Some(id) = self.active_instrument() {
                     self.apply(Action::LoadPreset {
@@ -96,21 +96,21 @@ impl App {
                     self.status = format!("Changed transient audition sound to '{}'", loaded.name);
                     Ok(Outcome::default())
                 }
-            })(),
-            "preset-save" => (|| {
+            }
+            InstrumentVerb::PresetSave => {
                 require_args(args, 1, ":preset-save PATH")?;
                 self.save_active_instrument_preset(Path::new(&args[0]))?;
                 Ok(Outcome::default())
-            })(),
-            "preset-load" => (|| {
+            }
+            InstrumentVerb::PresetLoad => {
                 require_args(args, 1, ":preset-load PATH|NAME")?;
                 let id = self
                     .active_instrument()
                     .or(self.selected_instrument)
                     .context("Select an instrument before loading a preset")?;
                 self.load_instrument_preset(id, &args[0])
-            })(),
-            "tab" => (|| {
+            }
+            InstrumentVerb::Tab => {
                 require_args(args, 1, ":tab panel|patchbay|zones")?;
                 let tab = RackTab::parse(&args[0])
                     .context("Unknown Rack tab (use panel, patchbay, or zones)")?;
@@ -119,18 +119,18 @@ impl App {
                 self.reset_midi_pickup();
                 self.status = format!("Rack tab: {}", tab.label());
                 Ok(Outcome::default())
-            })(),
-            "reload-samples" => self.apply(Action::ReloadSamples),
-            "reload-presets" => (|| {
+            }
+            InstrumentVerb::ReloadSamples => self.apply(Action::ReloadSamples),
+            InstrumentVerb::ReloadPresets => {
                 require_args(args, 0, ":reload-presets")?;
                 self.reload_presets_with_status();
                 Ok(Outcome::default())
-            })(),
-            "samples" | "browser" => (|| {
+            }
+            InstrumentVerb::Samples => {
                 require_args(args, 0, ":samples")?;
                 self.browse_samples()
-            })(),
-            "sample" => (|| {
+            }
+            InstrumentVerb::Sample => {
                 require_args(args, 1, ":sample PATH")?;
                 let id = self
                     .active_instrument()
@@ -162,10 +162,8 @@ impl App {
                     out.samples_changed = true;
                 }
                 Ok(out)
-            })(),
-            _ => return None,
-        };
-        Some(res)
+            }
+        }
     }
 }
 

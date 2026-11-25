@@ -17,6 +17,12 @@ pub struct PatternDeckView {
     pub name: String,
     pub kind_label: &'static str,
     pub scope_label: String,
+    /// True when the pattern's underlying `PatternKind` is a literal editable
+    /// `Notes`, `Rhythm`, or `Values` definition (not `Mini`, `Euclidean`,
+    /// `SeededValues`, or a derived pattern).
+    pub editable_literal: bool,
+    /// True when viewing/editing placement-local exceptions (`EditScope::Placement`).
+    pub is_placement_scope: bool,
     pub zoom: f32,
     pub period: usize,
     pub page_start: usize,
@@ -191,6 +197,8 @@ impl App {
                 name: "PATTERN".into(),
                 kind_label: "",
                 scope_label: String::new(),
+                editable_literal: false,
+                is_placement_scope: false,
                 zoom: self.view_state.pattern_zoom,
                 period: 16,
                 page_start: 0,
@@ -390,7 +398,7 @@ impl App {
                         curve,
                         points,
                         cursor_value,
-                        cursor_authored: true,
+                        cursor_authored: false,
                     }
                 }
                 _ => {
@@ -639,12 +647,20 @@ impl App {
             Vec::new()
         };
 
+        let editable_literal = matches!(
+            pattern.kind,
+            PatternKind::Notes { .. } | PatternKind::Rhythm { .. } | PatternKind::Values { .. }
+        );
+        let is_placement_scope = matches!(scope, EditScope::Placement(_));
+
         PatternDeckView {
             empty: false,
             pattern_id: Some(pattern.id),
             name: pattern.name.clone(),
             kind_label: kind_label(&pattern.kind),
             scope_label,
+            editable_literal,
+            is_placement_scope,
             zoom: self.pattern_effective_zoom(length),
             period: length,
             page_start,

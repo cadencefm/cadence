@@ -275,7 +275,10 @@ impl App {
                 MAX_CHORD_TONES + 1
             );
             let voices = step_voices_sorted(self.doc.project(), &step);
-            let highest = voices.last().copied().unwrap();
+            let highest = voices
+                .last()
+                .copied()
+                .context("Active step has no voices")?;
             let degree = highest
                 .degree
                 .saturating_add(2)
@@ -573,11 +576,10 @@ impl App {
 
     pub(super) fn repeat_last(&mut self) -> Result<Outcome> {
         let edits = self.last_edit.clone().context("No edit to repeat")?;
-        ensure!(
-            edits.len() == 1,
-            "Creation and compound transactions are not blindly repeated"
-        );
-        let edit = match edits.into_iter().next().unwrap() {
+        let Ok([single]) = <[Edit; 1]>::try_from(edits) else {
+            bail!("Creation and compound transactions are not blindly repeated");
+        };
+        let edit = match single {
             Edit::SetNote { value, .. } => self.edits_for_current_note(value)?,
             Edit::SetException { value, .. } => {
                 let EditScope::Placement(placement) = self.scope else {

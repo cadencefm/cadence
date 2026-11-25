@@ -695,14 +695,13 @@ impl App {
                 .any(|l| state.flags.lane_solo(l.id));
 
             for lane in &state.project.lanes {
-                if !lane_placements.contains_key(&lane.id) {
+                let Some(list) = lane_placements.get_mut(&lane.id) else {
                     continue;
-                }
+                };
                 let muted = state.flags.lane_muted(lane.id)
                     || (any_solo && !state.flags.lane_solo(lane.id));
                 if muted {
                     // Muted span creates a clean gap in the destination window.
-                    let list = lane_placements.get_mut(&lane.id).unwrap();
                     clear_placement_range(
                         list,
                         dest_start,
@@ -757,7 +756,6 @@ impl App {
                 };
 
                 let Some((orig_part_id, phase, offset_steps, exceptions)) = active_span else {
-                    let list = lane_placements.get_mut(&lane.id).unwrap();
                     clear_placement_range(
                         list,
                         dest_start,
@@ -774,7 +772,6 @@ impl App {
                     continue;
                 }
                 let resolved_part_id = resolver.resolve_part(state_part, &state.project)?;
-                let list = lane_placements.get_mut(&lane.id).unwrap();
                 apply_placement_span(
                     list,
                     Placement {
@@ -901,7 +898,7 @@ fn coalesce_adjacent_placements(placements: &mut Vec<Placement>) {
     placements.sort_by_key(|p| p.start_step);
     let mut merged: Vec<Placement> = Vec::with_capacity(placements.len());
     for pl in placements.drain(..) {
-        let can_merge = merged.last().is_some_and(|prev| {
+        if let Some(prev) = merged.last_mut().filter(|prev| {
             prev.part == pl.part
                 && prev.phase == pl.phase
                 && prev.start_step + prev.length_steps == pl.start_step
@@ -913,9 +910,8 @@ fn coalesce_adjacent_placements(placements: &mut Vec<Placement>) {
                         prev.offset_steps + prev.length_steps as i32 == pl.offset_steps
                     }
                 }
-        });
-        if can_merge {
-            merged.last_mut().unwrap().length_steps += pl.length_steps;
+        }) {
+            prev.length_steps += pl.length_steps;
         } else {
             merged.push(pl);
         }
