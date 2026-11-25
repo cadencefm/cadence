@@ -1343,10 +1343,10 @@ impl VoicePool {
                     out.preview[..n].fill([0.0; 2]);
                     out.preview_active = true;
                 }
-                for i in 0..steps {
+                for dst in &mut out.preview[..steps] {
                     let gain = f32::from(fade.remaining) * inv_total;
-                    out.preview[i][0] += fade.sample[0] * gain;
-                    out.preview[i][1] += fade.sample[1] * gain;
+                    dst[0] += fade.sample[0] * gain;
+                    dst[1] += fade.sample[1] * gain;
                     fade.remaining -= 1;
                 }
             }

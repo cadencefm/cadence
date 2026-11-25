@@ -2156,13 +2156,14 @@ impl MixerEngine {
                 continue;
             }
             let target_slot = duck.target.map(usize::from).filter(|&s| s < MAX_CHANNELS);
-            if let Some(ts) = target_slot {
+            let mut target_factors = target_slot.map(|ts| {
                 if !duck_dirty[ts] {
                     self.scratch.factors[ts][..frames].fill(1.0);
                     duck_dirty[ts] = true;
                 }
-            }
-            for i in 0..frames {
+                self.scratch.factors[ts][..frames].iter_mut()
+            });
+            for _ in 0..frames {
                 let x = (duck.elapsed / duck.recovery_frames).clamp(0.0, 1.0) as f32;
                 let target = 1.0 - duck.depth * (1.0 - x).powi(2);
                 smooth_step_f32(&mut duck.gain, target, env_sm);
@@ -2170,8 +2171,8 @@ impl MixerEngine {
                     duck.gain = 1.0;
                 }
                 duck.elapsed += 1.0;
-                if let Some(ts) = target_slot {
-                    self.scratch.factors[ts][i] *= duck.gain;
+                if let Some(factor) = target_factors.as_mut().and_then(Iterator::next) {
+                    *factor *= duck.gain;
                 }
                 // Advance pending PDC-aligned duck countdowns after evaluating this frame so
                 // a delay of `N` frames arms `elapsed = 0.0` on exact frame `N`.
