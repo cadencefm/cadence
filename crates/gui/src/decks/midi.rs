@@ -6,7 +6,7 @@
 //! - `MIDI` tab: 8 RGB performance pad tiles + 8 Focused/Project Smart Macros, unified
 //!   `DEVICE & PROFILE` + `MAPPINGS` inspector (with MIDI OUT error alert), and `LIVE MIDI MONITOR`.
 use crate::chrome::{draw_deck_frame, DeckFrameSpec};
-use crate::decks::output::{db_norm, db_to_meter_norm, fmt_db};
+use crate::decks::output::{db_norm, db_to_meter_norm, dsp_cpu_color, fmt_db_fixed};
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
 use cadence_app::view::{
@@ -578,15 +578,7 @@ fn draw_engine_health_panel(
         let ci = cpu_rect.inset(8.0, 6.0);
         let cpu_pct = (audio.cpu_load.max(0.0) * 100.0).min(999.9);
         let peak_pct = (audio.peak_cpu_load.max(0.0) * 100.0).min(999.9);
-        let cpu_color = if audio.cpu_load >= 0.85 || audio.overloaded {
-            theme.meter.clip
-        } else if audio.cpu_load >= 0.70 {
-            theme.meter.hot
-        } else if audio.cpu_load >= 0.45 {
-            theme.meter.mid
-        } else {
-            theme.meter.low
-        };
+        let cpu_color = dsp_cpu_color(audio.cpu_load, audio.overloaded, theme);
         let top_row = Rect::new(ci.x, ci.y, ci.w, 15.0);
         dl.text(
             top_row,
@@ -1034,9 +1026,9 @@ fn draw_audio_input_card(dl: &mut DisplayList, area: Rect, input: &AudioInputVie
             );
         }
         let db_str = if ch == 0 && input.clipped {
-            "CLIP!".into()
+            format!("{:>6}", "CLIP!")
         } else {
-            fmt_db(hold.max(peak))
+            fmt_db_fixed(hold.max(peak))
         };
         dl.text(
             Rect::new(body.right() - readout_w, cy - 1.0, readout_w, 11.0),

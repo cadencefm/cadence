@@ -4,7 +4,7 @@
 //! bars, M/S pills, and a scrollable vertical selected-channel detail stack aligned 1:1 with `j`/`k`.
 use crate::chrome::{draw_deck_frame, DeckFrameSpec};
 use crate::decks::output::{
-    db_norm, db_to_meter_norm, fmt_db, METER_GRATICULE_DB, METER_ZERO_DB_NORM,
+    db_norm, db_to_meter_norm, fmt_db_fixed, METER_GRATICULE_DB, METER_ZERO_DB_NORM,
 };
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
@@ -247,16 +247,16 @@ fn draw_detail_stack(
             };
             let gr_str = match ch.gr_tag {
                 Some(tag) if ch.gr_db > 0.05 || ch.gr_hold_db > 0.05 => {
-                    format!(" · {tag} -{:.1} (pk -{:.1}) dB", ch.gr_db, ch.gr_hold_db)
+                    format!(" · {tag} -{:4.1} (pk -{:4.1}) dB", ch.gr_db, ch.gr_hold_db)
                 }
                 _ => String::new(),
             };
             format!(
                 "pre {} · L {} / R {} · hold {} dBFS{flag}{gr_str}",
-                fmt_db(in_hold),
-                fmt_db(m.output_peak[0]),
-                fmt_db(m.output_peak[1]),
-                fmt_db(out_hold),
+                fmt_db_fixed(in_hold),
+                fmt_db_fixed(m.output_peak[0]),
+                fmt_db_fixed(m.output_peak[1]),
+                fmt_db_fixed(out_hold),
             )
         },
     );

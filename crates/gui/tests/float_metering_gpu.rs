@@ -297,4 +297,63 @@ fn gpu_renders_float_metering_mixer_output_chrome_and_effect_gr_holds() {
         .unwrap();
     assert!(distinct_pixel_ratio(&px_lim, dark.surface.canvas) > 0.25);
     maybe_save_png("06-fx-limiter-gr-hold.png", 1440, 860, &px_lim);
+
+    // 6. Top-bar DSP CPU pill (nominal 18% & hot 88% overload) + Auto compact stereo meter
+    //    (Output Scope hidden via `go`) + Arrange per-lane vertical meter pills (Dark & Light)!
+    app.press_keys("<Esc>ga").unwrap();
+    app.press_keys("go").unwrap(); // Hide Output Scope -> Auto compact top-bar stereo meter appears
+    app.config.show_arrange_lane_meters = true;
+    let snap_compact = AudioSnapshot {
+        health: cadence_core::runtime::AudioHealth {
+            cpu_load: 0.18,
+            peak_cpu_load: 0.34,
+            overloaded: false,
+            failed: false,
+            xrun_count: 0,
+            ..Default::default()
+        },
+        ..snap_hot.clone()
+    };
+    let fv_compact = app.frame_view(&snap_compact, status);
+    assert!(fv_compact.chrome.show_dsp_cpu);
+    assert!(fv_compact.chrome.show_compact_meter);
+    let px_compact_dark = gpu.render_rgba8(&fv_compact, &dark).unwrap();
+    assert!(distinct_pixel_ratio(&px_compact_dark, dark.surface.canvas) > 0.20);
+    maybe_save_png(
+        "07-compact-chrome-cpu-and-lane-meters-dark.png",
+        1440,
+        860,
+        &px_compact_dark,
+    );
+
+    let px_compact_light = gpu.render_rgba8(&fv_compact, &light).unwrap();
+    assert!(distinct_pixel_ratio(&px_compact_light, light.surface.canvas) > 0.20);
+    maybe_save_png(
+        "08-compact-chrome-cpu-and-lane-meters-light.png",
+        1440,
+        860,
+        &px_compact_light,
+    );
+
+    let snap_warn = AudioSnapshot {
+        health: cadence_core::runtime::AudioHealth {
+            cpu_load: 0.88,
+            peak_cpu_load: 0.96,
+            overloaded: true,
+            failed: false,
+            xrun_count: 2,
+            ..Default::default()
+        },
+        ..snap_clip.clone()
+    };
+    let px_warn = gpu
+        .render_rgba8(&app.frame_view(&snap_warn, status), &dark)
+        .unwrap();
+    assert_ne!(px_compact_dark, px_warn);
+    maybe_save_png(
+        "09-chrome-cpu-overload-and-clip-dark.png",
+        1440,
+        860,
+        &px_warn,
+    );
 }

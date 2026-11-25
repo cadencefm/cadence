@@ -36,6 +36,17 @@ crate::define_choice_enum! {
     }
 }
 
+crate::define_choice_enum! {
+    /// Visibility policy for the compact stereo meter bar beside `FINAL` in the top chrome bar.
+    #[derive(Default)]
+    pub enum TopBarMeterMode {
+        #[default]
+        Auto => ("auto", "Auto (Output hidden)", []),
+        Always => ("always", "Always", ["on"]),
+        Off => ("off", "Off", ["none"]),
+    }
+}
+
 /// Global user preferences persisted between sessions.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -51,6 +62,15 @@ pub struct UserConfig {
     pub auto_record_takes: bool,
     /// Show the Final Output oscilloscope/meter strip by default.
     pub show_output_monitor: bool,
+    /// Show the compact DSP CPU load pill in the top chrome bar alongside `FINAL`.
+    #[serde(default = "default_true")]
+    pub show_top_bar_cpu: bool,
+    /// Visibility policy for the compact stereo meter bar beside `FINAL` (`Auto`, `Always`, `Off`).
+    #[serde(default)]
+    pub top_bar_meter: TopBarMeterMode,
+    /// Show compact vertical stereo level meter pills inside Arrange lane gutters.
+    #[serde(default)]
+    pub show_arrange_lane_meters: bool,
     /// Show contextual keyboard hints in the footer chrome bar.
     #[serde(default = "default_true")]
     pub show_key_hints: bool,
@@ -150,6 +170,9 @@ impl Default for UserConfig {
             default_follow: FollowMode::Off,
             auto_record_takes: false,
             show_output_monitor: true,
+            show_top_bar_cpu: true,
+            top_bar_meter: TopBarMeterMode::Auto,
+            show_arrange_lane_meters: false,
             show_key_hints: true,
             default_bpm: 124.0,
             default_root_midi: 62,
@@ -401,6 +424,9 @@ mod tests {
             default_follow: FollowMode::Active,
             auto_record_takes: true,
             show_output_monitor: false,
+            show_top_bar_cpu: false,
+            top_bar_meter: TopBarMeterMode::Always,
+            show_arrange_lane_meters: true,
             show_key_hints: false,
             default_bpm: 128.0,
             default_root_midi: 53,

@@ -150,6 +150,8 @@ pub struct ChromeView {
     pub active_macro_count: usize,
     pub active_macro_automated: usize,
     pub output_observed: bool,
+    pub show_dsp_cpu: bool,
+    pub show_compact_meter: bool,
     pub peak_left: f32,
     pub peak_right: f32,
     pub master_clipped: bool,
@@ -495,6 +497,12 @@ impl App {
                 })
                 .count(),
             output_observed: output_observed(snapshot),
+            show_dsp_cpu: self.config.show_top_bar_cpu,
+            show_compact_meter: match self.config.top_bar_meter {
+                cadence_core::config::TopBarMeterMode::Auto => !self.view_state.monitor_visible,
+                cadence_core::config::TopBarMeterMode::Always => true,
+                cadence_core::config::TopBarMeterMode::Off => false,
+            },
             peak_left: snapshot.peak_left,
             peak_right: snapshot.peak_right,
             master_clipped,

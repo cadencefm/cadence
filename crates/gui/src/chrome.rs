@@ -1,5 +1,7 @@
 //! Top transport chrome bar, deck frames, breadcrumb trail, and bottom command/hints/status strip.
-use crate::decks::output::{db_norm, fmt_db};
+use crate::decks::output::{
+    db_norm, dsp_cpu_color, fmt_db_fixed, METER_ZERO_DB_NORM, UNOBSERVED_DB_FIXED,
+};
 use crate::display::{DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
 use cadence_app::view::{ChromeView, UiModeKind};
@@ -185,10 +187,31 @@ pub fn draw_header(dl: &mut DisplayList, area: Rect, chrome: &ChromeView, theme:
         TextAlign::Center,
     );
 
-    let meter_w = 276.0;
-    let max_meta_right = (row2.right() - meter_w - 8.0).max(row2.x + play_badge_w + 8.0);
-    let mut cursor_x = row2.x + play_badge_w + 8.0;
     let small_cw = theme.char_width(theme.font.small);
+    let status_pill: Option<(&'static str, Color, f32, f32)> = if chrome.master_clipped {
+        Some(("!CLIP", theme.meter.clip, theme.glow.clip * 0.45, 50.0))
+    } else if chrome.master_hot {
+        Some(("HOT", theme.meter.hot, 0.18, 40.0))
+    } else {
+        None
+    };
+    let status_pill_reserve = status_pill.map_or(0.0, |(_, _, _, w)| w + 6.0);
+    // Exact fixed width for `"FINAL  L -118.2  R -118.2 dBFS"` (30 monospace glyphs) so numbers never jitter.
+    let final_readout_w = (30.0 * small_cw + 4.0).ceil();
+    let show_compact_meter = chrome.show_compact_meter && row2.w >= 860.0;
+    let compact_meter_w = if show_compact_meter { 64.0 } else { 0.0 };
+    let compact_meter_reserve = if show_compact_meter {
+        compact_meter_w + 8.0
+    } else {
+        0.0
+    };
+    let show_dsp_cpu = chrome.show_dsp_cpu && row2.w >= 760.0;
+    let cpu_pill_w = if show_dsp_cpu { 72.0 } else { 0.0 };
+    let cpu_pill_reserve = if show_dsp_cpu { cpu_pill_w + 8.0 } else { 0.0 };
+    let right_cluster_w =
+        status_pill_reserve + final_readout_w + compact_meter_reserve + cpu_pill_reserve;
+    let max_meta_right = (row2.right() - right_cluster_w - 8.0).max(row2.x + play_badge_w + 8.0);
+    let mut cursor_x = row2.x + play_badge_w + 8.0;
 
     if let Some(badge) = &chrome.recording_badge {
         let (accent, glow) = match chrome.recording_phase {
@@ -405,46 +428,14 @@ pub fn draw_header(dl: &mut DisplayList, area: Rect, chrome: &ChromeView, theme:
 
     let level_text = |peak: f32| -> String {
         if !chrome.output_observed {
-            "--".into()
+            UNOBSERVED_DB_FIXED.into()
         } else {
-            fmt_db(peak)
+            fmt_db_fixed(peak)
         }
     };
-    let status_pill: Option<(&'static str, Color, f32, f32)> = if chrome.master_clipped {
-        Some(("!CLIP", theme.meter.clip, theme.glow.clip * 0.45, 50.0))
-    } else if chrome.master_hot {
-        Some(("HOT", theme.meter.hot, 0.18, 40.0))
-    } else {
-        None
-    };
-    let pill_reserve = status_pill.map_or(0.0, |(_, _, _, w)| w + 6.0);
-    let meter_str = format!(
-        "FINAL  L {}  R {} dBFS",
-        level_text(chrome.peak_left),
-        level_text(chrome.peak_right),
-    );
-    let meter_col = if chrome.master_clipped {
-        theme.meter.clip
-    } else if chrome.master_hot {
-        theme.meter.hot
-    } else {
-        theme.accent.routing
-    };
-    dl.text(
-        Rect::new(
-            row2.right() - meter_w,
-            row2.y,
-            (meter_w - pill_reserve).max(0.0),
-            row2.h,
-        ),
-        meter_str,
-        theme.font.small,
-        chrome.master_clipped,
-        meter_col,
-        TextAlign::Right,
-    );
+    let mut right_x = row2.right();
     if let Some((label, accent, glow, w)) = status_pill {
-        let prect = Rect::new(row2.right() - w, row2.y + 2.0, w, row2.h - 4.0);
+        let prect = Rect::new(right_x - w, row2.y + 2.0, w, row2.h - 4.0);
         dl.panel(
             prect,
             accent.with_alpha(0.22),
@@ -461,6 +452,157 @@ pub fn draw_header(dl: &mut DisplayList, area: Rect, chrome: &ChromeView, theme:
             accent,
             TextAlign::Center,
         );
+        right_x = prect.x - 6.0;
+    }
+
+    let meter_str = format!(
+        "FINAL  L {}  R {} dBFS",
+        level_text(chrome.peak_left),
+        level_text(chrome.peak_right),
+    );
+    let meter_col = if chrome.master_clipped {
+        theme.meter.clip
+    } else if chrome.master_hot {
+        theme.meter.hot
+    } else {
+        theme.accent.routing
+    };
+    let final_rect = Rect::new(right_x - final_readout_w, row2.y, final_readout_w, row2.h);
+    dl.text(
+        final_rect,
+        meter_str,
+        theme.font.small,
+        chrome.master_clipped,
+        meter_col,
+        TextAlign::Right,
+    );
+    right_x = final_rect.x;
+
+    // Optional compact stereo bar meter pill beside FINAL (Auto when Output Scope hidden / Always / Off).
+    if show_compact_meter {
+        let mrect = Rect::new(
+            right_x - 8.0 - compact_meter_w,
+            row2.y + 2.0,
+            compact_meter_w,
+            (row2.h - 4.0).max(12.0),
+        );
+        let border = if chrome.master_clipped {
+            theme.meter.clip
+        } else if chrome.master_hot {
+            theme.meter.hot
+        } else {
+            theme.border.hairline
+        };
+        dl.panel(
+            mrect,
+            theme.surface.recessed,
+            border,
+            theme.radii.badge,
+            1.0,
+            if chrome.master_clipped {
+                theme.glow.clip * 0.25
+            } else {
+                0.0
+            },
+        );
+        let mi = mrect.inset(4.0, 3.0);
+        let ch_h = ((mi.h - 2.0) * 0.5).max(2.0);
+        let zero_x = mi.x + mi.w * METER_ZERO_DB_NORM;
+        for (idx, peak) in [chrome.peak_left, chrome.peak_right]
+            .into_iter()
+            .enumerate()
+        {
+            let by = mi.y + idx as f32 * (ch_h + 2.0);
+            let track = Rect::new(mi.x, by, mi.w, ch_h);
+            dl.fill(track, theme.meter.track_bg);
+            if track.right() > zero_x + 0.5 {
+                dl.fill(
+                    Rect::new(zero_x, track.y, (track.right() - zero_x).max(0.0), track.h),
+                    theme.meter.clip.with_alpha(0.14),
+                );
+            }
+            if chrome.output_observed {
+                let fw = (track.w * db_norm(peak)).clamp(0.0, track.w);
+                if fw > 0.5 {
+                    let col = if peak > 1.0 {
+                        theme.meter.clip
+                    } else if peak >= 0.5 {
+                        theme.meter.high
+                    } else {
+                        theme.meter.mid
+                    };
+                    dl.fill(Rect::new(track.x, track.y, fw, track.h), col);
+                }
+            }
+        }
+        // Unity 0 dBFS hairline across both L/R bars.
+        dl.fill(
+            Rect::new(zero_x, mi.y - 0.5, 1.0, mi.h + 1.0),
+            theme.meter.zero_db.with_alpha(0.65),
+        );
+        right_x = mrect.x;
+    }
+
+    // Fixed-width top-bar DSP CPU pill (e.g. `"DSP  14%"`, `"DSP 100%"`) + mini bottom bar & peak tick.
+    if show_dsp_cpu {
+        let crect = Rect::new(
+            right_x - 8.0 - cpu_pill_w,
+            row2.y + 2.0,
+            cpu_pill_w,
+            (row2.h - 4.0).max(12.0),
+        );
+        let health = chrome.audio_health;
+        let has_cpu = chrome.output_observed || health.cpu_load > 0.0 || health.overloaded;
+        let cpu_pct = (health.cpu_load.max(0.0) * 100.0).round().min(999.0);
+        let cpu_col = if has_cpu {
+            dsp_cpu_color(health.cpu_load, health.overloaded, theme)
+        } else {
+            theme.text.muted
+        };
+        let cpu_label = if has_cpu {
+            format!("DSP {:3.0}%", cpu_pct)
+        } else {
+            "DSP  --%".into()
+        };
+        let warn = health.overloaded || health.cpu_load >= 0.70;
+        dl.panel(
+            crect,
+            if warn {
+                cpu_col.with_alpha(0.18)
+            } else {
+                theme.surface.recessed
+            },
+            if warn { cpu_col } else { theme.border.hairline },
+            theme.radii.badge,
+            1.0,
+            if health.overloaded || health.cpu_load >= 0.85 {
+                0.22
+            } else {
+                0.0
+            },
+        );
+        dl.text(
+            Rect::new(crect.x + 2.0, crect.y, crect.w - 4.0, crect.h - 3.0),
+            cpu_label,
+            theme.font.small - 1.0,
+            warn,
+            cpu_col,
+            TextAlign::Center,
+        );
+        // Subtle 2px load bar + peak hold tick along the bottom inside edge of the pill.
+        let bar = Rect::new(crect.x + 4.0, crect.bottom() - 3.5, crect.w - 8.0, 2.0);
+        dl.fill(bar, theme.meter.track_bg);
+        if has_cpu {
+            let fw = bar.w * health.cpu_load.clamp(0.0, 1.0);
+            if fw > 0.5 {
+                dl.fill(Rect::new(bar.x, bar.y, fw, bar.h), cpu_col);
+            }
+            if health.peak_cpu_load > 0.01 {
+                let px = (bar.x + bar.w * health.peak_cpu_load.clamp(0.0, 1.0) - 0.75)
+                    .clamp(bar.x, bar.right() - 1.5);
+                dl.fill(Rect::new(px, bar.y, 1.5, bar.h), theme.meter.hold_tick);
+            }
+        }
     }
 }
 

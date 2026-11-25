@@ -518,6 +518,29 @@ impl App {
                         },
                         "Show the Final Output oscilloscope & peak meter strip (go / Ctrl+o)",
                     ),
+                    crate::SettingsCoreRow::TopBarCpu => (
+                        "Top-Bar DSP CPU",
+                        if self.config.show_top_bar_cpu {
+                            "Visible".into()
+                        } else {
+                            "Hidden".into()
+                        },
+                        "Show the fixed-width DSP CPU load pill beside FINAL in the top chrome",
+                    ),
+                    crate::SettingsCoreRow::TopBarMeter => (
+                        "Top-Bar Stereo Meter",
+                        self.config.top_bar_meter.label().to_string(),
+                        "Compact L/R bar beside FINAL (Auto hides when Output is shown)",
+                    ),
+                    crate::SettingsCoreRow::ArrangeLaneMeters => (
+                        "Arrange Lane Meters",
+                        if self.config.show_arrange_lane_meters {
+                            "Visible".into()
+                        } else {
+                            "Hidden".into()
+                        },
+                        "Show compact vertical L/R peak meter pills in Arrange lane gutters",
+                    ),
                     crate::SettingsCoreRow::KeyHints => (
                         "Contextual Key Hints",
                         if self.config.show_key_hints {

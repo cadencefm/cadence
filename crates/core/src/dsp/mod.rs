@@ -45,12 +45,12 @@ pub use filter::{
     Svf, SvfCoeffs, ACID_ACCENT_THRESHOLD, ACID_FILTER_VEL_MAX,
 };
 pub use gain::{
-    apply_fader_gain, apply_pan_balance, apply_strip_gain, channel_gain_to_norm, format_db_value,
-    format_gain_db, norm_to_channel_gain, nudge_channel_gain_db, pan_mono_equal_power,
-    pan_mono_equal_power_f64, pan_stereo_balance, pan_stereo_balance_f64, stereo_mid_f32,
-    stereo_mid_f64, stereo_ms_decode_f64, stereo_ms_encode_f64, stereo_ms_width_uncorrelated,
-    stereo_ms_width_uncorrelated_f64, CHANNEL_GAIN_UNITY_NORM, MAX_CHANNEL_GAIN,
-    MAX_CHANNEL_GAIN_DB,
+    apply_fader_gain, apply_pan_balance, apply_strip_gain, channel_gain_to_norm, format_db_fixed,
+    format_db_value, format_gain_db, norm_to_channel_gain, nudge_channel_gain_db,
+    pan_mono_equal_power, pan_mono_equal_power_f64, pan_stereo_balance, pan_stereo_balance_f64,
+    stereo_mid_f32, stereo_mid_f64, stereo_ms_decode_f64, stereo_ms_encode_f64,
+    stereo_ms_width_uncorrelated, stereo_ms_width_uncorrelated_f64, CHANNEL_GAIN_UNITY_NORM,
+    MAX_CHANNEL_GAIN, MAX_CHANNEL_GAIN_DB,
 };
 pub use lofi::{
     lofi_quantize, lofi_quantize_f64, lofi_transfer_sample, LoFiProcessor, LOFI_BYPASS_BITS,

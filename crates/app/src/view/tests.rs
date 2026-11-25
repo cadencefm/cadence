@@ -1986,6 +1986,109 @@ fn arrange_smooth_scrolloff_tracks_cursor_walk_follow_and_handoff() {
 }
 
 #[test]
+fn monitoring_ergonomics_top_bar_cpu_auto_meter_and_arrange_lane_meters() {
+    let mut app = demo_app();
+    let ch0 = app.project().instruments[0].channel;
+    let snap = AudioSnapshot {
+        sample_rate: 48_000,
+        playing: true,
+        peak_left: 0.72,
+        peak_right: 0.65,
+        health: cadence_core::runtime::AudioHealth {
+            cpu_load: 0.24,
+            peak_cpu_load: 0.41,
+            overloaded: false,
+            failed: false,
+            xrun_count: 0,
+            ..Default::default()
+        },
+        channel_meters: vec![cadence_core::runtime::ChannelMeter {
+            channel: ChannelRef::Channel(ch0),
+            input_peak: [0.5, 0.4],
+            input_peak_hold: [0.6, 0.5],
+            output_peak: [0.78, 0.62],
+            output_peak_hold: [0.82, 0.68],
+            hot: false,
+            clipped: false,
+        }],
+        ..AudioSnapshot::default()
+    };
+
+    // Default: Output Scope visible -> Auto compact top-bar meter is hidden; DSP CPU pill is visible;
+    // Arrange lane meters are hidden.
+    let fv_default = app.frame_view(&snap, "Metal · 48 kHz");
+    assert!(fv_default.chrome.show_dsp_cpu);
+    assert!(!fv_default.chrome.show_compact_meter);
+    let arr0 = fv_default
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Arrange(a) => Some(a),
+            _ => None,
+        })
+        .expect("arrange deck");
+    assert!(!arr0.show_lane_meters);
+    assert!(arr0.lanes.iter().all(|l| l.meter_peak.is_none()));
+
+    // Hiding Output Scope (`go`) automatically reveals the compact top-bar stereo meter under Auto!
+    app.press_keys("go").unwrap();
+    let fv_hidden_out = app.frame_view(&snap, "Metal · 48 kHz");
+    assert!(fv_hidden_out.chrome.show_compact_meter);
+
+    // Restoring Output Scope hides the Auto compact meter again.
+    app.press_keys("go").unwrap();
+    assert!(
+        !app.frame_view(&snap, "Metal · 48 kHz")
+            .chrome
+            .show_compact_meter
+    );
+
+    // Palette / helpers toggle Always/Off meter, DSP CPU, and Arrange lane meters cleanly.
+    app.cycle_top_bar_meter(1);
+    assert_eq!(
+        app.config.top_bar_meter,
+        cadence_core::config::TopBarMeterMode::Always
+    );
+    assert!(
+        app.frame_view(&snap, "Metal · 48 kHz")
+            .chrome
+            .show_compact_meter
+    );
+    app.cycle_top_bar_meter(1);
+    assert_eq!(
+        app.config.top_bar_meter,
+        cadence_core::config::TopBarMeterMode::Off
+    );
+    app.press_keys("go").unwrap();
+    assert!(
+        !app.frame_view(&snap, "Metal · 48 kHz")
+            .chrome
+            .show_compact_meter
+    );
+
+    app.set_top_bar_cpu_visible(false);
+    assert!(!app.frame_view(&snap, "Metal · 48 kHz").chrome.show_dsp_cpu);
+
+    app.set_arrange_lane_meters_visible(true);
+    let fv_lane_meters = app.frame_view(&snap, "Metal · 48 kHz");
+    let arr1 = fv_lane_meters
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Arrange(a) => Some(a),
+            _ => None,
+        })
+        .expect("arrange deck");
+    assert!(arr1.show_lane_meters);
+    assert!(
+        arr1.lanes
+            .iter()
+            .any(|l| l.meter_peak == Some([0.78, 0.62])),
+        "lane routed to ch0 must expose live stereo peak meter"
+    );
+}
+
+#[test]
 fn pattern_follow_stays_active_and_tracks_playhead_while_zoomed() {
     let mut app = demo_app();
     // Pattern 4 = Moving lead (period 320, active across bars 5..=16, steps 64..256).

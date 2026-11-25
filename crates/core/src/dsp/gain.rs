@@ -131,6 +131,14 @@ pub fn format_db_value(gain: f32) -> String {
     }
 }
 
+/// Fixed 6-character right-aligned decibel readout (`"  -inf"`, `"  +0.0"`, `" -18.4"`, `"-118.2"`).
+///
+/// Prevents horizontal text jitter in live level readouts across silence, nominal, and hot signals.
+pub fn format_db_fixed(gain: f32) -> String {
+    let raw = format_db_value(gain);
+    format!("{raw:>6}")
+}
+
 /// Format a linear channel gain with `" dB"` suffix (`"-inf dB"`, `"+0.0 dB"`, `"+6.0 dB"`).
 pub fn format_gain_db(gain: f32) -> String {
     format!("{} dB", format_db_value(gain))
@@ -435,6 +443,31 @@ mod tests {
         assert_eq!(format_gain_db(0.0), "-inf dB");
         assert_eq!(format_gain_db(1.0), "+0.0 dB");
         assert_eq!(format_gain_db(db_to_lin(3.5)), "+3.5 dB");
+
+        for g in [
+            0.0,
+            LIN_FLOOR_F32,
+            -1.0,
+            f32::NAN,
+            db_to_lin(-118.2),
+            db_to_lin(-18.4),
+            db_to_lin(-6.0),
+            db_to_lin(-0.02),
+            1.0,
+            db_to_lin(2.3),
+            MAX_CHANNEL_GAIN,
+        ] {
+            let fixed = format_db_fixed(g);
+            assert_eq!(
+                fixed.chars().count(),
+                6,
+                "format_db_fixed({g}) must always occupy 6 monospace columns, got {fixed:?}"
+            );
+        }
+        assert_eq!(format_db_fixed(0.0), "  -inf");
+        assert_eq!(format_db_fixed(1.0), "  +0.0");
+        assert_eq!(format_db_fixed(db_to_lin(-18.4)), " -18.4");
+        assert_eq!(format_db_fixed(db_to_lin(-118.2)), "-118.2");
     }
 
     #[test]

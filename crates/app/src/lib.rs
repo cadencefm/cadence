@@ -441,8 +441,11 @@ pub(crate) enum SettingsDirKind {
 pub(crate) enum SettingsCoreRow {
     Theme,
     Preset,
-    Monitor,
     KeyHints,
+    Monitor,
+    TopBarCpu,
+    TopBarMeter,
+    ArrangeLaneMeters,
     Follow,
     AutoRecord,
     DefaultBpm,
@@ -454,11 +457,14 @@ pub(crate) enum SettingsCoreRow {
 }
 
 impl SettingsCoreRow {
-    pub(crate) const ALL: [Self; 12] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::Theme,
         Self::Preset,
-        Self::Monitor,
         Self::KeyHints,
+        Self::Monitor,
+        Self::TopBarCpu,
+        Self::TopBarMeter,
+        Self::ArrangeLaneMeters,
         Self::Follow,
         Self::AutoRecord,
         Self::DefaultBpm,
@@ -480,7 +486,10 @@ impl SettingsCoreRow {
     pub(crate) fn group(self) -> &'static str {
         match self {
             Self::Theme => "APPEARANCE",
-            Self::Preset | Self::Monitor | Self::KeyHints => "WORKSPACE",
+            Self::Preset | Self::KeyHints => "WORKSPACE",
+            Self::Monitor | Self::TopBarCpu | Self::TopBarMeter | Self::ArrangeLaneMeters => {
+                "MONITORING"
+            }
             Self::Follow | Self::AutoRecord => "TRANSPORT",
             Self::DefaultBpm | Self::DefaultRoot | Self::DefaultScale => "NEW PROJECT",
             Self::LaunchQuantize | Self::EditTiming | Self::LateTolerance => {
@@ -1405,6 +1414,33 @@ impl App {
         );
     }
 
+    pub(crate) fn set_top_bar_cpu_visible(&mut self, visible: bool) {
+        self.config.show_top_bar_cpu = visible;
+        self.settings_ui.config_dirty = true;
+        self.maybe_persist_config();
+        self.status = format!("Top-bar DSP CPU → {}", if visible { "On" } else { "Off" });
+    }
+
+    pub(crate) fn cycle_top_bar_meter(&mut self, delta: i32) {
+        self.config.top_bar_meter = self.config.top_bar_meter.cycle(delta);
+        self.settings_ui.config_dirty = true;
+        self.maybe_persist_config();
+        self.status = format!(
+            "Top-bar stereo meter → {}",
+            self.config.top_bar_meter.label()
+        );
+    }
+
+    pub(crate) fn set_arrange_lane_meters_visible(&mut self, visible: bool) {
+        self.config.show_arrange_lane_meters = visible;
+        self.settings_ui.config_dirty = true;
+        self.maybe_persist_config();
+        self.status = format!(
+            "Arrange lane meters → {}",
+            if visible { "On" } else { "Off" }
+        );
+    }
+
     pub(crate) fn maybe_persist_config(&mut self) {
         if self.settings_ui.persist_on_change && self.io.save_user_config(&self.config).is_ok() {
             self.settings_ui.config_dirty = false;
@@ -1498,6 +1534,35 @@ impl App {
                 self.status = format!(
                     "Output monitor: {}",
                     if self.view_state.monitor_visible {
+                        "on"
+                    } else {
+                        "hidden"
+                    }
+                );
+            }
+            SettingsCoreRow::TopBarCpu => {
+                self.config.show_top_bar_cpu = !self.config.show_top_bar_cpu;
+                self.status = format!(
+                    "Top-bar DSP CPU: {}",
+                    if self.config.show_top_bar_cpu {
+                        "on"
+                    } else {
+                        "hidden"
+                    }
+                );
+            }
+            SettingsCoreRow::TopBarMeter => {
+                self.config.top_bar_meter = self.config.top_bar_meter.cycle(step_sign as i32);
+                self.status = format!(
+                    "Top-bar stereo meter: {}",
+                    self.config.top_bar_meter.label()
+                );
+            }
+            SettingsCoreRow::ArrangeLaneMeters => {
+                self.config.show_arrange_lane_meters = !self.config.show_arrange_lane_meters;
+                self.status = format!(
+                    "Arrange lane meters: {}",
+                    if self.config.show_arrange_lane_meters {
                         "on"
                     } else {
                         "hidden"
@@ -1622,6 +1687,18 @@ impl App {
                     visible: self.config.show_output_monitor,
                 });
                 self.status = "Reset Output monitor → default".into();
+            }
+            SettingsCoreRow::TopBarCpu => {
+                self.config.show_top_bar_cpu = def.show_top_bar_cpu;
+                self.status = "Reset Top-bar DSP CPU → Visible".into();
+            }
+            SettingsCoreRow::TopBarMeter => {
+                self.config.top_bar_meter = def.top_bar_meter;
+                self.status = format!("Reset Top-bar stereo meter → {}", def.top_bar_meter.label());
+            }
+            SettingsCoreRow::ArrangeLaneMeters => {
+                self.config.show_arrange_lane_meters = def.show_arrange_lane_meters;
+                self.status = "Reset Arrange lane meters → Hidden".into();
             }
             SettingsCoreRow::KeyHints => {
                 self.config.show_key_hints = def.show_key_hints;
