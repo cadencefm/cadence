@@ -146,7 +146,7 @@ impl<T> AtomicBoxSlot<T> {
     }
 
     /// Off-RT only: drop pending and retired values while no audio callback is running.
-    #[cfg(feature = "audio")]
+    #[cfg(any(feature = "audio", test))]
     pub(super) fn clear(&self) {
         for slot in std::iter::once(&self.pending).chain(self.retired.iter()) {
             let ptr = slot.swap(ptr::null_mut(), Ordering::AcqRel);
@@ -816,9 +816,10 @@ impl Shared {
         }
     }
 
-    /// Off-RT only: drain pending mailboxes and publication slots while no callback is active.
-    #[cfg(feature = "audio")]
-    pub(super) fn reset_for_reconfigure(&self) {
+    /// Off-RT only: drain pending mailboxes and publication slots while no callback is active,
+    /// preserving the resolved transport step across stream rebuilds and failed retries.
+    #[cfg(any(feature = "audio", test))]
+    pub(super) fn reset_for_reconfigure(&self, start_step: u64) {
         for slot in &self.events {
             slot.store(0, Ordering::Release);
         }
@@ -853,7 +854,9 @@ impl Shared {
         for sample in self.waveform.iter() {
             sample.store(0.0_f32.to_bits(), Ordering::Relaxed);
         }
-        self.next_step.store(0, Ordering::Release);
+        self.step_position
+            .store(pack_step_position(start_step, 0.0), Ordering::Release);
+        self.next_step.store(start_step, Ordering::Release);
         self.overload_tripped.store(false, Ordering::Release);
         self.failed.store(false, Ordering::Release);
         self.error_code

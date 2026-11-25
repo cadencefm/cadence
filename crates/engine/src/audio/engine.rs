@@ -68,11 +68,34 @@ pub(super) struct Engine {
     monitor_drain: InputMonitorDrain,
 }
 
+/// Resolve the initial transport step when rebuilding [`Engine`] across an audio
+/// device, sample-rate, or buffer-size reconfiguration: preserve the live transport
+/// cursor whenever it lies inside `project.live_window`, or fall back cleanly to
+/// `window.start` so the rebuilt engine never starts in a dead zone before the ring.
+#[cfg(any(feature = "audio", test))]
+#[inline]
+pub(super) fn resolve_reconfigure_start_step(project: &ScoreWindow, preserved_step: u64) -> u64 {
+    match project.live_window {
+        Some(window) if !window.contains(preserved_step) => window.start,
+        _ => preserved_step,
+    }
+}
+
 impl Engine {
     pub(super) fn new(
         project: ScoreWindow,
         samples: SampleBank,
         sample_rate: u32,
+        shared: Arc<Shared>,
+    ) -> Self {
+        Self::new_at_step(project, samples, sample_rate, 0, shared)
+    }
+
+    pub(super) fn new_at_step(
+        project: ScoreWindow,
+        samples: SampleBank,
+        sample_rate: u32,
+        start_step: u64,
         shared: Arc<Shared>,
     ) -> Self {
         let mixer = MixerEngine::new(&project, sample_rate);
@@ -109,7 +132,7 @@ impl Engine {
             control_mask: control_stride_mask(sr, CONTROL_TARGET_HZ),
             mixer,
             rendered_frames: 0,
-            play_step: 0,
+            play_step: start_step,
             wave_counter: 0,
             wave_mask: control_stride_mask(sr, WAVE_DOWNSAMPLE_TARGET_HZ),
             wave_peak: 0.0,
@@ -118,6 +141,14 @@ impl Engine {
             audition_serial: 0,
             monitor_drain: InputMonitorDrain::new(),
         };
+        if start_step > 0 {
+            engine.scheduler.seek(start_step);
+        }
+        engine
+            .shared
+            .step_position
+            .store(pack_step_position(start_step, 0.0), Ordering::Release);
+        engine.shared.next_step.store(start_step, Ordering::Release);
         engine.publish_scope_tracks(true);
         engine.publish_mixer_meters();
         engine.update_control_block(false);

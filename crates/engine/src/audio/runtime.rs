@@ -1,5 +1,7 @@
 //! Live CPAL audio device runtime, RT-safe callback watchdog/circuit breaker,
 //! explicit device/rate/buffer selection, hot-plug detection, and silent fallback clock.
+#[cfg(feature = "audio")]
+use super::engine::resolve_reconfigure_start_step;
 use super::engine::Engine;
 #[cfg(feature = "audio")]
 use super::input::{build_input_stream_for_format, resolve_input_stream};
@@ -561,14 +563,17 @@ impl AudioRuntime {
                 let _ = worker.join();
             }
 
-            self.shared.reset_for_reconfigure();
+            let preserved_step = self.shared.next_step.load(Ordering::Acquire);
+            let start_step = resolve_reconfigure_start_step(&project, preserved_step);
+            self.shared.reset_for_reconfigure(start_step);
             self.shared.is_silent.store(false, Ordering::Release);
             apply_stream_metadata(&self.shared, &resolved);
 
-            let engine = Engine::new(
+            let engine = Engine::new_at_step(
                 project,
                 samples,
                 resolved.sample_rate,
+                start_step,
                 Arc::clone(&self.shared),
             );
             let started = build_stream_for_format(

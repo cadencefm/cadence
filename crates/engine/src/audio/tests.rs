@@ -4479,3 +4479,100 @@ fn runtime_replace_project_coalesces_rapid_effect_adds_kind_swaps_and_boundary_r
     });
     assert!(rt.snapshot().peak.is_finite());
 }
+
+#[test]
+fn reconfigure_preserves_transport_step_inside_live_window_and_resumes_audible_playback() {
+    use crate::audio::engine::resolve_reconfigure_start_step;
+    use crate::audio::shared::unpack_step_position;
+    use cadence_core::live::Performance;
+    use cadence_core::material::LIVE_RING_STEPS;
+    use cadence_core::mixer::LiveFlags;
+
+    let proj = rack_project(vec![note(1); 16], RackPatch::default_synth());
+    let flags = LiveFlags::default();
+    let mut perf = Performance::new(&proj);
+
+    // Advance past half the live ring so `live_window.start >= LIVE_RING_STEPS / 2` (512).
+    let paused_step = LIVE_RING_STEPS / 2 + 28;
+    perf.next_step = paused_step;
+    let live_score = perf.compile(&proj, &flags, None).unwrap();
+    let window = live_score.live_window.expect("live score must have window");
+    assert!(window.start >= LIVE_RING_STEPS / 2);
+    assert!(window.contains(paused_step));
+
+    // Simulate a 48 kHz -> 44.1 kHz output device switch while paused at `paused_step`.
+    let shared = Shared::new_arc();
+    shared.sample_rate.store(48_000, Ordering::Release);
+    shared.next_step.store(paused_step, Ordering::Release);
+    let preserved = shared.next_step.load(Ordering::Acquire);
+    let start_step = resolve_reconfigure_start_step(&live_score, preserved);
+    assert_eq!(start_step, paused_step);
+
+    shared.reset_for_reconfigure(start_step);
+    assert_eq!(shared.next_step.load(Ordering::Acquire), paused_step);
+    assert_eq!(
+        unpack_step_position(shared.step_position.load(Ordering::Acquire)),
+        (paused_step, 0.0)
+    );
+
+    let mut engine = Engine::new_at_step(
+        live_score.clone(),
+        Vec::new(),
+        44_100,
+        start_step,
+        Arc::clone(&shared),
+    );
+    assert_eq!(engine.play_step(), paused_step);
+
+    // Pressing Play immediately produces audible output at 44.1 kHz without waiting for step 0 -> 512.
+    assert!(shared.push_transport(TransportIntent::Play { playing: true }));
+    engine.poll_controls();
+    let mut buf = [[0.0_f32; 2]; 64];
+    let mut peak = 0.0_f32;
+    for _ in 0..16 {
+        engine.render_block(&mut buf);
+        for &[l, r] in &buf {
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+    }
+    assert!(
+        peak > 0.05,
+        "playback after 48k -> 44.1k reconfigure must produce immediate audio, got peak={peak}"
+    );
+    assert!(
+        engine.play_step() > paused_step,
+        "play_step must advance from preserved step {paused_step}, got {}",
+        engine.play_step()
+    );
+
+    // Out-of-window fallback: if `preserved_step` lies outside a freshly rewound `live_window`
+    // (e.g., user pressed Home while a failed stream couldn't consume Seek(0)), clamp to `window.start`.
+    perf.next_step = 0;
+    let rewound_score = perf.compile(&proj, &flags, None).unwrap();
+    let rewound_window = rewound_score.live_window.expect("rewound live window");
+    assert_eq!(rewound_window.start, 0);
+    let clamped = resolve_reconfigure_start_step(&rewound_score, LIVE_RING_STEPS + 500);
+    assert_eq!(clamped, rewound_window.start);
+
+    shared.reset_for_reconfigure(clamped);
+    let mut rewound_engine = Engine::new_at_step(
+        rewound_score,
+        Vec::new(),
+        44_100,
+        clamped,
+        Arc::clone(&shared),
+    );
+    assert!(shared.push_transport(TransportIntent::Play { playing: true }));
+    rewound_engine.poll_controls();
+    let mut rewound_peak = 0.0_f32;
+    for _ in 0..16 {
+        rewound_engine.render_block(&mut buf);
+        for &[l, r] in &buf {
+            rewound_peak = rewound_peak.max(l.abs()).max(r.abs());
+        }
+    }
+    assert!(
+        rewound_peak > 0.05,
+        "clamped start_step must also produce immediate audio, got peak={rewound_peak}"
+    );
+}
