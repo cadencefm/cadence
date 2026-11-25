@@ -1,8 +1,8 @@
 # Chapter 7 · Live Performance & Armed Takes
 
-> Previous: [Audio Devices, Live Recording & Hardware MIDI](06-devices-audio-and-midi.md) · **Chapter 7** · Next: [CLI, Headless Rendering, Formats & Live `--ctl`](08-cli-scripting-and-live-ctl.md)
+> Previous: [Audio Devices, Recording & Hardware MIDI](06-devices-audio-and-midi.md) · **Chapter 7** · Next: [CLI, Headless Rendering, Formats & Remote Control (`--ctl`)](08-cli-scripting-and-live-ctl.md)
 
-Cadence lets you trace every evaluated note back to its musical source, jam over your arrangement without losing your song structure, stage synchronized multi-lane transitions, commit live improvisations back into the score atomically, and arm a **crash-safe Take journal** (`tr`) whenever you want to capture a set. *(For live 24-bit WAV audio input recording via `ta` / `tA` / `ti`, see [Chapter 6 · Audio Devices, Live Recording & Hardware MIDI](06-devices-audio-and-midi.md).)*
+Cadence lets you trace every evaluated note back to its musical source, jam over your arrangement without losing your song structure, stage synchronized multi-lane transitions, commit improvisations back into the score atomically, and arm a **crash-safe Take journal** (`tr`) whenever you want to capture a set. *(For 24-bit WAV audio input recording via `ta` / `tA` / `ti`, see [Chapter 6 · Audio Devices, Recording & Hardware MIDI](06-devices-audio-and-midi.md).)*
 
 ---
 
@@ -13,7 +13,7 @@ Inside the **Arrange deck (`ga` / `Ctrl+a`)**, navigate lanes and bars with `h`/
 | Keys | View | Purpose |
 |---|---|---|
 | **`vp`** | **Placements** | Bar-level placement blocks and named timeline sections (`n → t` add, `r` edit, `X` delete, `Alt+hjkl` / `,/.` move & resize placements). |
-| **`vo`** | **Evaluated Overview** | Multi-lane note overview evaluated directly from live patterns and derivations—zero extra material created. |
+| **`vo`** | **Evaluated Overview** | Multi-lane note overview evaluated directly from retained patterns and derivations—zero extra material created. |
 | **`vr`** | **Lane Roll** | Full-height pitch roll of the selected lane's evaluated notes. |
 
 ### Event Provenance (`Enter` in `vo` / `vr`)
@@ -40,10 +40,10 @@ Press **`gb`** (`Ctrl+b`) to focus the **Bank** deck (`v` toggles between **Part
 | `m` / `s` | Toggle lane mute / solo (queued on the launch boundary while playing) |
 | `zz` | Toggle full-screen Launchpad Matrix |
 
-### Modal Jam Mode (`gj` / `Ctrl+Shift+j`) & the Universal `Alt` Layer
-Press **`gj`** or **`Ctrl+Shift+j`** to toggle modal **Jam Mode**—framed by a glowing electric **violet** deck border and floating performance HUD (`Esc` or `Ctrl+Shift+j` leaves Jam and releases held notes).
+### Jam Mode (`gj` / `Ctrl+Shift+j`) & the Universal `Alt` Layer
+Press **`gj`** or **`Ctrl+Shift+j`** to toggle **Jam Mode**—framed by a glowing electric **violet** deck border and floating performance HUD (`Esc` or `Ctrl+Shift+j` leaves Jam and releases held notes).
 
-![Afterglow 3.0 Live Jam Mode HUD with keyboard layout and Bank Launchpad](../screenshots/09-jam-perform.png)
+![Afterglow Jam Mode HUD with keyboard layout and Bank Launchpad](../screenshots/09-jam-perform.png)
 
 - **`1–0` (number row):** Jump to Sections 1–10 in the current bank (looping the section automatically if loop is enabled!).
 - **`q w e r t y u i o p` (lane row):** Open a **Lane Layer** for Lanes 1–10:
@@ -75,13 +75,13 @@ Every launch, release, section jump, and lane mute/solo lands cleanly on your ch
 - Standard grid: **`now`**, **`beat`**, **`bar`**, **`N bars`** (`2 bars`, `4 bars`, `8 bars`, …)
 - Polymetric cycle: **`cycle PATTERN`** — waits for a specific pattern (even a 5-step or 40-step cycle!) to finish its pass cleanly.
 
-Configure boundaries with **`tq`** (cycle choices), **`tQ`** (pick any project pattern for `Cycle`), **`tE`** (toggle whether live edits land `Now` or follow the launch boundary), inside **Song Properties (`gP`)** or **Settings (`g,`)**, or via Ex commands:
+Configure boundaries with **`tq`** (cycle choices), **`tQ`** (pick any project pattern for `Cycle`), **`tE`** (toggle whether edits during playback land `Now` or follow the launch boundary), inside **Song Properties (`gP`)** or **Settings (`g,`)**, or via Ex commands:
 
 ```text
 :quantize bar                        # Launch on bar boundaries
 :quantize 2 bars                     # Launch every 2 bars
 :quantize cycle "Harmonic Current"   # Land on a polymetric pattern's exact cycle boundary
-:quantize edits launch               # Queue live pattern edits onto the launch boundary
+:quantize edits launch               # Queue pattern edits onto the launch boundary
 :tolerance 2                         # 2-step late-hit grace window (0..4 steps)
 :launch Drums 2 at bar               # Explicit one-off launch override (:launch LANE [PART] [at BOUNDARY])
 :release Drums at bar                # Release one lane (or `:release all`)
@@ -100,27 +100,27 @@ Need to launch three new parts, mute the kick, and jump to the Chorus **all on t
 
 ## 4. Growing Keep, Atomic Keep & `'` *"From Here"*
 
-When a live jam clicks, turn it straight into permanent arrangement structure without stopping playback:
+When a jam clicks, turn it straight into permanent arrangement structure without stopping playback:
 
 - **Growing Keep (`Alt+c`):** Keeps the focused lane's active override. In Song mode, Cadence writes a placement starting where the override landed and **grows it bar-by-bar with the playhead as a single coalesced undo entry** until you release the lane or stop playback (inside a loop region, it commits across the loop span).
 - **Atomic Keep (`Alt+C` or `:keep`):** Writes *every* currently active lane override into the arrangement in **one undoable transaction**.
-- **`'` (*"From here"* scoped fork):** Arm `'` right before making a pattern edit during a live set—your edit forks the pattern and dependent parts from the next quantized bar onward, leaving everything earlier in the song completely untouched.
+- **`'` (*"From here"* scoped fork):** Arm `'` right before making a pattern edit during a set—your edit forks the pattern and dependent parts from the next quantized bar onward, leaving everything earlier in the song completely untouched.
 
 ---
 
 ## 5. Explicit Take Arming (`tr`) & Crash-Safe Take Deck (`gt` / `Ctrl+t`)
 
-Take recording is **explicitly armed** by default (**OFF** on launch) so everyday playback never fills session storage with throwaway takes. Press **`tr`** (or run **Arm Take Recording** in the Action Palette / `:take arm`) whenever you are ready to capture a live performance—the top Chrome bar displays an amber **`TAKE ARM`** pill while stopped and switches to a glowing red **`● REC TAKE (N)`** pill (or **`● TAKE CAPPED`** if the in-memory cap is reached) as playback streams every landed launch, section jump, flag change, and live edit safely off-thread to `<session_dir>/takes/` as compact `v1` JSONL.
+Take recording is **explicitly armed** by default (**OFF** on launch) so everyday playback never fills session storage with throwaway takes. Press **`tr`** (or run **Arm Take Recording** in the Action Palette / `:take arm`) whenever you are ready to capture a performance—the top Chrome bar displays an amber **`TAKE ARM`** pill while stopped and switches to a glowing red **`● REC TAKE (N)`** pill (or **`● TAKE CAPPED`** if the in-memory cap is reached) as playback streams every landed launch, section jump, flag change, and edit safely off-thread to `<session_dir>/takes/` as compact `v1` JSONL.
 
 > **Prefer always-on capture?** Open **Settings (`g,`)** and turn on **`Auto-Record Takes`** (`UserConfig::auto_record_takes = true`) to auto-arm take recording whenever you press `Space` (see [Chapter 6](06-devices-audio-and-midi.md)).
 
 Press **`gt`** (`Ctrl+t`) to open the **Take Deck** below Arrange (or `zz` to zoom full-screen):
 
-![Fivefold Live Take Deck showing recorded live overrides and Visual range marking across bars 14–17](../screenshots/15-take-deck.png)
+![Fivefold Live Take Deck showing recorded lane overrides and Visual range marking across bars 14–17](../screenshots/15-take-deck.png)
 
 | Keys in `gt` | Ex Command | Action |
 |---|---|---|
-| `tr` | `:take arm\|disarm\|toggle` | Arm or disarm live Take recording |
+| `tr` | `:take arm\|disarm\|toggle` | Arm or disarm Take recording |
 | `h`/`l` · `0`/`$`/`G` | — | Scrub across recorded bars |
 | **`v`** (then `h`/`l` · `v`) · `x` / `Esc` | — | **Visual range mark:** anchor start bar, extend with `h`/`l`, press `v` again to lock range · `x` / `Esc` clears marks |
 | `Enter` or `Alt+c` | `:keep START_BAR END_BAR` | Keep the marked bar range into your arrangement (auto-forking any patterns edited mid-take!) |
@@ -143,4 +143,4 @@ Explore [**Fivefold Live**](https://github.com/cadencefm/cadence/blob/main/examp
 
 ---
 
-> **Next:** Automate builds, render WAVs & stems, import ReBirth `.rbs` songs, bake factory kits, and control a running GUI session live over `--ctl` in [Chapter 8 · CLI, Headless Rendering, Formats & Live `--ctl`](08-cli-scripting-and-live-ctl.md).
+> **Next:** Automate builds, render WAVs & stems, import ReBirth `.rbs` songs, bake factory kits, and control a running GUI session over `--ctl` in [Chapter 8 · CLI, Headless Rendering, Formats & Remote Control (`--ctl`)](08-cli-scripting-and-live-ctl.md).

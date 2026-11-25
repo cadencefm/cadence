@@ -11,7 +11,7 @@ Every instrument in Cadence (`Project` v1, `InstrumentPreset` v1) is powered by 
 Instead of separating synths, samplers, and drum machines into incompatible engines, every Cadence instrument is a **`Rack`**:
 
 - **1-Zone Synths & Samplers:** A classic dual-oscillator synth, an `Acid 303` ladder lead, a single-file stereo sampler, or an experimental FM/feedback modular voice is simply a 1-zone Rack whose zone spans the full keyboard (`0..127`).
-- **Multi-Zone Kits & Layered Instruments:** A drum machine (`TR-808`, `TR-909`, `EDM Kit` — either baked samples or pure live-synthesized kits!) or velocity-layered multisample is an N-zone Rack (up to **32 zones** and **8 choke groups**) where *every individual zone* contains its own complete modular graph (sample playback, analog/FM/modal synthesis, or both side-by-side!).
+- **Multi-Zone Kits & Layered Instruments:** A drum machine (`TR-808`, `TR-909`, `EDM Kit` — either baked samples or pure synthesized kits!) or velocity-layered multisample is an N-zone Rack (up to **32 zones** and **8 choke groups**) where *every individual zone* contains its own complete modular graph (sample playback, analog/FM/modal synthesis, or both side-by-side!).
 - **4 Neutral Bare Templates (`RackTemplate`):** Start fresh with zero disk dependencies from **`Init Synth`**, **`Blank Sampler`**, **`Blank Kit`**, or **`Blank Modular`**, or load any external MIT `v1` preset from `presets/`.
 
 ### Creating Instruments (`n → i`, `:new`, `:instrument`, `:kit`, `:sampler`)
@@ -25,39 +25,39 @@ Instead of separating synths, samplers, and drum machines into incompatible engi
 :instrument Lead pulse-lead                # Load any v1 catalog preset (synth, drums, kit, or modular)
 :instrument Stab sampler stab.wav          # Sampler Rack loaded directly from an audio file
 :instrument Drums kit tr-808               # Multi-zone kit from preset (`tr-808`, `tr-808-synth`, or `folder DIR`)
-:kit Drums tr-909-synth                    # Live-synthesized 11-zone TR-909 Rack kit
+:kit Drums tr-909-synth                    # Synthesized 11-zone TR-909 Rack kit
 :sampler Vocal samples/vox.wav             # Shorthand for a Sampler Rack
 ```
 
 ### Universal 3-Tab Instrument Deck Controls (`gi` / `Ctrl+i`)
 
-Every instrument opens onto the **3-tab Instrument Deck**—**`Panel` | `Patchbay` | `Zones`**—obeying Cadence's modeless 4-tier grammar:
+Every instrument opens onto the **3-tab Instrument Deck**—**`Panel` | `Patchbay` | `Zones`**—obeying Cadence's 4-tier keyboard grammar:
 
 - **Switch Tabs:** **`H`/`L`** (or **`:page panel|patchbay|zones`** / **`:tab ...`**)
 - **Universal Actions:**
-  - **`P`**: open the unified **6-Category Preset Browser** with live non-destructive audio preview on scroll (also includes Save Preset & `R` reload)
+  - **`P`**: open the unified **6-Category Preset Browser** with instant non-destructive audio preview on scroll (also includes Save Preset & `R` reload)
   - **`r`**: rename the focused instrument (or focused module/pin/zone)
   - **`A`**: audition a note (or the focused zone at its root MIDI note)
   - **`B`**: open the **Sample Browser** to assign a WAV/FLAC/MP3/Ogg/AIFF/WavPack file to the active zone (auto-inserting `Sampler → Out.In` if the zone has no Sampler module yet)
   - **`o`**: route output channel
   - **`M`**: arm 1-key MIDI Learn on the focused control or cable attenuverter (see [Chapter 6](06-devices-audio-and-midi.md))
   - **`X`**: delete instrument (confirmation-guarded)
-- **Direct Modeless Sculpting (no mode toggle):**
+- **Direct Sculpting (no edit-mode toggle):**
   - **`Alt+h`/`l`** or **`,`/`.`**: fine adjust · **`Alt+H`/`L`** or **`<`/`>`**: coarse adjust · **`Alt+Backspace`**: reset to default
-  - **`Enter`**: open unified live-validated **Value Entry** (`1200hz`, `-3dB`, `50%`, `L35`, `+2.5 oct`) — or open the Sample Browser / link picker on link rows
+  - **`Enter`**: open unified instant-validated **Value Entry** (`1200hz`, `-3dB`, `50%`, `L35`, `+2.5 oct`) — or open the Sample Browser / link picker on link rows
   - **`e`**: inspect or bind Project Macros (`M1–M8`) & Modulations targeting the focused control
 
 ---
 
-## 2. `Panel` Tab — Quick Faceplate, 11 Orthogonal Modules & 12 Live Visualizers
+## 2. `Panel` Tab — Quick Faceplate, 11 Orthogonal Modules & 12 Visualizers
 
 The **`Panel`** tab gives you instant studio ergonomics without diving into cables unless you want to:
 
 - **Horizontal Module Pill Strip:** Cycles with **`h`/`l`** across **`Quick`** (your curated `panel_pins` performance faceplate—up to **16** pinned Rack, Zone, Module, or Cable controls) followed by every module in the active zone. Walk controls vertically with **`j`/`k`** (`w`/`b` jump groups), and reorder pins on `Quick` with **`Alt+j`/`k`**.
-- **Live GPU Visualizers (`12` Dedicated Painters):** `Quick` shows `PinnedOverview` (oscillator waveform, live modulated filter response curve, primary envelope contour, and live Dry Scope together); selecting any individual module pill switches to its dedicated real-time visualizer (VCO waveform + unison/FM state, Sampler 512-bin peak waveform + trim/loop markers, Noise filter tilt, Multi-Burst Env contour, LFO wave, Filter response + live mod band, Drive transfer curve, LoFi quantized staircase, Resonator 32-mode physical spectrum, VCA/RingMod transfer, or Out stereo spread/scope).
+- **GPU Visualizers (`12` Dedicated Painters):** `Quick` shows `PinnedOverview` (oscillator waveform, modulated filter response curve, primary envelope contour, and Dry Scope together); selecting any individual module pill switches to its dedicated real-time visualizer (VCO waveform + unison/FM state, Sampler 512-bin peak waveform + trim/loop markers, Noise filter tilt, Multi-Burst Env contour, LFO wave, Filter response + modulation band, Drive transfer curve, LoFi quantized staircase, Resonator 32-mode physical spectrum, VCA/RingMod transfer, or Out stereo spread/scope).
 - **Direct Panel Workflows:** **`a`** opens the **Add Module** picker (`:mod add`), **`x`** removes the focused module (the singular mandatory `Out` module is always protected), **`p`** pins or unpins the focused control on the `Quick` faceplate (`:pin` / `:unpin`), and **`Alt+h`/`l`** / **`,`/`.`** / **`Enter`** sculpt values directly.
 
-![Afterglow 3.0 Anthem Lead Eurorack Quick Panel with live visualizers and modulated cutoff sweep](../screenshots/05-rack-panel.png)
+![Afterglow Anthem Lead Eurorack Quick Panel with visualizers and modulated cutoff sweep](../screenshots/05-rack-panel.png)
 
 ### All 11 Orthogonal Eurorack Modules (`1..=24` Modules per Zone)
 
@@ -182,25 +182,25 @@ Resample any Part, Pattern, or Arrangement bar range offline at studio quality i
 
 ## 5. 6-Category Preset Browser (`P`), External MIT Catalog, File Hub & Bundles
 
-### Unified 6-Category Preset Browser (`P`) with Live Non-Destructive Preview
+### Unified 6-Category Preset Browser (`P`) with Instant Non-Destructive Preview
 Press **`P`** on any Instrument Rack deck (or run **Browse Instrument Presets** in the `:` / `Ctrl+Shift+p` Action Palette) to explore every sound in your catalog effortlessly:
 
 - **6 Category Filter Tabs:** Cycle **`All` | `Synth` | `Sampler` | `Drums` | `Kit` | `Modular`** with **`h`/`l`**, **`H`/`L`**, or **`Tab`/`Shift-Tab`**, alongside all **4 neutral bare templates** (`Init Synth`, `Blank Sampler`, `Blank Kit`, `Blank Modular`) plus in-browser Save Preset and `R` catalog reload.
-- **Instant Live Preview on Scroll:** Moving with **`j`/`k`** (or `↑`/`↓`) swaps the live audio engine to each highlighted Rack non-destructively from a full `Project` snapshot (so zone modulations, P-locks, and macro bindings are preserved cleanly during preview).
+- **Instant Preview on Scroll:** Moving with **`j`/`k`** (or `↑`/`↓`) swaps the audio engine to each highlighted Rack non-destructively from a full `Project` snapshot (so zone modulations, P-locks, and macro bindings are preserved cleanly during preview).
 - **Search, Audition, Commit or Restore:** Press **`/`** to filter (`Enter` locks filter for `j`/`k`, `Esc` clears filter), **`A`** to audition, **`Space`** to play/pause while scrolling, **`Enter`** to commit the chosen preset as a **single undoable transaction**, or **`Esc`** to restore your exact original Rack with **zero undo entries** and unchanged `dirty()` state.
 
-![Iron Circuit 6-category Instrument Preset Browser with live non-destructive audio preview and Rack summary](../screenshots/14-preset-browser.png)
+![Iron Circuit 6-category Instrument Preset Browser with non-destructive audio preview and Rack summary](../screenshots/14-preset-browser.png)
 
 ### External MIT `v1` `PresetCatalog` (Zero Compiled-In Patches)
 Cadence compiles **zero hardcoded sound patches** into the binary. All **63** factory presets are editable MIT **`v1` `InstrumentPreset`** JSON files discovered dynamically on disk:
 
 - **`presets/synth/` (11)** — `acid-303`, `brass-pad`, `closed-hat`, `kick`, `open-hat`, `pluck`, `pulse-lead`, `reese`, `snare`, `sub-bass`, `warm-pad`
-- **`presets/drums/` (46)** — standalone analog/FM drum patches (`analog-kick`, `analog-snare`, `analog-clap`, `analog-cowbell`, `analog-rim`, `analog-tom`, `fm-hat`, `fm-cymbal`) plus all **38** individual live-synthesized `tr-808-*`, `tr-909-*`, and `edm-kit-*` drum voices loadable into any single zone or standalone track
-- **`presets/kits/` (6)** — multi-zone `v1` Rack kits in both baked-sample (`tr-808`, `tr-909`, `edm-kit`, reproducibly rendered with 1:1 loudness parity from `factory-sources/{tr-808,tr-909,edm-kit}/project.json` via `cadence --render-kit`) and pure live-synthesis (`tr-808-synth`, `tr-909-synth`, `edm-kit-synth`) flavors (see [Chapter 8](08-cli-scripting-and-live-ctl.md))
+- **`presets/drums/` (46)** — standalone analog/FM drum patches (`analog-kick`, `analog-snare`, `analog-clap`, `analog-cowbell`, `analog-rim`, `analog-tom`, `fm-hat`, `fm-cymbal`) plus all **38** individual synthesized `tr-808-*`, `tr-909-*`, and `edm-kit-*` drum voices loadable into any single zone or standalone track
+- **`presets/kits/` (6)** — multi-zone `v1` Rack kits in both baked-sample (`tr-808`, `tr-909`, `edm-kit`, reproducibly rendered with 1:1 loudness parity from `factory-sources/{tr-808,tr-909,edm-kit}/project.json` via `cadence --render-kit`) and pure synthesized (`tr-808-synth`, `tr-909-synth`, `edm-kit-synth`) flavors (see [Chapter 8](08-cli-scripting-and-live-ctl.md))
 - **`presets/filter_grooves.json`** — clean-room MIT factory bank of 24 rhythmic filter grooves (`00..=23`) across 6 categories (`Pulses`, `Grooves`, `Syncopation`, `Swells`, `32nd Gates`, `Polyrhythms`), extensible up to 128 grooves (`00..=127`) via user-supplied or saved custom banks in `<project_dir>/presets/filter_grooves.json` or `~/.config/cadence/presets/filter_grooves.json`
 
 ### Sample Browser, File Hub & Portable Bundles
-- **Sample Browser (`B`, `gS`, `Ctrl+Shift+b`, or `Enter` on `Sample` rows):** Universal **`/`** live filter (`Enter` locks filter for `j`/`k` list navigation, `Ctrl+u` clears, `Esc` clears filter then closes), off-thread audition (`A`), assign (`Enter`, auto-inserting a `Sampler → Out.In` module if the active zone has none and importing RIFF `smpl`/`inst` root/loop metadata), reload/rescan (`r`/`R`).
+- **Sample Browser (`B`, `gS`, `Ctrl+Shift+b`, or `Enter` on `Sample` rows):** Universal **`/`** instant filter (`Enter` locks filter for `j`/`k` list navigation, `Ctrl+u` clears, `Esc` clears filter then closes), off-thread audition (`A`), assign (`Enter`, auto-inserting a `Sampler → Out.In` module if the active zone has none and importing RIFF `smpl`/`inst` root/loop metadata), reload/rescan (`r`/`R`).
 - **File Hub (`gf`, `Ctrl+Shift+f/o/s/e`):** 4-tab workspace (**`H`/`L`**, **`Tab`/`Shift-Tab`**, or **`1–4`** switch between **Open/Recent/Examples/Bundles/Takes**, **Save & Bundle**, **Import** [Preset Library, MIDI profiles & clean-room ReBirth `.rbs`], and **Export Audio** [WAV/Stems]). Quick-saving an existing project with **`Ctrl+s`** writes immediately without opening the dialog. Loading an instrument preset, MIDI profile, or take from File Hub **auto-closes File Hub** cleanly. Press **`/`** to filter, **`F`** in any tab to open a native OS Finder/file dialog, or **`R`** on Import to refresh the preset catalog.
 - **Portable Bundles (`:bundle DIR`):** Writes `DIR/project.json` and copies every audio file referenced by any `Sampler` module across every Rack zone into `DIR/samples/` with clean relative paths—ready to share or archive anywhere.
 - **Diagnostics & Custom Paths:** Run **`:assets`** to inspect sample readiness and missing files, **`:reload-samples`** / **`:reload-presets`** to refresh assets from disk, or open **Settings (`g,` / `Ctrl+,`)** to manage persistent **`sample_dirs`** and **`preset_dirs`** (`a` type path, `F` native folder picker, `x` delete, `Ctrl+s` save). You can also pass repeatable `--sample-dir` and `--preset-dir` flags on the CLI.

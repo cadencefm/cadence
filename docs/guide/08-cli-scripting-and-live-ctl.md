@@ -1,8 +1,8 @@
-# Chapter 8 · CLI, Headless Rendering, Formats & Live `--ctl`
+# Chapter 8 · CLI, Headless Rendering, Formats & Remote Control (`--ctl`)
 
 > Previous: [Live Performance & Armed Takes](07-performing-and-takes.md) · **Chapter 8** · [Guide Home](README.md)
 
-Everything you can do interactively in Cadence can also be validated, rendered, imported, scripted, or driven live from external tools and AI co-producers via the CLI and Unix control socket (`--ctl`).
+Everything you can do interactively in Cadence can also be validated, rendered, imported, scripted, or driven externally from tools and AI co-producers via the CLI and Unix control socket (`--ctl`).
 
 ---
 
@@ -24,7 +24,7 @@ cargo run --release -- --project examples/demo/project.json \
 cargo run --release -- --project examples/iron-circuit/project.json \
   --stems ./stems/iron-circuit --bars 16 --sample-rate 48000
 
-# Render a saved live performance take offline (with 2-bar reverb/delay tail)
+# Render a saved performance take offline (with 2-bar reverb/delay tail)
 cargo run --release -- --project examples/fivefold-live/project.json \
   --take examples/fivefold-live/takes/set.take.jsonl \
   --take-tail-bars 2 --render fivefold.wav
@@ -38,8 +38,8 @@ cargo run --release -- --project my-song.json --recover
 
 ### Useful Session, Audio & Discovery Flags
 - `--silent`: run interactively without opening an OS audio output device.
-- `--audio-device NAME`: preferred live audio output device name (substring match; overrides `config.json` for this session).
-- `--buffer-size FRAMES`: preferred live audio callback buffer size (`32..=8192` frames; overrides `config.json` for this session).
+- `--audio-device NAME`: preferred audio output device name (substring match; overrides `config.json` for this session).
+- `--buffer-size FRAMES`: preferred audio callback buffer size (`32..=8192` frames; overrides `config.json` for this session).
 - `--sample-dir DIR` / `--preset-dir DIR`: repeatable extra search roots (`--sample-roots-only` restricts Sample Browser discovery to explicit `--sample-dir` roots).
 - `--session-dir DIR`: override the per-project session directory (instance lock, `recovery.json`, armed `takes/`, default `ctl.sock`).
 - `--list-midi`, `--midi-in [PORT]`, `--midi-out [PORT]`: inspect or connect hardware MIDI ports at launch.
@@ -48,7 +48,7 @@ cargo run --release -- --project my-song.json --recover
 
 ## 2. Clean-Room Formats Crate & ReBirth RB-338 `.rbs` Import (`crates/formats`)
 
-Third-party song format importers live in the dedicated, feature-gated **`cadence-formats`** crate (`crates/formats/`), keeping `cadence-core` and `cadence-engine` free of external format parsers. It houses Cadence's clean-room MIT parser and converter for classic **ReBirth RB-338 `.rbs`** songs behind **`feature = "rbs"`** (enabled by default in the root `cadence` binary)—supporting both **ReBirth 1.x** (`MThd` SMF with 7-bit-packed `TinY` SysEx: 2× `TB-303` + `TR-808`) and **ReBirth 2.0** (`CAT RB40` IFF, file versions `4.0`, `4.1`, and `4.2`, adding `TR-909`):
+Third-party song format importers are isolated in the feature-gated **`cadence-formats`** crate (`crates/formats/`), keeping `cadence-core` and `cadence-engine` free of external format parsers. It houses Cadence's clean-room MIT parser and converter for classic **ReBirth RB-338 `.rbs`** songs behind **`feature = "rbs"`** (enabled by default in the root `cadence` binary)—supporting both **ReBirth 1.x** (`MThd` SMF with 7-bit-packed `TinY` SysEx: 2× `TB-303` + `TR-808`) and **ReBirth 2.0** (`CAT RB40` IFF, file versions `4.0`, `4.1`, and `4.2`, adding `TR-909`):
 
 ```sh
 # Open a ReBirth .rbs song directly in the GUI (or convert headless with --output)
@@ -60,7 +60,7 @@ cargo run --release -- --import-rbs classic-acid.rbs --render classic-acid.wav
 cargo run --release -- --project classic-acid.rbs
 ```
 
-Inside the GUI, use **`:import-rbs PATH`** (or open **File Hub `gf`** → **Import** tab). The importer translates 303 patterns (6-module `AcidLowPass` Racks with `filter_vel_amount` accent, slide, deduplicated transposed parts), `TR-808`/`TR-909` multi-zone Rack kits, `Synths`/`Drums` Groups, `Echo` Return + automated `Send`, `Drive`, Pattern Controlled `Filter` (PCF), `Compressor`, Global Shuffle (`Swing`), Song Mode sections, and live knob/mixer automation into an editable native Cadence project with calibrated mix headroom.
+Inside the GUI, use **`:import-rbs PATH`** (or open **File Hub `gf`** → **Import** tab). The importer translates 303 patterns (6-module `AcidLowPass` Racks with `filter_vel_amount` accent, slide, deduplicated transposed parts), `TR-808`/`TR-909` multi-zone Rack kits, `Synths`/`Drums` Groups, `Echo` Return + automated `Send`, `Drive`, Pattern Controlled `Filter` (PCF), `Compressor`, Global Shuffle (`Swing`), Song Mode sections, and knob/mixer automation into an editable native Cadence project with calibrated mix headroom.
 
 ---
 
@@ -79,7 +79,7 @@ cargo run --release -- \
   --sample-rate 48000
 ```
 
-Each Audio channel in the source project is rendered, trimmed cleanly, measured (duration, peak, DC offset), written as a WAV with embedded RIFF `inst` + `smpl` metadata into `--out-samples`, and wired into a ready-to-load **`v1` `InstrumentPreset`** JSON (`category: "Kit"`, 1-based `RackZone` pads with `[Sampler -> Out]`) at `--out-preset`. Passing optional `--out-synth-preset` also writes the matching pure live-synthesis multi-zone Rack kit, and `--out-voices-dir` exports each individual drum voice as a standalone 1-zone preset.
+Each Audio channel in the source project is rendered, trimmed cleanly, measured (duration, peak, DC offset), written as a WAV with embedded RIFF `inst` + `smpl` metadata into `--out-samples`, and wired into a ready-to-load **`v1` `InstrumentPreset`** JSON (`category: "Kit"`, 1-based `RackZone` pads with `[Sampler -> Out]`) at `--out-preset`. Passing optional `--out-synth-preset` also writes the matching synthesized multi-zone Rack kit, and `--out-voices-dir` exports each individual drum voice as a standalone 1-zone preset.
 
 ---
 
@@ -112,7 +112,7 @@ cargo run --release -- --empty \
   --script examples/agent-session/session.jsonl \
   --output session.json --render session.wav
 
-# Run a live headless engine over stdin/stdout (transport ticks every ~16 ms while idle)
+# Run an interactive headless engine over stdin/stdout (transport ticks every ~16 ms while idle)
 cargo run --release -- --empty --stdio
 ```
 
@@ -120,9 +120,9 @@ See [**Agent Session**](https://github.com/cadencefm/cadence/blob/main/examples/
 
 ---
 
-## 5. Live GUI Control Socket (`--ctl` & `cadence ctl`)
+## 5. Remote GUI Control Socket (`--ctl` & `cadence ctl`)
 
-Co-produce live alongside a script, terminal, or AI agent while **watching and hearing Cadence's real GPU window update in real time**! Every edit sent over `--ctl` passes through the exact same `Document` pipeline and lands cleanly on your **`u` undo stack**.
+Co-produce alongside a script, terminal, or AI agent while **watching and hearing Cadence's GPU window update in real time**! Every edit sent over `--ctl` passes through the exact same `Document` pipeline and lands cleanly on your **`u` undo stack**.
 
 ### 1. Launch Cadence with `--ctl`
 ```sh
@@ -133,40 +133,40 @@ cargo run --release -- --project examples/demo/project.json --ctl
 cargo run --release -- --project examples/demo/project.json --ctl /tmp/cadence.sock
 ```
 
-The control socket is created with strict **`0o600`** (owner-only) permissions, checks for live listeners before replacing stale files, wakes the GUI event loop immediately on incoming requests, and cleans up both the socket file and temporary `ear.wav` on exit.
+The control socket is created with strict **`0o600`** (owner-only) permissions, checks for active listeners before replacing stale files, wakes the GUI event loop immediately on incoming requests, and cleans up both the socket file and temporary `ear.wav` on exit.
 
-### 2. Drive & Audition the Live Session with `cadence ctl`
+### 2. Drive & Audition the Running Session with `cadence ctl`
 `cadence ctl` auto-discovers `--sock PATH`, `--session-dir DIR`, `CADENCE_CTL_SOCK`, or the most recently active session socket:
 
 | Subcommand | Description |
 |---|---|
-| `cadence ctl state [--compact]` | Fetch live session state, transport position, revision, and (without `--compact`) full project JSON. |
-| `cadence ctl meters` | Fetch live 32-bit float channel input/output peaks, peak holds, `hot`/`clipped` flags, and Compressor/Limiter gain-reduction meters. |
-| `cadence ctl cmd "<LINE>" [--expected-revision N] [--compact]` | Execute any Cadence Ex command line on the live GUI session (pushed onto `u` undo stack). |
+| `cadence ctl state [--compact]` | Fetch current session state, transport position, revision, and (without `--compact`) full project JSON. |
+| `cadence ctl meters` | Fetch 32-bit float channel input/output peaks, peak holds, `hot`/`clipped` flags, and Compressor/Limiter gain-reduction meters. |
+| `cadence ctl cmd "<LINE>" [--expected-revision N] [--compact]` | Execute any Cadence Ex command line on the running GUI session (pushed onto `u` undo stack). |
 | `cadence ctl action '<JSON>' [--expected-revision N] [--compact]` | Execute any typed `cadence_app::Action` JSON object with optional optimistic-concurrency revision checking. |
-| `cadence ctl listen --bars A..B [--solo CH,...] [--sr 24000] [--out WAV]` | Render an exact 1-based half-open `A..B` (or inclusive `A..=B`) bar window from live in-memory state (temporary `--solo` never alters GUI flags) with peak/RMS/clip telemetry. |
-| `cadence ctl listen --live SECS [--sr 24000] [--out WAV]` | Capture `0.25..=30.0` seconds of live speaker output from the lock-free audio tap ring on a background thread so live Jam/MIDI/GPU rendering never stalls. |
+| `cadence ctl listen --bars A..B [--solo CH,...] [--sr 24000] [--out WAV]` | Render an exact 1-based half-open `A..B` (or inclusive `A..=B`) bar window from current in-memory state (temporary `--solo` never alters GUI flags) with peak/RMS/clip telemetry. |
+| `cadence ctl listen --live SECS [--sr 24000] [--out WAV]` | Capture `0.25..=30.0` seconds of real-time speaker output from the lock-free audio tap ring on a background thread so Jam/MIDI/GPU rendering never stalls. |
 
-### Example Live Co-Production Loop
+### Example Remote Co-Production Loop
 ```sh
 # 1. Inspect current revision & compact telemetry
 cadence ctl state --compact
 
-# 2. Mutate the live project cleanly (guarded by expected revision)
+# 2. Mutate the running project cleanly (guarded by expected revision)
 cadence ctl cmd "bpm 132" --expected-revision 4 --compact
 cadence ctl cmd "macro 1 75%" --compact
 cadence ctl action '{"op":"play","playing":true}' --compact
 
-# 3. Check live 32-bit float headroom & bus compression
+# 3. Check 32-bit float headroom & bus compression
 cadence ctl meters
 
 # 4. Audition bars 17..21 with temporary solo on Drums + Bass (without mutating GUI solo flags!)
 cadence ctl listen --bars 17..21 --solo Drums,Bass --out /tmp/drop-check.wav
 
-# 5. Or tap 4 seconds of whatever is currently playing live out of the speakers
-cadence ctl listen --live 4.0 --out /tmp/live-tap.wav
+# 5. Or tap 4 seconds of whatever is currently playing out of the speakers
+cadence ctl listen --live 4.0 --out /tmp/speaker-tap.wav
 ```
 
 ---
 
-> **Go deeper:** Read the [Specifications](../spec/decks-and-interaction.md) ([Material & Timing](../spec/material-and-timing.md), [DSP & Audio Engine](../spec/dsp-and-audio-engine.md), [Protocols](../spec/protocols.md)), [Design Decisions](../design-decisions.md), and [Verification Suite](../verification.md), or return to the [User Guide Home](README.md).
+> **Go deeper:** Read the [Specifications](../spec/decks-and-interaction.md) ([Material & Timing](../spec/material-and-timing.md), [DSP & Audio Engine](../spec/dsp-and-audio-engine.md), [Protocols](../spec/protocols.md)), [Design Decisions](../design-decisions.md), and [Verification & Testing](../verification.md), or return to the [User Guide Home](README.md).

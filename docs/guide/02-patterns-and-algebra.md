@@ -10,10 +10,10 @@ Cadence never forces you to bake musical ideas into disconnected clips. This cha
 
 | Entity | Role | Key Properties |
 |---|---|---|
-| **Pattern** | Live musical definition—independent of sound or song position. | One of 22 `PatternKind`s (literal notes, rhythms, value curves, inline `:mini`, Euclidean rhythms, or retained derivations). |
+| **Pattern** | Reusable musical definition—independent of sound or song position. | One of 22 `PatternKind`s (literal notes, rhythms, value curves, inline `:mini`, Euclidean rhythms, or retained derivations). |
 | **Part** | Joins one **Pattern** to one **Instrument**. | `transpose` (semitones), `velocity_scale`, and per-note **Parameter Links / P-locks** (`:link PART PARAM VALUE_PAT`). |
 | **Placement** | Schedules one **Part** onto a **Lane** for a bar span. | `start_step`, `length_steps`, **Phase** (`Song` or `Restart`), `offset_steps`, and optional step-level **local exceptions**. |
-| **Lane** | Arrangement track & live performance channel. | Holds non-overlapping **Placements** plus a **launchpad part list** (`:lane LANE add PART`) for live overrides. |
+| **Lane** | Arrangement track & performance channel. | Holds non-overlapping **Placements** plus a **launchpad part list** (`:lane LANE add PART`) for live overrides. |
 
 ### Phase Modes: `Song` vs. `Restart`
 - **`Song` (default):** Evaluates the pattern against the global song clock (`song_step + offset_steps`). A 5-step motif or 64-step harmony stays phase-aligned across breaks, muting, and separate placements.
@@ -57,7 +57,7 @@ Cadence provides **6 source kinds** and **16 retained derivation operators** (`6
 | **`AddDegrees`** | `add` | `:derive NAME add NOTES DEGREES` | Shifts a note pattern's scale degrees by a `Degrees` value pattern on its own independent clock. |
 | **`Mask`** | `mask` | `:derive NAME mask NOTES RHYTHM` | Gates a note pattern so notes only sound where `Rhythm` triggers. |
 | **`Transpose`** | `transpose` | `:derive NAME transpose SOURCE SEMITONES` | Chromatically transposes any note pattern by signed semitones. |
-| **`NotesFromValues`** | `from` | `:derive NAME from DEGREES RHYTHM [OFFSET VEL GATE]` | Combines a `Degrees` curve and a `Rhythm` trigger stream into a live note pattern. |
+| **`NotesFromValues`** | `from` | `:derive NAME from DEGREES RHYTHM [OFFSET VEL GATE]` | Combines a `Degrees` curve and a `Rhythm` trigger stream into a derived note pattern. |
 | **`RangeFold`** | `fold` | `:derive NAME fold SOURCE LOW_MIDI HIGH_MIDI` | Octave-folds out-of-range notes cleanly into `[LOW_MIDI, HIGH_MIDI]` (keeps basslines or leads in their sweet spot). |
 
 ### C. Time, Groove & Articulation Derivations (6)
@@ -77,7 +77,7 @@ Cadence provides **6 source kinds** and **16 retained derivation operators** (`6
 |---|---|---|---|
 | **`Chance`** | `chance` | `:derive NAME chance SOURCE PROB [SEED]` | Deterministic per-hit probability gate (`0..1` or `0%..100%`) using a pure seeded hash. |
 | **`Every`** | `every` | `:derive NAME every INTERVAL BASE ALT` | Plays `BASE` normally and switches to `ALT` every `INTERVAL`-th cycle (bar/phrase turnarounds). |
-| **`Concat`** | `concat` | `:derive NAME concat P1 P2 ...` | Sequences multiple patterns end-to-end as a longer live form. |
+| **`Concat`** | `concat` | `:derive NAME concat P1 P2 ...` | Sequences multiple patterns end-to-end as a longer linked form. |
 | **`Stack`** | `stack` | `:derive NAME stack P1 P2 ...` | Layers multiple patterns simultaneously, merging sub-step events in exact time order. |
 | **`Shape`** | `shape` | `:derive NAME shape SOURCE VELOCITY [GATE]` | Shapes a note pattern's velocity (and optionally gate length) from normalized `Values` curves. |
 
@@ -85,13 +85,13 @@ Cadence provides **6 source kinds** and **16 retained derivation operators** (`6
 
 ## 4. Editing Patterns & Value Curves (`gp` / `Ctrl+p`)
 
-Open any pattern in the **Pattern deck (`gp` / `Ctrl+p`)**. Pattern editing follows Cadence's modeless 4-tier grammar: **`hjkl` strictly navigates**, **`Alt+hjkl` and `,`/`.` sculpt directly in place**, and **`i` opens `Step Insert`** for piano-keyboard entry on editable `Notes` patterns.
+Open any pattern in the **Pattern deck (`gp` / `Ctrl+p`)**. Pattern editing follows Cadence's 4-tier keyboard grammar: **`hjkl` strictly navigates**, **`Alt+hjkl` and `,`/`.` sculpt directly in place**, and **`i` opens `Step Insert`** for piano-keyboard entry on editable `Notes` patterns.
 
 ### 2D Polyphonic Notes & Rhythm Controls
 - **Navigate (never mutates notes):**
   - **`h`/`l`** step · **`H`/`L`** (or `PgUp`/`PgDn`) jump 16 steps (1 bar) · **`0`/`$`/`G`** first/last step · **`w`/`b`** jump active notes/hits · **`=`/`-`** quick zoom.
   - **`j`/`k`** select stacked chord voices vertically (sorted visually from lowest pitch `0` to highest `N-1`; the status bar shows `Voice 2/4 · A♭4 · len 1.50 · vel 88%`).
-- **Direct Modeless Sculpting on `Notes` (or `:local` Placement scope):**
+- **Direct Sculpting on `Notes` (or `:local` Placement scope):**
   - **`Alt+j`/`k`** nudge pitch `±1` degree (**`Alt+J`/`K`** `±1` octave) · **`[`/`]`** (and **`#`**) flat/sharp accidental.
   - **`Alt+h`/`l`** gate length `±0.25` steps (**`Alt+H`/`L`** `±1.0`, range `0.05..64.0`).
   - **`,`/`.`** velocity `±5%` (**`<`/`>`** `±15%`).
@@ -105,7 +105,7 @@ Open any pattern in the **Pattern deck (`gp` / `Ctrl+p`)**. Pattern editing foll
 
 ### Value Curve Editor (`Degrees` & `Normalized`)
 - **Navigate:** **`[count]h`/`l`** steps across time offsets · **`H`/`L`** jumps 1 bar · **`w`/`b`** jumps between authored breakpoints · **`0`/`$`/`G`** first/last step.
-- **Direct Sculpting:** **`Alt+j`/`k`** and **`,`/`.`** nudge value fine (`±0.01` / `±1` deg) · **`Alt+J`/`K`** and **`<`/`>`** coarse (`±0.10` / `±7` deg) · **`Alt+h`/`l`** slide breakpoint in time `±1` step (**`Alt+H`/`L`** `±4` steps) · **`Enter`** opens unified live-validated **Value Entry** (`0.5` or `50%` for Normalized; signed integers for Degrees) · **`m`** toggles `Hold ↔ Ramp` · **`x`** deletes breakpoint · **`e`** inspects or jumps to downstream Modulation/Link consumers.
+- **Direct Sculpting:** **`Alt+j`/`k`** and **`,`/`.`** nudge value fine (`±0.01` / `±1` deg) · **`Alt+J`/`K`** and **`<`/`>`** coarse (`±0.10` / `±7` deg) · **`Alt+h`/`l`** slide breakpoint in time `±1` step (**`Alt+H`/`L`** `±4` steps) · **`Enter`** opens unified instant-validated **Value Entry** (`0.5` or `50%` for Normalized; signed integers for Degrees) · **`m`** toggles `Hold ↔ Ramp` · **`x`** deletes breakpoint · **`e`** inspects or jumps to downstream Modulation/Link consumers.
 - **Direct edit from anywhere (even mid-set):** **`:value [PATTERN] STEP VALUE|off`** (1-based step) or **`:value-mode [PATTERN] hold|ramp|toggle`**.
 
 ---
@@ -114,11 +114,11 @@ Open any pattern in the **Pattern deck (`gp` / `Ctrl+p`)**. Pattern editing foll
 
 Cadence includes a pure, deterministic Strudel/Tidal-inspired mini-notation engine with true fractional sub-step timing—every triplet, quintuplet, Euclidean hit, and ratchet renders directly onto the Pattern roll and audio engine with zero rounding loss.
 
-![Afterglow 3.0 Bell Mini pattern showing inline :mini code bar and fractional sub-step piano roll](../screenshots/08-pattern-mini.png)
+![Afterglow Bell Mini pattern showing inline :mini code bar and fractional sub-step piano roll](../screenshots/08-pattern-mini.png)
 
-### Dedicated Live-Validated Mini-Notation Editor (`Enter` on `Mini`)
+### Dedicated Instant-Validated Mini-Notation Editor (`Enter` on `Mini`)
 - **Open editor:** Select any `Mini` pattern in `gp` and press **`Enter`** (or run **Edit Mini-Notation** from the `:` / `Ctrl+Shift+p` Action Palette) to launch the dedicated **`MINI EDITOR`** modal.
-- **Live feedback on every keystroke:** Parses immediately via `cadence_core::mini::parse_mini`, showing a real-time green valid status with **Cycle 1 event count and resolved note preview** (e.g., `C5 E♭5 F5 G5 …`), or highlighting exact syntax errors before you commit.
+- **As-you-type feedback:** Parses on every keystroke via `cadence_core::mini::parse_mini`, showing a real-time green valid status with **Cycle 1 event count and resolved note preview** (e.g., `C5 E♭5 F5 G5 …`), or highlighting exact syntax errors before you commit.
 - **Controls:** Type code directly · **`Ctrl+u`** clear · **`Enter`** commits when valid (single undo entry) · **`Esc`** cancels cleanly.
 - **Create or script by name:** Press **`n` → `m`** to create via modal form, **`r`** on `gp` to edit name/step length in-place, or run `:mini LeadLine 16 c4 [e4 g4] ~ <a4 b4>` via the Action Palette or `cadence ctl cmd` (defaults to 16 steps if omitted).
 
@@ -143,7 +143,7 @@ Modifiers chain cleanly in any order—for instance, `c4(3,8)*2?0.8!` distribute
 
 ### Real Recipes from the Showcase Projects
 
-- **Afterglow 3.0 (`Bell Mini`, 16 steps)** — syncopated sub-step grace notes and a 32nd-note double tap (`eb5*2`):
+- **Afterglow (`Bell Mini`, 16 steps)** — syncopated sub-step grace notes and a 32nd-note double tap (`eb5*2`):
   ```text
   :mini "Bell Mini" 16 ~ c5 ~ [eb5 f5] ~ ~ [g5 f5] eb5 ~ c5 ~ [bb4 c5] eb5*2 ~ [f5 g5] ~
   ```

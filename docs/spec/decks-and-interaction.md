@@ -1,6 +1,6 @@
-# GPU Presentation, Modeless Keymap & Deck Contract
+# GPU Presentation, Direct Keymap & Deck Contract
 
-This specification defines the strict purity boundary between `cadence-app` and `cadence-gui`, the GPU display-list and semantic theming pipeline, the unified modeless keyboard grammar and global modifier boundaries, the six visual-axis deck alignments, all workspace decks and modal overlays, live 24-bit audio recording, and the hardware MIDI contract.
+This specification defines the strict purity boundary between `cadence-app` and `cadence-gui`, the GPU display-list and semantic theming pipeline, the unified keyboard grammar and global modifier boundaries, the six visual-axis deck alignments, all workspace decks and modal overlays, 24-bit audio recording, and the hardware MIDI contract.
 
 > **Related specifications:** [Material & Timing](material-and-timing.md) · [DSP & Audio Engine](dsp-and-audio-engine.md) · [Protocols & Persistence](protocols.md) · [User Guide](../guide/README.md)
 
@@ -17,7 +17,7 @@ This specification defines the strict purity boundary between `cadence-app` and 
 - **Pure `Outcome` intents:** Mutating operations (`App::apply`, `App::handle_key`, `App::handle_midi`) return an `Outcome` value describing required host side effects (`changed`, `samples_changed`, `project_boundary`, `transport`, `live_notes_on`/`off`, `rack_audition`, `audition_instrument`, `preview_sample`, `clear_mixer_meters`, `audio_device`, `audio_record`, `export`, `bounce`, `inspection`, `midi_feedback`, `midi_connect`, `file_dialog`, `quit`).
 - **Single-point parameter & visual math:**
   - All `ParamAddress` (`Rack`, `Zone`, `Module`, `Cable`, `Channel`, `Send`, `Effect`) resolution, parsing, formatting, and nudging routes through `crates/app/src/param_ops.rs` composing `cadence_core::rack::*` and `cadence_core::dsp::*`.
-  - All live modulated parameter and Macro values across every deck resolve through `crates/app/src/view/live_params.rs`, mirroring the exact 3-tier compiler precedence (Static Macro → Automated Macro → Direct Modulation) at smooth sub-step `live_query_time`.
+  - All modulated parameter and Macro values across every deck resolve through `crates/app/src/view/live_params.rs`, mirroring the exact 3-tier compiler precedence (Static Macro → Automated Macro → Direct Modulation) at smooth sub-step `live_query_time`.
 
 ---
 
@@ -65,7 +65,7 @@ FrameView
 
 ---
 
-## 3. Modeless Keybinding Grammar & Input Pipeline (`crates/app/src/input/`)
+## 3. Direct Keybinding Grammar & Input Pipeline (`crates/app/src/input/`)
 
 Cadence is strictly keyboard-driven, consistent, and direct. Parameter sculpting, note shaping, placement resizing, and item reordering happen directly in place without toggling a general edit mode.
 
@@ -75,11 +75,11 @@ Only genuine input/selection modes exist:
 
 | Mode | Trigger | Role |
 | --- | --- | --- |
-| **`Normal`** | Default | Modeless workspace: pure spatial navigation (`hjkl`/`HJKL`), direct 2D manipulation & reorder (`Alt+hjkl`/`HJKL`), one-hand scalar adjust (`,/.` `</>`), and canonical action verbs. |
+| **`Normal`** | Default | Direct workspace: pure spatial navigation (`hjkl`/`HJKL`), direct 2D manipulation & reorder (`Alt+hjkl`/`HJKL`), one-hand scalar adjust (`,/.` `</>`), and canonical action verbs. |
 | **`Insert`** | `i` on editable Pattern Notes | Piano step entry (`zsxdcvgbhnjm,` + `Shift` accents, `1–8` scale degrees, `<`/`>` octave, `.` rest, `Left`/`Right` step cursor). |
-| **`Jam`** | `gj` / `Ctrl+Shift+j` | Modal floating live-performance keyboard (top-row lanes, number-row sections, bottom-row chromatic piano, `Tab`/`Shift-Tab` bank). |
-| **`ValueInput`** | `Enter` on any scalar control | Exact number/unit/text entry with live validation and formatted preview. |
-| **`MiniEditor`** | `Enter` on a `Mini` pattern | Live-validated Mini-Notation code editor with Cycle 1 note preview. |
+| **`Jam`** | `gj` / `Ctrl+Shift+j` | Modal floating performance keyboard (top-row lanes, number-row sections, bottom-row chromatic piano, `Tab`/`Shift-Tab` bank). |
+| **`ValueInput`** | `Enter` on any scalar control | Exact number/unit/text entry with instant validation and formatted preview. |
+| **`MiniEditor`** | `Enter` on a `Mini` pattern | Instant-validated Mini-Notation code editor with Cycle 1 note preview. |
 | **Overlays & Browsers** | `Ctrl+Shift+<key>`, `:`, `/`, `?`, `n`, `P`, `B`, `g`/`t`/`z`/`v` | Fuzzy Action Palette, File Hub, Preset/Groove/Sample Browsers, Song Properties, Settings, Workflows, Pickers, Help, Inspect, Confirm, Prefix HUDs. |
 
 ### 3B. Deterministic Routing Order (`crates/app/src/input/route.rs`)
@@ -100,7 +100,7 @@ KeyEvent
                               (Alt+hjkl / Alt+HJKL / Alt+Backspace flow to Tier 3 direct manipulation;
                                Alt+b/f/d stay free in text inputs)
   7. Ctrl+c                -> in Normal: Mode::Confirm(Quit); in any other mode: cancel to Normal
-                              (restoring live-preview browsers cleanly if active)
+                              (restoring preview browsers cleanly if active)
   8. Modal forms & popups  -> Create, Workflow, Browser, PresetBrowser, GrooveBrowser, SongProperties,
                               MiniEditor, Palette, FileHub, Pick, Authoring, ValueInput,
                               Interpolation, ArrangeViews, ArrangementInspect
@@ -129,7 +129,7 @@ Every deck obeys the same four directional tiers with zero axis flips:
 
 ### 3D. Global Modifier & Prefix Boundaries
 
-No individual deck may shadow any global prefix, live-performance key, or `Ctrl` shortcut in this section. In native `winit`, `physical_fallback` keeps `Ctrl+i` and `Ctrl+m` distinct from `Tab` and `Enter`, and on macOS `Cmd+=/−/0` maps onto the `Ctrl` zoom chords.
+No individual deck may shadow any global prefix, performance key, or `Ctrl` shortcut in this section. In native `winit`, `physical_fallback` keeps `Ctrl+i` and `Ctrl+m` distinct from `Tab` and `Enter`, and on macOS `Cmd+=/−/0` maps onto the `Ctrl` zoom chords.
 
 #### All 10 Docked Decks (`Ctrl+<letter>`, zero Shift)
 
@@ -168,7 +168,7 @@ No individual deck may shadow any global prefix, live-performance key, or `Ctrl`
 | --- | --- | --- |
 | `Ctrl+s` | Normal *(also Settings / Devices / Take)* | Save immediately (opens File Hub Save tab only if untitled) |
 | `Ctrl+z` / `Ctrl+Shift+z` *(+ `Ctrl+r`)* | Normal | Undo / Redo *(alongside `u` / `U`)* |
-| `Ctrl+c` | Any mode | Cancel overlay/input back to Normal (restoring live-preview browsers); in Normal opens Quit confirm |
+| `Ctrl+c` | Any mode | Cancel overlay/input back to Normal (restoring preview browsers); in Normal opens Quit confirm |
 | `Ctrl+w` | Normal | Window / Deck prefix (`Mode::Window`, alias of `z`) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Normal / Insert | Horizontal zoom in / out / reset *(only when Arrange or Pattern focused)* |
 | `Ctrl+u` | Text inputs / Search | Clear active input buffer |
@@ -262,13 +262,13 @@ Six deck layout alignments guarantee every `hjkl` and `Alt+hjkl` binding matches
 | 2 | **Bank** | `gb` / `Ctrl+b` | `Bank` | Row-oriented Launchpad (`Parts`) & searchable `Material` pattern/section library (`v` toggles) |
 | 3 | **Pattern** | `gp` / `Ctrl+p` | `Pattern` | 2D polyphonic voice-sorted piano roll (`j`/`k` voice, `o` stack, `Alt+j/k` pitch, `Alt+h/l` gate, `,/.` velocity, `i` Step Insert), fractional sub-step visualization, rhythm matrix, `Values` Hold/Ramp curve editor, `MiniEditor` (`Enter`), derived source inspector (`gs`/`Enter`) |
 | 4 | **Mixer** | `gm` / `Ctrl+m` | `Mixer` | 32-bit float console (`Audio`, `Group`, `Return`, `Master`), `-60..+6 dB` faders with `0 dB` hairline, pre-fader ticks, `HOT`/`!CLIP`, `CMP`/`LIM` GR bars, vertical detail slots (`Fader`/`Pan`/`Inserts`/`Sends`/`Output`/`Duck`), `o` Channel deck |
-| 5 | **Macros** | `gk` / `Ctrl+k` | `Macros` | All 8 Project Macros (`M1..M8`) in 1 horizontal strip + scrollable Bindings, live automated sweeps, native-unit spans, inverted badges, MIDI CC badges |
-| 6 | **Devices (`Audio \| MIDI`)** | `gd` / `Ctrl+d` | `Midi` | Two-tab hardware deck (`H`/`L` switches **`Audio`** ↔ **`MIDI`**): `Audio` configures output/input device, sample rate, buffer size, cue out, input mode (`Stereo \| Left \| Right`), live input monitor (`Off \| Auto \| On`), latency trim (`-250..+250 ms`), audio panic/restart/rescan + live input meters & health; `MIDI` configures ports, profile, pads, soft pickup, Smart Macro & RGB pad previews, mappings, and event log |
+| 5 | **Macros** | `gk` / `Ctrl+k` | `Macros` | All 8 Project Macros (`M1..M8`) in 1 horizontal strip + scrollable Bindings, automated sweeps, native-unit spans, inverted badges, MIDI CC badges |
+| 6 | **Devices (`Audio \| MIDI`)** | `gd` / `Ctrl+d` | `Midi` | Two-tab hardware deck (`H`/`L` switches **`Audio`** ↔ **`MIDI`**): `Audio` configures output/input device, sample rate, buffer size, cue out, input mode (`Stereo \| Left \| Right`), input monitor (`Off \| Auto \| On`), latency trim (`-250..+250 ms`), audio panic/restart/rescan + real-time input meters & health; `MIDI` configures ports, profile, pads, soft pickup, Smart Macro & RGB pad previews, mappings, and event log |
 | 7 | **Graph** | `gG` / `Ctrl+g` | `Graph` | Interactive 5/6-column Signal Graph patchbay (`Sources` → `Derived` → `Parts` → [`Macros`] → `Instruments` [`RACK`, `{z}z · {m}m` badge] → `Mixer / FX`), illuminated cubic-Bezier cables via shared `cable_graph.rs`, undo-safe wiring (`o`/`a`/`s`/`m`/`d`/`e`/`x`/`X`) |
 | 8 | **Take** | `gt` / `Ctrl+t` | `Take` | Explicitly armed performance timeline (`tr` toggle, default OFF; `Auto-Record Takes` setting; Chrome `TAKE ARM` / `● REC TAKE` / `● TAKE CAPPED` badges), bar summaries, event markers, `v` Visual range selection, `Enter`/`Alt+c` keep with auto-forking, `Ctrl+s` save, `X` confirm-guarded discard |
 | 9 | **Instrument** | `gi` / `Ctrl+i` | `Instrument` | Unified 11-module Eurorack Modular Rack (`Panel` \| `Patchbay` \| `Zones` via `H`/`L`): `Panel` (Quick `panel_pins` + module strip + 12 pre-sampled DSP `ModuleVisualView` visualizers), `Patchbay` (4-column `cable_graph.rs` with bipolar attenuverters & dashed `z-1` feedback), `Zones` (horizontal zone strip + 32-zone key/vel/choke map); universal `P` Preset Browser, `B` Sample Browser, `A` audition, `r` rename |
 | 10 | **Effect / Object** | `Enter` | `Effect` / `Object` | Dedicated visualizers for all 8 `EffectKind`s (EQ response, Filter + `FilterEnv` step bars, Comp/Limiter transfer + GR, Drive 3-mode curve, Chorus LFO, Delay taps, Reverb RT60) + `ObjectDeckView` for `Placement`, `Part`, and `Channel` |
-| 11 | **Output** | `go` / `Ctrl+o` | `Output` | Non-focusable live stereo oscilloscope, L/R 32-bit float meters, `0 dB` hairline, Master `HOT`/`!CLIP` latch, and Master `LIM`/`CMP` GR badge |
+| 11 | **Output** | `go` / `Ctrl+o` | `Output` | Non-focusable stereo oscilloscope, L/R 32-bit float meters, `0 dB` hairline, Master `HOT`/`!CLIP` latch, and Master `LIM`/`CMP` GR badge |
 
 ### 4D. Deck-by-Deck Binding Contract
 
@@ -315,15 +315,15 @@ Six deck layout alignments guarantee every `hjkl` and `Alt+hjkl` binding matches
 
 ### 4F. Modal Overlays (`OverlayView`)
 
-1. **`Palette` (`:` / `Ctrl+Shift+p`):** Fuzzy Action Palette (subsequence search over actions, decks, layouts, 8 quick-add FX, themes, and dynamic Sections/Patterns/Instruments) with live top-slot **`▶ Run command:`** Ex passthrough.
-2. **`PresetBrowser` (`P` on Instrument):** Unified Rack preset browser (`engine_label: "RACK"`) with **6 category filter tabs** (`All` / `Synth` / `Sampler` / `Drums` / `Kit` / `Modular`), 4 bare neutral defaults (`Init Synth`, `Blank Sampler`, `Blank Kit`, `Blank Modular`), Save Preset action, and live non-destructive audio preview from a full `Project` snapshot (`j`/`k` preview, `/` search, `A` audition, `Space` transport, `Enter` single-transaction commit, `Esc` zero-trace restore).
-3. **`GrooveBrowser` (`P` on Filter Effect):** Live filter groove browser across the 128-slot `FilterEnv` bank (`24` MIT factory grooves + user grooves) with preview on scroll, Save-to-Bank, and Fork-to-Pattern (`f`).
+1. **`Palette` (`:` / `Ctrl+Shift+p`):** Fuzzy Action Palette (subsequence search over actions, decks, layouts, 8 quick-add FX, themes, and dynamic Sections/Patterns/Instruments) with top-slot **`▶ Run command:`** Ex passthrough.
+2. **`PresetBrowser` (`P` on Instrument):** Unified Rack preset browser (`engine_label: "RACK"`) with **6 category filter tabs** (`All` / `Synth` / `Sampler` / `Drums` / `Kit` / `Modular`), 4 bare neutral defaults (`Init Synth`, `Blank Sampler`, `Blank Kit`, `Blank Modular`), Save Preset action, and instant non-destructive audio preview from a full `Project` snapshot (`j`/`k` preview, `/` search, `A` audition, `Space` transport, `Enter` single-transaction commit, `Esc` zero-trace restore).
+3. **`GrooveBrowser` (`P` on Filter Effect):** Filter groove browser across the 128-slot `FilterEnv` bank (`24` MIT factory grooves + user grooves) with preview on scroll, Save-to-Bank, and Fork-to-Pattern (`f`).
 4. **`SongProperties` (`gP` / `Ctrl+Shift+i`):** Modal editor for Title, Tempo (BPM), Key Root, Scale (all **13** `NAMED_SCALES`), Length (Bars), End Rule, and Live Timing on the `u` undo stack.
-5. **`MiniEditor` (`Enter` on `Mini`):** Dedicated live-validated Mini-Notation editor (`cadence_core::mini::parse_mini`) with real-time Cycle 1 event count and resolved note preview.
-6. **`ValueInput` (`Enter` on scalar controls):** Unified exact scalar entry modal with live parse validation and formatted preview across Pattern Values, all `ParamAddress` controls, Rack zone structural fields, Macro dials, Placement offsets, and Song Properties.
+5. **`MiniEditor` (`Enter` on `Mini`):** Dedicated instant-validated Mini-Notation editor (`cadence_core::mini::parse_mini`) with real-time Cycle 1 event count and resolved note preview.
+6. **`ValueInput` (`Enter` on scalar controls):** Unified exact scalar entry modal with instant parse validation and formatted preview across Pattern Values, all `ParamAddress` controls, Rack zone structural fields, Macro dials, Placement offsets, and Song Properties.
 7. **`FileHub` (`gf`, `Ctrl+Shift+f/o/s/e`):** 4-tab Open/Recent (with `.rbs` import preview when `feature = "rbs"` is enabled), Save & Bundle, Import (auto-closes on preset/profile load), and Export (WAV/Stems), universal `/` search, `H`/`L`/`Tab`/`1–4` tabs, and `F` native OS dialogs.
-8. **`Browser` (`B` / `gS` / `Sample` rows):** Universal `/` sample browser with async off-thread preview decoding, live auditioning, and automatic `Sampler -> Out.In` module insertion + RIFF `smpl`/`inst` metadata application on the active Rack zone.
-9. **`Authoring` (`n` / `d` / `r` / `tA` / workflow keys):** Typed modal draft forms for creating/editing patterns, derivations, instruments (`SoundChoice::{Template(RackTemplate), Preset(String), Sampler { path, label }, Folder { path, label }}`), channels, effects, sends, ducks, bounces, and live audio recording (`RecordDraft`).
+8. **`Browser` (`B` / `gS` / `Sample` rows):** Universal `/` sample browser with async off-thread preview decoding, instant auditioning, and automatic `Sampler -> Out.In` module insertion + RIFF `smpl`/`inst` metadata application on the active Rack zone.
+9. **`Authoring` (`n` / `d` / `r` / `tA` / workflow keys):** Typed modal draft forms for creating/editing patterns, derivations, instruments (`SoundChoice::{Template(RackTemplate), Preset(String), Sampler { path, label }, Folder { path, label }}`), channels, effects, sends, ducks, bounces, and 24-bit audio recording (`RecordDraft`).
 10. **`Settings` (`g,` / `Ctrl+,` / `:settings`):** Persisted `UserConfig` editor: theme, startup preset, output monitor, follow, `Auto-Record Takes`, default BPM/key, project Live Timing, and auto-refreshing `sample_dirs` / `preset_dirs`.
 11. **`Help` (`?` / `Ctrl+Shift+/`):** 7-tab wrapped, universal `/` searchable reference (`All`, `Navigate`, `Compose`, `Mini & Algebra`, `Sound & FX`, `Live & Jam`, `Files & CLI`; `H`/`L`/`Tab` switch tabs).
 12. **`Confirm`:** Unsaved-dirty & destructive protection guarding Quit, New, Open, ImportRbs, DeleteChannel, ClearMidiMappings, and DiscardTake.
@@ -331,23 +331,23 @@ Six deck layout alignments guarantee every `hjkl` and `Alt+hjkl` binding matches
 
 ---
 
-## 5. Live 24-Bit Audio Recording & Hardware MIDI Control
+## 5. 24-Bit Audio Recording & Hardware MIDI Control
 
-### 5A. Live Audio Input & 24-Bit WAV Recording (`crates/app/src/{devices.rs,recording.rs}`)
+### 5A. Audio Input & 24-Bit WAV Recording (`crates/app/src/{devices.rs,recording.rs}`)
 
-- **Device & input setup (`Devices · Audio` tab via `Ctrl+d` then `H`/`L`, or `:audio`):** Select input/output devices, sample rate, buffer size, mono/stereo channel capture (`Stereo`, `Left (Ch 1)`, `Right (Ch 2)`), live monitoring (`Off`, `Auto` [monitor while armed/recording], `On`), latency trim (`-100..+100 ms`), and recovery actions (`Audio Panic`, `Restart Audio`, `Rescan Devices`).
+- **Device & input setup (`Devices · Audio` tab via `Ctrl+d` then `H`/`L`, or `:audio`):** Select input/output devices, sample rate, buffer size, mono/stereo channel capture (`Stereo`, `Left (Ch 1)`, `Right (Ch 2)`), input monitoring (`Off`, `Auto` [monitor while armed/recording], `On`), latency trim (`-250..+250 ms`), and recovery actions (`Audio Panic`, `Restart Audio`, `Rescan Devices`).
 - **Capture workflows (`ta`, `tA`, `ti`, `:rec`):**
   - `ta` toggles quick recording immediately; `tA` opens the `Record Audio` workflow dialog (`RecordingMode::{Synced, CountIn, Free}`, target bar length, destination New Sampler or existing Rack Zone, optional Arrange placement).
   - `:rec [start|stop|cancel|dialog|free|countin [BARS]|bars <N>|zone ...|monitor [off|auto|on]|mode <stereo|left|right>|input <NAME|none>]`.
   - Audio captures off the RT thread via a lock-free SPSC ring, resamples cleanly when input/output hardware sample rates differ, applies latency trim, writes a portable 24-bit PCM WAV under `<project>/recordings/` (or the configured session recordings directory for untitled projects), and commits a `Sampler` Rack instrument + Part + Placement in one undoable transaction.
 
-### 5B. Hardware MIDI Learn, Live Recording & Bi-Directional Feedback (`crates/core/src/midi_map.rs`, `crates/app/src/midi/`)
+### 5B. Hardware MIDI Learn, Overdub Recording & Bi-Directional Feedback (`crates/core/src/midi_map.rs`, `crates/app/src/midi/`)
 
 MIDI mapping and feedback are data-driven and hardware-agnostic inside `cadence-app`, with raw wire encoding isolated to `cadence-engine::midi`:
 
 - **Device Profiles (`UserConfig::midi_profile`):** `"generic"`, `"standard_cc"`, and `"minilab3_daw"` (Arturia MiniLab 3 DAW-mode integration).
-- **Sources & Value Modes:** `MidiSource::{Cc, Note, PitchBend}` (channel-scoped or omni); `MidiValueMode::{Absolute, RelativeSigned, RelativeOffset64, Trigger, Toggle, Momentary}` with `[min, max]`, `invert`, and soft-pickup takeover (`pickup: true`) so absolute knobs catch the live value smoothly without jumps.
+- **Sources & Value Modes:** `MidiSource::{Cc, Note, PitchBend}` (channel-scoped or omni); `MidiValueMode::{Absolute, RelativeSigned, RelativeOffset64, Trigger, Toggle, Momentary}` with `[min, max]`, `invert`, and soft-pickup takeover (`pickup: true`) so absolute knobs catch the active value smoothly without jumps.
 - **Bindable `MidiTarget`s:** `Param { address }` (any automatable `ParamAddress`, including `Rack`, `Zone`, `Module`, and `Cable` attenuverters), `FocusedMacro { slot: 0..8 }` (tracks focused Effect/Channel controls, Project Macros 1–8 outside object decks, or active Rack controls prioritizing continuous `!param.is_discrete()` `panel_pins` first, then continuous active-zone module controls, then `RackParam`s, then discrete pins), `ProjectMacro { slot: 0..8 }`, `LaneGain`, `MasterGain`, `Transport` (10 `MidiTransportAction`s + universal MMC), `LaunchSection`, `LaunchLanePart`, `MuteLane`, `SoloLane`.
 - **1-Key MIDI Learn (`M`):** Resolves the focused target automatically (`Macro` slot → `Midi` row → object-deck automatable parameter → `Mixer` channel gain/pan/send → `Bank` launch part → active Rack's first pinned control, first Filter cutoff, or Rack Cutoff). Pressing `x`/`Backspace` while armed unlearns; `Esc` cancels. Learned mappings persist globally in `UserConfig::midi_mappings`.
-- **Live Note & CC Recording (`R`):** Enters notes in step-entry mode when stopped; while playing, overdubs quantized polyphonic chords and lazily creates/updates `Values(Normalized, Ramp)` automation curves for any moved MIDI CC or Project Macro (`1500 ms` gesture undo coalescing).
+- **Note & CC Recording (`R`):** Enters notes in step-entry mode when stopped; while playing, overdubs quantized polyphonic chords and lazily creates/updates `Values(Normalized, Ramp)` automation curves for any moved MIDI CC or Project Macro (`1500 ms` gesture undo coalescing).
 - **Bi-Directional Feedback (`FeedbackProtocol::{None, StandardCcNote, ArturiaDaw}`):** `App::sync_midi_feedback` emits pure semantic `MidiFeedback` events (`InitDawMode`, 2-line OLED `Display` with value bar, RGB pad LEDs across `MidiPadMode::{Notes, Sections, Mutes}`, `TransportLedKind` LEDs, and CC echo) translated to hardware bytes by `cadence-engine::midi`.

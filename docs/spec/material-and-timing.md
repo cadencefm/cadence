@@ -43,7 +43,7 @@ RackPatch (bus gain_db/pan/tune_semitones/cutoff_hz/resonance + panel_pins: Vec<
     └── cables: Vec<PatchCable>  (0..=64; OutPort::Out -> InPort::{In,Cv,PitchCv,FmIn,PwCv,TrigIn}, bipolar amount)
 ```
 
-All P-locks (`ParameterLink`), global `Modulation`s, Project Macros, MIDI Learn, Live CC Recording, Panel Pins (`PanelPin`), and `:param` commands address one orthogonal parameter model (`crates/core/src/params.rs`, `crates/core/src/rack/params.rs`):
+All P-locks (`ParameterLink`), global `Modulation`s, Project Macros, MIDI Learn, MIDI CC Recording, Panel Pins (`PanelPin`), and `:param` commands address one orthogonal parameter model (`crates/core/src/params.rs`, `crates/core/src/rack/params.rs`):
 
 - **`InstrumentParam`:** `Rack { param: RackParam }`, `Zone { zone: u16, param: ZoneParam }`, `Module { zone: u16, module: u16, param: ModuleParam }`, and `Cable { zone: u16, cable: u16 }`.
 - **`ParamAddress`:** `Rack`, `Zone`, `Module`, `Cable`, `Channel`, `Send`, and `Effect` (`from_instrument()` / `as_instrument()` / `is_automatable()`).
@@ -81,7 +81,7 @@ All P-locks (`ParameterLink`), global `Modulation`s, Project Macros, MIDI Learn,
 | `MAX_MACRO_BINDINGS` | `16` | `macros.rs` | Parameter bindings per Project Macro (`MAX_MACRO_NAME_LEN = 32`) |
 | `MAX_LANE_PARTS` / `MAX_PARTS_ON_LANES` | `32` / `256` | `material/set.rs` | Launchable parts per lane and total across all lanes |
 | `MAX_BOUNDARY_BARS` / `MAX_LATE_TOLERANCE` | `64` / `4` | `material/set.rs` | Maximum `Boundary::Bars` span and late-tolerance steps |
-| `LIVE_RING_BARS` / `LIVE_RING_STEPS` | `64` / `1024` | `material/live.rs` | Sliding live compilation window length |
+| `LIVE_RING_BARS` / `LIVE_RING_STEPS` | `64` / `1024` | `material/live.rs` | Sliding ring compilation window length |
 | `MAX_PROJECT_BYTES` | `16 MiB` | `cadence-app` | Bounded project JSON file size limit |
 
 ### Musical Step Primitives (`music.rs`)
@@ -153,9 +153,9 @@ Every `Pattern` carries a stable `Id` (`u64`), unique name, and typed `PatternKi
 
 ### Pure Stateless Evaluation (`crates/core/src/evaluate.rs`)
 
-Offline rendering, the live ring compiler, and UI projections all evaluate through `cadence_core::evaluate`:
+Offline rendering, the rolling ring compiler, and UI projections all evaluate through `cadence_core::evaluate`:
 
-- **`det_hash(seed: u32, pattern_id: Id, step: i64, salt: u32) -> f32`:** Pure stateless SplitMix64 finalizer mapping `(seed, pattern_id, step, salt)` deterministically onto `[0.0, 1.0)`. Querying any step in any order (scrubbing, scrolling, live ring window, or offline render) produces bit-identical results.
+- **`det_hash(seed: u32, pattern_id: Id, step: i64, salt: u32) -> f32`:** Pure stateless SplitMix64 finalizer mapping `(seed, pattern_id, step, salt)` deterministically onto `[0.0, 1.0)`. Querying any step in any order (scrubbing, scrolling, rolling ring window, or offline render) produces bit-identical results.
 - **`EvaluatedEvent { offset: f32, step: Step }`:** Every `Notes` evaluation at integer 16th-note `step` yields 0, 1, or many events sorted ascending by fractional `offset ∈ [0.0, 1.0)`.
 - **Value interpolation (`eval_value_points`):** `ValueMode::Hold` latches the prior breakpoint; `ValueMode::Ramp` linearly interpolates across wrapped period boundaries at arbitrary fractional `f64` step time. `Project::value_mode` propagates `Ramp` cleanly through `Shift`, `Reverse`, `Every`, and `Concat`.
 
@@ -165,7 +165,7 @@ Offline rendering, the live ring compiler, and UI projections all evaluate throu
 
 All persistent document mutations enter through `Edit` transactions (`Project::apply_transaction_validated` / `apply_transaction_with_flags` in `crates/core/src/material/mutate.rs`):
 
-1. **Copy-on-write atomicity:** Up to `MAX_TRANSACTION_EDITS` (`16_384`) edits execute against a cloned candidate `Project`. Any failure discards the candidate completely; the live document is untouched.
+1. **Copy-on-write atomicity:** Up to `MAX_TRANSACTION_EDITS` (`16_384`) edits execute against a cloned candidate `Project`. Any failure discards the candidate completely; the active document is untouched.
 2. **Monotonic stable IDs:** Entity IDs (`Id = u64`) are allocated monotonically by `Document` and never recycled across undo/redo.
 3. **Unified modular Rack instrument mutations:**
    - `Edit::CreateInstrument { instrument }` — creates a new `Rack` instrument (fails if ID already exists).
@@ -210,7 +210,7 @@ pub struct Segment {
 - **`song_step_unbounded(transport)`:** Evaluates without wrapping or stopping at `song_length`, used when `Keep` extends the arrangement past its current end.
 - **`pass_end(transport, song_length)`:** Returns the exact transport step where the active loop region (or full-song loop pass) completes, so section jumps finish the current pass cleanly.
 - **`stop_at(transport, song_length)`:** Computes the automatic stop step when `EndRule::Stop` is active with no loop region and no earlier scheduled remap.
-- **`remap`, `cancel_after`, `prune_before`:** O(log n) binary search via `partition_point`; historical superseded segments are pruned to keep live memory bounded.
+- **`remap`, `cancel_after`, `prune_before`:** O(log n) binary search via `partition_point`; historical superseded segments are pruned to keep runtime memory bounded.
 
 ### Boundaries & Late Tolerance (`crates/core/src/material/set.rs`, `crates/core/src/live.rs`)
 
@@ -224,7 +224,7 @@ Live changes (`Change::{Song, Flags, Launch, Timeline, Release, ReleaseAll}`) la
 | `Bars { count }` | `count * 16` | `count ∈ 1..=64` |
 | `Cycle { pattern }` | `pattern_period(pattern)` | Next start of referenced pattern's full repeat period |
 
-`LiveTiming` also specifies `edits: EditTiming` (`Now` default, or `Launch` so live song edits queue onto the launch boundary) and `late_tolerance_steps: u32` (`0..=4`, default `1`).
+`LiveTiming` also specifies `edits: EditTiming` (`Now` default, or `Launch` so song edits during playback queue onto the launch boundary) and `late_tolerance_steps: u32` (`0..=4`, default `1`).
 
 **Late-tolerance rule (`Performance::boundary`):** While stopped, every change lands immediately at `next_step`. While playing with quantum `q`, compute `upcoming = next_step.div_ceil(q) * q`. If `next_step > 0 && upcoming > next_step` (never snapping backward when already on an exact boundary), let `previous = ((next_step - 1) / q) * q` and `missed = next_step - previous`. If `missed <= late_tolerance_steps`, the change snaps back onto `previous`; otherwise it queues at `upcoming`.
 
@@ -233,8 +233,8 @@ Live changes (`Change::{Song, Flags, Launch, Timeline, Release, ReleaseAll}`) la
 - **Lane overrides (`Override { lane, part: LanePart, anchor }`):** Launching a part overrides only that lane; every other lane continues playing the underlying arrangement segment. The newest launch claims its part's `InstrumentInstance` from any other active override. `PhaseMode::Song` follows the timeline's song step; `PhaseMode::Restart` counts from `step - anchor`.
 - **Ordering invariants:** Queued `Change::Song` and `Change::Flags` never overtake one another (`at = at.max(last)`). A new `Launch`/`Release` replaces any pending launch/release on the same lane; a new `Timeline` remap replaces any pending remap.
 - **Staging (`StagedChange`):** Collects `Launch`, `Release`, `Mute`, `Solo`, and `JumpSection` gestures without landing them until fired atomically on a single boundary (or discarded).
-- **Sliding live ring:** `Performance::compile` compiles `[base, base + LIVE_RING_STEPS)` (`64` bars = `1024` steps, aligned to the bar of `next_step - 1`) into a `ScoreWindow` with `live_window = Some(LiveWindow { start, end, stop_at })`. When `next_step >= base + LIVE_RING_STEPS / 2`, the controller automatically recompiles and slides the ring forward.
-- **Transient `Audition`:** Compiles onto the same live ring (either `solo: true` when stopped or layered over one instrument when playing), synthesizing `AUDITION_INSTRUMENT_ID` if the project has no instruments. Auditions are never authored, recorded in takes, or written by `Keep`.
+- **Sliding ring window:** `Performance::compile` compiles `[base, base + LIVE_RING_STEPS)` (`64` bars = `1024` steps, aligned to the bar of `next_step - 1`) into a `ScoreWindow` with `live_window = Some(LiveWindow { start, end, stop_at })`. When `next_step >= base + LIVE_RING_STEPS / 2`, the controller automatically recompiles and slides the ring forward.
+- **Transient `Audition`:** Compiles onto the same ring window (either `solo: true` when stopped or layered over one instrument when playing), synthesizing `AUDITION_INSTRUMENT_ID` if the project has no instruments. Auditions are never authored, recorded in takes, or written by `Keep`.
 
 ---
 
@@ -242,7 +242,7 @@ Live changes (`Change::{Song, Flags, Launch, Timeline, Release, ReleaseAll}`) la
 
 ### Flat Executable `ScoreWindow` (`crates/core/src/score.rs`)
 
-Both offline song compilation (`Project::compile_with_flags`) and live sliding-ring compilation (`Project::compile_live_window_with_audition`) produce a single flat, zero-legacy `ScoreWindow`:
+Both offline song compilation (`Project::compile_with_flags`) and sliding-ring compilation (`Project::compile_live_window_with_audition`) produce a single flat, zero-legacy `ScoreWindow`:
 
 - **`instruments: Vec<ScoreInstrument>`** — dense `0..MAX_INSTRUMENTS` array where each `ScoreInstrument { id, name, rack: RackPatch, compiled_zones: Vec<CompiledZoneGraph>, channel }` carries pre-compiled Kahn topologically sorted `CompiledZoneGraph` programs (1:1 with `rack.zones`, including `z-1` feedback edge flags, `lifetime_envs`, `sampler_slots`, and SPOT `column_layout`).
 - **`events: Vec<ScoreEvent>` & `step_ranges: Vec<(u32, u32)>`** — all scheduled hits flattened and sorted by `(step_slot, offset, inst_idx)` for O(1) zero-allocation lookup via `step_events(abs_step)`. Each `ScoreEvent` carries fractional `offset ∈ [0.0, 0.9999]`, resolved MIDI note, velocity, gate, inline `[ResolvedChordTone; MAX_CHORD_TONES]`, and `(lock_start, lock_len)` slice bounds into `locks: Vec<ParamLock>`.
@@ -256,7 +256,7 @@ When an edit alters only BPM, Rack patches/modules/cables, mixer strips/effects/
 
 ### Exact Macro & Modulation Precedence
 
-Compilation (`crates/core/src/material/compile.rs`) and live UI visual projection (`crates/app/src/view/live_params.rs`) share the exact same 3-tier deterministic precedence order (independent of `project.modulations` ordering):
+Compilation (`crates/core/src/material/compile.rs`) and UI visual projection (`crates/app/src/view/live_params.rs`) share the exact same 3-tier deterministic precedence order (independent of `project.modulations` ordering):
 
 1. **Tier 1 — Static Project Macros (`apply_static_macros`):** Iterates `project.macros` in ascending `index` order (`0..8`), skipping any macro driven by a `ModulationTarget::Macro`. Evaluates `binding.evaluate(mac.value) = (min + (max - min) * x).clamp(0.0, 1.0)` (explicitly supporting inverted `min > max` spans) and writes directly onto `ScoreInstrument.rack` (before `inst.compile_zones()`) or `Mixer`.
    - *Frame-based sampler guard:* Static Macro bindings targeting frame-based `ModuleParam` controls (`SampleStart`, `SampleEnd`, `LoopStart`, `LoopEnd`, matched via `InstrumentParam::is_frame_based()`) cannot resolve against `total_frames = 0` at compile time, so they emit a constant `AutomationMode::Hold` `ModLane` (unless already overridden by automation) which the audio engine resolves against the loaded sample's actual `sample.frames`.
