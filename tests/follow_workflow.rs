@@ -98,7 +98,13 @@ fn manual_navigation_returns_to_saved_editing_page_and_tf_resumes() {
     assert_eq!(a.arrange_view_page(200, 4).start, 192);
     assert_eq!(a.follow_mode(), FollowMode::Suspended);
     a.execute_command("follow resume").unwrap();
-    assert_eq!(a.arrange_view_page(200, 4).start, 192);
+    let resumed = a.arrange_view_page(200, 4);
+    assert_eq!(resumed.origin, PageOrigin::Transport);
+    assert_eq!(resumed.anchor, Some(200));
+    assert_eq!(
+        resumed.start, 176,
+        "bar 13 (step 200) frames with 1-bar leading scrolloff on a 4-bar viewport"
+    );
 }
 
 #[test]

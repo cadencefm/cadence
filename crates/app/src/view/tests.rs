@@ -1895,6 +1895,97 @@ fn arrange_tail_clamping_and_paging_stride_match_visible_bars() {
 }
 
 #[test]
+fn arrange_smooth_scrolloff_tracks_cursor_walk_follow_and_handoff() {
+    let mut proj = Project::empty();
+    proj.bars = 32;
+    let mut app = App::new(proj, "scrolloff.json".into()).unwrap();
+    app.press_keys("ga").unwrap();
+    // Zoom in from 16 bars -> 8 bars (scrolloff = 2 bars).
+    app.arrange_ui.zoom = 2.0;
+    assert_eq!(app.arrange_visible_bars(), 8);
+
+    // 1. Walk forward bar-by-bar from bar 1 (idx 0): viewport holds at 0 through bar 6 (idx 5),
+    //    then glides +1 bar per bar keeping 2 bars of trailing lookahead.
+    for bar in 0..10usize {
+        if bar > 0 {
+            app.press_keys("l").unwrap();
+        }
+        let fv = app.frame_view(&AudioSnapshot::default(), "silent");
+        let arr = fv
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Arrange(a) => Some(a),
+                _ => None,
+            })
+            .expect("arrange deck");
+        assert_eq!(arr.cursor_step, (bar * 16) as u32);
+        assert_eq!(
+            arr.page_start_step,
+            bar.saturating_sub(5) * 16,
+            "forward cursor walk at bar {}",
+            bar + 1
+        );
+    }
+
+    // 2. Reverse 1 bar (bar 10 -> bar 9): stays inside interior dead-zone (viewport unchanged).
+    app.press_keys("h").unwrap();
+    let fv_back1 = app.frame_view(&AudioSnapshot::default(), "silent");
+    let arr_back1 = fv_back1
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Arrange(a) => Some(a),
+            _ => None,
+        })
+        .expect("arrange deck");
+    assert_eq!(arr_back1.page_start_step, 4 * 16);
+
+    // 3. Playhead Follow glides bar-by-bar and hands off seamlessly when `l` suspends Follow.
+    app.press_keys("0tf").unwrap();
+    let mut last_start = 0usize;
+    for bar in 0..12usize {
+        let step = (bar * 16 + 4) as u64;
+        app.observe_transport(step, step + 1, true, false);
+        let snap = AudioSnapshot {
+            playing: true,
+            absolute_step: step,
+            ..AudioSnapshot::default()
+        };
+        let fv = app.frame_view(&snap, "silent");
+        let arr = fv
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Arrange(a) => Some(a),
+                _ => None,
+            })
+            .expect("arrange deck");
+        assert_eq!(arr.page_start_step, bar.saturating_sub(5) * 16);
+        last_start = arr.page_start_step;
+    }
+    // Pressing `h` suspends Follow at playhead bar 12 (step 176 -> 160), staying inside dead-zone!
+    app.press_keys("h").unwrap();
+    assert_eq!(
+        app.follow_mode(),
+        cadence_core::follow::FollowMode::Suspended
+    );
+    let fv_handoff = app.frame_view(&AudioSnapshot::default(), "silent");
+    let arr_handoff = fv_handoff
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Arrange(a) => Some(a),
+            _ => None,
+        })
+        .expect("arrange deck");
+    assert_eq!(
+        arr_handoff.page_start_step, last_start,
+        "suspending Follow with h must hand off without snapping viewport"
+    );
+}
+
+#[test]
 fn pattern_follow_stays_active_and_tracks_playhead_while_zoomed() {
     let mut app = demo_app();
     // Pattern 4 = Moving lead (period 320, active across bars 5..=16, steps 64..256).

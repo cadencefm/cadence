@@ -64,6 +64,11 @@ fn theme_tokens_expose_distinct_focus_overlay_and_jam_accents() {
             theme.glow.jam_border > 0.0,
             "{name}: jam_border glow must be positive"
         );
+        let d_cp = color_distance(theme.accent.edit_cursor, theme.accent.playhead);
+        assert!(
+            d_cp > 0.30,
+            "{name}: edit_cursor vs playhead accent too close ({d_cp:.3})"
+        );
     }
 }
 

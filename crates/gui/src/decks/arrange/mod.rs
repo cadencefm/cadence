@@ -178,7 +178,11 @@ pub fn draw_arrange(
         }
     }
 
-    // 4. Vertical dashed live staging boundary beacon when staging is active.
+    // 4. Full-height vertical user edit/cue cursor bar across ruler + body (consistent across
+    //    Placements, Overview, and Roll; painted before playhead so live playback rides cleanly on top).
+    draw_user_cursor_bar(dl, ruler_row, body, view, geom, theme);
+
+    // 5. Vertical dashed live staging boundary beacon when staging is active.
     if view.staging_active {
         if let Some(boundary) = view.staged_boundary_step {
             let bpos = boundary as f64;
@@ -201,7 +205,7 @@ pub fn draw_arrange(
         }
     }
 
-    // 5. Smooth 60/120fps phosphor laser playhead across ruler + body!
+    // 6. Smooth 60/120fps phosphor laser playhead across ruler + body!
     if let Some(pos) = view.playhead_step {
         if pos >= geom.start_step && pos <= geom.start_step + geom.span_steps {
             let px = geom.step_to_x(pos);
@@ -226,6 +230,73 @@ pub fn draw_arrange(
             );
         }
     }
+
+    dl.pop_clip();
+}
+
+/// Full-height vertical user cursor bar spanning the Arrange bar ruler and lane/roll body.
+///
+/// Uses a bottom-anchored ruler cap so it stays distinct from the top-anchored green playhead
+/// beacon even when both sit on the exact same step.
+fn draw_user_cursor_bar(
+    dl: &mut DisplayList,
+    ruler_row: Rect,
+    body: Rect,
+    view: &ArrangeDeckView,
+    geom: TimelineGeom,
+    theme: &Theme,
+) {
+    let cpos = f64::from(view.cursor_step);
+    if cpos < geom.start_step || cpos > geom.start_step + geom.span_steps {
+        return;
+    }
+    let cx = geom.step_to_x(cpos);
+    let tl_right = geom.timeline_x + geom.timeline_w;
+    if cx < geom.timeline_x - 2.0 || cx > tl_right + 2.0 {
+        return;
+    }
+
+    let line_alpha = if view.focused { 0.88 } else { 0.42 };
+    let cap_alpha = if view.focused { 0.95 } else { 0.50 };
+    let line_w = if view.focused { 1.5 } else { 1.0 };
+    let glow = if view.focused {
+        theme.glow.focus_border * 0.72
+    } else {
+        0.0
+    };
+    let cursor_col = theme.accent.edit_cursor;
+
+    dl.push_clip(Rect::new(
+        (geom.timeline_x - 2.0).max(ruler_row.x),
+        ruler_row.y,
+        (geom.timeline_w + 4.0).min(ruler_row.right() - (geom.timeline_x - 2.0).max(ruler_row.x)),
+        (body.bottom() - ruler_row.y).max(0.0),
+    ));
+
+    // Subtle ruler tick from top to bottom of ruler_row + crisp bottom-anchored cap.
+    dl.fill(
+        Rect::new(cx - 0.5, ruler_row.y, 1.0, ruler_row.h),
+        cursor_col.with_alpha(line_alpha * 0.55),
+    );
+    dl.rounded_glow(
+        Rect::new(cx - 3.5, ruler_row.bottom() - 4.5, 7.0, 4.5),
+        cursor_col.with_alpha(cap_alpha),
+        1.5,
+        glow,
+    );
+
+    // Full-height vertical cursor line through the entire Arrange body.
+    dl.rounded_glow(
+        Rect::new(
+            cx - line_w * 0.5,
+            ruler_row.bottom() - 1.0,
+            line_w,
+            (body.bottom() - ruler_row.bottom() + 1.0).max(0.0),
+        ),
+        cursor_col.with_alpha(line_alpha),
+        0.0,
+        glow,
+    );
 
     dl.pop_clip();
 }

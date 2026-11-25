@@ -272,6 +272,7 @@ fn arrange_follow_respects_song_boundaries_and_keeps_preview_on_editing_page() {
         FollowMode::Active,
         PlaybackClock::Song { step: 80.0 },
         16,
+        None,
         4,
         16,
     )
@@ -281,6 +282,7 @@ fn arrange_follow_respects_song_boundaries_and_keeps_preview_on_editing_page() {
         FollowMode::Active,
         PlaybackClock::Song { step: 336.0 },
         16,
+        None,
         4,
         16,
     )
@@ -290,6 +292,7 @@ fn arrange_follow_respects_song_boundaries_and_keeps_preview_on_editing_page() {
         FollowMode::Active,
         PlaybackClock::Song { step: 0.0 },
         112,
+        None,
         4,
         16,
     )
@@ -297,7 +300,7 @@ fn arrange_follow_respects_song_boundaries_and_keeps_preview_on_editing_page() {
     assert_eq!(rewind.start, 0);
     for mode in [FollowMode::Off, FollowMode::Suspended] {
         assert_eq!(
-            arrange_page(mode, PlaybackClock::Song { step: 80.0 }, 16, 4, 16)
+            arrange_page(mode, PlaybackClock::Song { step: 80.0 }, 16, None, 4, 16)
                 .unwrap()
                 .start,
             0
@@ -311,6 +314,7 @@ fn arrange_follow_respects_song_boundaries_and_keeps_preview_on_editing_page() {
             length: 320,
         },
         16,
+        None,
         4,
         16,
     )
@@ -368,6 +372,7 @@ fn invalid_clock_and_viewport_requests_reject_without_panics() {
         FollowMode::Active,
         PlaybackClock::Song { step: 0.0 },
         0,
+        None,
         0,
         16
     )
@@ -380,6 +385,7 @@ fn invalid_clock_and_viewport_requests_reject_without_panics() {
             length: 0
         },
         0,
+        None,
         4,
         16
     )

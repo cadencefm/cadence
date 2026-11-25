@@ -89,14 +89,18 @@ impl App {
     }
 
     pub fn arrange_view_page(&self, observed_step: u64, visible_bars: usize) -> FollowPage {
-        arrange_page(
+        let prev = self.arrange_ui.viewport_start_step.get();
+        let page = arrange_page(
             self.follow.mode(),
             self.playback_clock(observed_step),
             self.arrange_ui.step as usize,
+            Some(prev),
             visible_bars.clamp(1, MAX_BARS),
             self.doc.project().bars,
         )
-        .expect("validated project and observed integer transport")
+        .expect("validated project and observed integer transport");
+        self.arrange_ui.viewport_start_step.set(page.start);
+        page
     }
 
     pub(super) fn describe_follow(&mut self) {

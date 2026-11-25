@@ -70,6 +70,10 @@ impl App {
     }
 
     pub(super) fn observe_follow(&mut self, step: u64) {
+        if self.follow.active() {
+            let visible_bars = self.arrange_visible_bars();
+            let _ = self.arrange_view_page(step, visible_bars);
+        }
         if self.follow.active()
             && self.workspace() == Workspace::Pattern
             && !self.view_state.deck_zoomed

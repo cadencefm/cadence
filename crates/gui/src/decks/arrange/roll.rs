@@ -58,17 +58,13 @@ pub(super) fn draw_roll(
     dl.push_clip(Rect::new(geom.timeline_x, body.y, geom.timeline_w, body.h));
     draw_vertical_time_grid(dl, body, view, geom, theme);
 
-    // Subtle edit cursor step highlight.
+    // Subtle edit cursor step column wash (full-height edit cursor line is drawn in arrange/mod.rs).
     let cx0 = geom.step_to_x(f64::from(view.cursor_step));
     let cx1 = geom.step_to_x(f64::from(view.cursor_step + 1));
     if cx1 > geom.timeline_x && cx0 < body.right() {
         dl.fill(
             Rect::new(cx0, body.y, (cx1 - cx0).max(2.0), body.h),
             theme.accent.focus.with_alpha(0.10),
-        );
-        dl.fill(
-            Rect::new(cx0, body.y, 1.0, body.h),
-            theme.accent.focus.with_alpha(0.50),
         );
     }
 

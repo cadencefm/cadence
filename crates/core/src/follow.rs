@@ -297,13 +297,31 @@ impl FollowState {
     }
 }
 
-/// Arrange pages use song-step units. Divide `start` by 16 for a bar ruler.
-/// Partial final pages are clamped back so zoomed-in viewports remain filled to `song_bars`.
-/// Isolated preview always leaves the Arrange viewport on its editing page.
+/// Bar-aligned horizontal scrolloff margin for an Arrange viewport of `visible_bars`.
+///
+/// Reserves ~20–25% lookahead on both leading and trailing edges while keeping an interior
+/// dead-zone so small back-and-forth cursor adjustments do not jitter the viewport.
+pub fn arrange_scrolloff_bars(visible_bars: usize) -> usize {
+    if visible_bars < 3 {
+        0
+    } else {
+        (visible_bars / 4).clamp(1, (visible_bars - 1) / 2)
+    }
+}
+
+/// Arrange pages use song-step units (bar-aligned multiples of `STEPS_PER_BAR = 16`).
+///
+/// When `prev_start_step` is supplied, slides smoothly bar-by-bar once the active position
+/// enters the leading/trailing scrolloff margin (`arrange_scrolloff_bars`), and jumps cleanly
+/// with leading lookahead context on discontinuous leaps (section jumps, loop wraps, or
+/// Follow activation far from the current viewport). Partial final pages are clamped back so
+/// zoomed-in viewports remain filled to `song_bars`. Isolated preview always leaves the
+/// Arrange viewport on its editing position.
 pub fn arrange_page(
     mode: FollowMode,
     clock: PlaybackClock,
     edit_step: usize,
+    prev_start_step: Option<usize>,
     visible_bars: usize,
     song_bars: usize,
 ) -> Result<FollowPage> {
@@ -314,7 +332,6 @@ pub fn arrange_page(
     );
     validate_clock(clock)?;
     let horizon = song_bars * STEPS_PER_BAR;
-    let page_steps = visible_bars * STEPS_PER_BAR;
     let (position, origin) = if mode == FollowMode::Active {
         if let PlaybackClock::Song { step } = clock {
             (
@@ -327,7 +344,13 @@ pub fn arrange_page(
     } else {
         (edit_step, PageOrigin::Editing)
     };
-    Ok(clamped_page(position, horizon, page_steps, origin))
+    Ok(scrolled_arrange_page(
+        position,
+        prev_start_step,
+        visible_bars,
+        song_bars,
+        origin,
+    ))
 }
 fn validate_clock(clock: PlaybackClock) -> Result<()> {
     let step = match clock {
@@ -361,15 +384,61 @@ fn page(position: usize, period: usize, page_steps: usize, origin: PageOrigin) -
         origin,
     }
 }
-fn clamped_page(
+fn scrolled_arrange_page(
     position: usize,
-    horizon: usize,
-    page_steps: usize,
+    prev_start_step: Option<usize>,
+    visible_bars: usize,
+    song_bars: usize,
     origin: PageOrigin,
 ) -> FollowPage {
+    let horizon = song_bars * STEPS_PER_BAR;
     let position = position.min(horizon - 1);
-    let max_start = horizon.saturating_sub(page_steps);
-    let start = (position / page_steps * page_steps).min(max_start);
+    let vis = visible_bars.min(song_bars).max(1);
+    let page_steps = vis * STEPS_PER_BAR;
+    let max_start_bar = song_bars.saturating_sub(vis);
+    let scrolloff = arrange_scrolloff_bars(vis);
+    let bar = position / STEPS_PER_BAR;
+
+    let jump_anchor = |target_bar: usize| -> usize {
+        if target_bar < vis.saturating_sub(scrolloff) {
+            0
+        } else {
+            target_bar.saturating_sub(scrolloff).min(max_start_bar)
+        }
+    };
+
+    let start_bar = if max_start_bar == 0 {
+        0
+    } else if let Some(prev_step) = prev_start_step {
+        let prev_bar = (prev_step / STEPS_PER_BAR).min(max_start_bar);
+        let cont_lo = if scrolloff == 0 {
+            prev_bar.saturating_sub(1)
+        } else {
+            prev_bar
+        };
+        let cont_hi = if scrolloff == 0 {
+            prev_bar.saturating_add(vis)
+        } else {
+            prev_bar + vis - 1
+        };
+        if bar >= cont_lo && bar <= cont_hi {
+            let right_limit = prev_bar + vis - 1 - scrolloff;
+            let left_limit = prev_bar + scrolloff;
+            if bar > right_limit {
+                bar.saturating_sub(vis - 1 - scrolloff).min(max_start_bar)
+            } else if bar < left_limit {
+                bar.saturating_sub(scrolloff)
+            } else {
+                prev_bar
+            }
+        } else {
+            jump_anchor(bar)
+        }
+    } else {
+        jump_anchor(bar)
+    };
+
+    let start = start_bar * STEPS_PER_BAR;
     FollowPage {
         start,
         count: horizon.saturating_sub(start).min(page_steps),
@@ -388,11 +457,12 @@ mod tests {
 
     #[test]
     fn arrange_page_clamps_partial_tail_pages_to_fill_viewport() {
-        // 12-bar song at 10-bar zoom: bars 1..=10 stay at start 0; bars 11..=12 clamp back to bar 3 (step 32).
+        // 12-bar song at 10-bar zoom: bars 1..=8 stay at start 0; bars 11..=12 clamp back to bar 3 (step 32).
         let early = arrange_page(
             FollowMode::Off,
             PlaybackClock::Song { step: 0.0 },
             64,
+            None,
             10,
             12,
         )
@@ -403,6 +473,7 @@ mod tests {
             FollowMode::Off,
             PlaybackClock::Song { step: 0.0 },
             160, // bar 11
+            None,
             10,
             12,
         )
@@ -416,6 +487,7 @@ mod tests {
             FollowMode::Active,
             PlaybackClock::Song { step: 172.0 }, // bar 11 beat 4
             0,
+            None,
             10,
             12,
         )
@@ -435,6 +507,7 @@ mod tests {
             FollowMode::Off,
             PlaybackClock::Song { step: 0.0 },
             224, // bar 15
+            None,
             6,
             16,
         )
@@ -446,11 +519,132 @@ mod tests {
             FollowMode::Off,
             PlaybackClock::Song { step: 0.0 },
             48,
+            None,
             16,
             4,
         )
         .unwrap();
         assert_eq!((wide.start, wide.count), (0, 64));
+    }
+
+    #[test]
+    fn arrange_page_smooth_scrolloff_slides_with_lookahead_deadzone_and_jumps() {
+        // Scrolloff table: ~20-25% margin when visible_bars >= 3, 0 for 1-2 bars.
+        assert_eq!(arrange_scrolloff_bars(1), 0);
+        assert_eq!(arrange_scrolloff_bars(2), 0);
+        assert_eq!(arrange_scrolloff_bars(4), 1);
+        assert_eq!(arrange_scrolloff_bars(8), 2);
+        assert_eq!(arrange_scrolloff_bars(16), 4);
+
+        // 64-bar song, 16-bar viewport (scrolloff = 4 bars).
+        // Walking forward bar-by-bar stays at 0 through bar 12 (idx 11), then slides +1 bar per bar
+        // keeping 4 bars of trailing lookahead until clamping at bar 49 (start_bar = 48).
+        let mut start = 0usize;
+        for bar in 0..64usize {
+            let p = arrange_page(
+                FollowMode::Off,
+                PlaybackClock::Song { step: 0.0 },
+                bar * 16,
+                Some(start),
+                16,
+                64,
+            )
+            .unwrap();
+            let expected_start_bar = bar.saturating_sub(11).min(48);
+            assert_eq!(
+                p.start,
+                expected_start_bar * 16,
+                "forward walk at bar {}",
+                bar + 1
+            );
+            start = p.start;
+        }
+
+        // Walking backward from bar 64 stays steady in dead-zone until bar 52 (idx 51 < 48 + 4),
+        // then glides smoothly -1 bar per bar keeping 4 bars of leading lookahead.
+        for bar in (0..64usize).rev() {
+            let p = arrange_page(
+                FollowMode::Off,
+                PlaybackClock::Song { step: 0.0 },
+                bar * 16,
+                Some(start),
+                16,
+                64,
+            )
+            .unwrap();
+            let expected_start_bar = if bar >= 52 { 48 } else { bar.saturating_sub(4) };
+            assert_eq!(
+                p.start,
+                expected_start_bar * 16,
+                "backward walk at bar {}",
+                bar + 1
+            );
+            start = p.start;
+        }
+
+        // Discontinuous section jump from bar 1 (start=0) to bar 25 (idx 24) lands with 4-bar lead-in
+        // (start_bar = 20 -> bars 21..=36), showing 4 lead-in bars + full 8-bar section + 4 ahead.
+        let jumped = arrange_page(
+            FollowMode::Off,
+            PlaybackClock::Song { step: 0.0 },
+            24 * 16,
+            Some(0),
+            16,
+            64,
+        )
+        .unwrap();
+        assert_eq!(jumped.start, 20 * 16);
+
+        // FollowMode::Active glides identically bar-by-bar and snaps back to 0 on loop wrap.
+        let mut follow_start = 0usize;
+        for bar in 0..20usize {
+            let p = arrange_page(
+                FollowMode::Active,
+                PlaybackClock::Song {
+                    step: (bar * 16 + 7) as f64,
+                },
+                0,
+                Some(follow_start),
+                8, // scrolloff = 2 -> right_limit = start + 5
+                64,
+            )
+            .unwrap();
+            assert_eq!(p.start, bar.saturating_sub(5) * 16);
+            assert_eq!(p.origin, PageOrigin::Transport);
+            follow_start = p.start;
+        }
+        let wrapped = arrange_page(
+            FollowMode::Active,
+            PlaybackClock::Song { step: 2.0 },
+            0,
+            Some(follow_start),
+            8,
+            64,
+        )
+        .unwrap();
+        assert_eq!(wrapped.start, 0);
+
+        // Narrow 2-bar viewport (scrolloff = 0) still glides +1 / -1 bar cleanly at boundaries.
+        let p2_fwd = arrange_page(
+            FollowMode::Off,
+            PlaybackClock::Song { step: 0.0 },
+            2 * 16, // bar 3, 1 bar past [0..2)
+            Some(0),
+            2,
+            16,
+        )
+        .unwrap();
+        assert_eq!(p2_fwd.start, 16);
+        let p2_back = arrange_page(
+            FollowMode::Off,
+            PlaybackClock::Song { step: 0.0 },
+            0, // bar 1, 1 bar before [1..3)
+            Some(16),
+            2,
+            16,
+        )
+        .unwrap();
+        assert_eq!(p2_back.start, 0);
     }
 
     #[test]
