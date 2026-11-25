@@ -8,9 +8,10 @@ use cadence_core::arrangement_view::EventKey;
 use cadence_core::assets::SampleIssue;
 use cadence_core::filter_patterns::FilterGrooveCatalog;
 use cadence_core::material::Id;
+use cadence_core::mixer::ChannelRef;
 use cadence_core::presets::PresetCatalog;
 use cadence_core::sampler::{SampleData, SampleLibrary};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -611,14 +612,22 @@ impl ArrangeUiState {
 }
 
 /// Deck-level view/cursor/zoom parameters and workspace chrome visibility flags.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct ViewState {
     /// Horizontal zoom factor for Pattern (`1.0` = `length.clamp(1, 16)` steps, bounded by `4..=64` steps).
     pub pattern_zoom: f32,
     /// Focused vertical row inside the selected Mixer channel strip (`Fader → Pan → Inserts → Sends → Output → Ducks`).
     pub mixer_slot: MixerSlot,
-    /// Number of channel strips in the current Mixer viewport, supplied by the frontend.
+    /// Number of scrollable bank channel strips visible in the current Mixer viewport, supplied by the frontend.
     pub mixer_page_size: usize,
+    /// Number of visible detail rows in the Mixer's fixed-height inspector stack, supplied by the frontend.
+    pub mixer_detail_rows: usize,
+    /// Leftmost visible bank channel strip index for smooth horizontal Mixer scrolling.
+    pub mixer_scroll: Cell<usize>,
+    /// Top visible detail row index for smooth vertical scrolling inside the Mixer detail stack.
+    pub mixer_detail_scroll: Cell<usize>,
+    /// Last channel whose Mixer detail stack was projected, so switching channels resets detail scroll cleanly.
+    pub mixer_detail_channel: Cell<Option<ChannelRef>>,
     pub bank_mode: BankMode,
     pub bank_lane_idx: usize,
     pub bank_part_idx: usize,
@@ -643,6 +652,10 @@ impl Default for ViewState {
             pattern_zoom: 1.0,
             mixer_slot: MixerSlot::Fader,
             mixer_page_size: 4,
+            mixer_detail_rows: 3,
+            mixer_scroll: Cell::new(0),
+            mixer_detail_scroll: Cell::new(0),
+            mixer_detail_channel: Cell::new(None),
             bank_mode: BankMode::Material,
             bank_lane_idx: 0,
             bank_part_idx: 0,

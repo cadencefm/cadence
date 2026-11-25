@@ -753,6 +753,8 @@ pub fn draw_footer(dl: &mut DisplayList, area: Rect, chrome: &ChromeView, theme:
 
 /// Total horizontal logical pixel inset added by `draw_deck_frame` (`1.5*2 + 6.0*2`).
 pub const DECK_FRAME_INSET_X: f32 = 15.0;
+/// Total vertical logical pixel inset added by `draw_deck_frame` (`1.5*2 + 24.0 + 5.0*2`).
+pub const DECK_FRAME_INSET_Y: f32 = 37.0;
 
 /// Configuration for [`draw_deck_frame`].
 #[derive(Clone, Copy, Debug)]

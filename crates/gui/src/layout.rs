@@ -6,7 +6,7 @@
 //! - Right tall dock: Bank / Mixer pinned decks
 //! - Bottom wide strip inside main column: Output oscilloscope deck
 //! - Bottom status/command/hints footer bar
-use crate::chrome::DECK_FRAME_INSET_X;
+use crate::chrome::{DECK_FRAME_INSET_X, DECK_FRAME_INSET_Y};
 use crate::display::Rect;
 use cadence_app::layout::{DeckKind, Layout, Shape, Spot};
 use cadence_app::view::{DeckView, FrameView};
@@ -27,11 +27,13 @@ pub struct FrameLayoutRects {
 }
 
 /// Actual logical inner pane dimensions derived from the live deck `Layout`,
-/// used to keep keyboard paging (`mixer_page_size`) aligned with rendered GPU
-/// deck geometry across resizes, zoom toggles, and DPI changes.
+/// used to keep keyboard paging (`mixer_page_size`) and vertical detail scroll
+/// (`mixer_detail_rows`) aligned with rendered GPU deck geometry across resizes,
+/// zoom toggles, and DPI changes.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ViewportPaneMetrics {
     pub mixer_inner_w: f32,
+    pub mixer_inner_h: f32,
 }
 
 fn dock_width_for_kinds(body_w: f32, tall_kinds: impl IntoIterator<Item = DeckKind>) -> f32 {
@@ -49,16 +51,16 @@ fn dock_width_for_kinds(body_w: f32, tall_kinds: impl IntoIterator<Item = DeckKi
     width.min(body_w * 0.48)
 }
 
-/// Compute actual logical inner width of the Mixer pane from `Layout`.
+/// Compute actual logical inner width and height of the Mixer pane from `Layout`.
 pub fn compute_pane_metrics(layout: &Layout, viewport: Rect) -> ViewportPaneMetrics {
     let (_, rest) = viewport.split_top(HEADER_H);
     let (body_outer, _) = rest.split_bottom(FOOTER_H);
     let body = body_outer.inset(GAP, GAP);
 
     if layout.zoomed() {
-        let inner_w = (body.w - DECK_FRAME_INSET_X).max(0.0);
         return ViewportPaneMetrics {
-            mixer_inner_w: inner_w,
+            mixer_inner_w: (body.w - DECK_FRAME_INSET_X).max(0.0),
+            mixer_inner_h: (body.h - DECK_FRAME_INSET_Y).max(0.0),
         };
     }
 
@@ -77,8 +79,31 @@ pub fn compute_pane_metrics(layout: &Layout, viewport: Rect) -> ViewportPaneMetr
     let mixer_docked = dock_w > 0.0 && tall_kinds.contains(&DeckKind::Mixer);
     let mixer_outer_w = if mixer_docked { dock_w } else { main_w };
 
+    let mixer_outer_h = if mixer_docked {
+        let count = tall_kinds.len().max(1) as f32;
+        ((body.h - GAP * (count - 1.0).max(0.0)) / count).max(0.0)
+    } else {
+        let mut main_h = body.h;
+        let has_output = layout.pinned().iter().any(|d| d.kind == DeckKind::Output);
+        if has_output && main_w >= 460.0 && main_h >= 260.0 {
+            main_h = (main_h - OUTPUT_H - GAP).max(0.0);
+        }
+        let stacked_count = layout
+            .pinned()
+            .iter()
+            .filter(|d| d.kind.shape() != Shape::Tall && d.kind != DeckKind::Output)
+            .count();
+        if stacked_count > 0 {
+            let stack_est = (main_h * 0.44).max(120.0).min(main_h * 0.52);
+            (main_h - stack_est - TRAIL_H - GAP).max(0.0)
+        } else {
+            (main_h - TRAIL_H - 2.0).max(0.0)
+        }
+    };
+
     ViewportPaneMetrics {
         mixer_inner_w: (mixer_outer_w - DECK_FRAME_INSET_X).max(0.0),
+        mixer_inner_h: (mixer_outer_h - DECK_FRAME_INSET_Y).max(0.0),
     }
 }
 
@@ -246,7 +271,7 @@ pub fn compute_layout(frame: &FrameView, viewport: Rect) -> FrameLayoutRects {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decks::mixer::MIXER_MIN_STRIP_W;
+    use crate::decks::mixer::{mixer_bank_capacity, mixer_detail_visible_rows};
     use cadence_app::layout::Deck;
 
     #[test]
@@ -262,17 +287,17 @@ mod tests {
         );
 
         let docked = compute_pane_metrics(&layout, viewport);
-        // Body is 1440 - 12 = 1428; docked Mixer is 36% = 514.08 -> inner 499.08 -> 5 strips.
-        let docked_slots =
-            ((docked.mixer_inner_w / MIXER_MIN_STRIP_W).floor() as usize).clamp(1, 16);
-        assert_eq!(docked_slots, 5);
+        // Body is 1440 - 12 = 1428; docked Mixer is 36% = 514.08 -> inner 499.08 -> 3 bank + pinned Master + rails for 14ch.
+        let docked_slots = mixer_bank_capacity(docked.mixer_inner_w, 14, true);
+        assert_eq!(docked_slots, 3);
+        assert!(mixer_detail_visible_rows(docked.mixer_inner_h) >= 4);
 
         layout.toggle_zoom();
         let zoomed = compute_pane_metrics(&layout, viewport);
-        // Zoomed Mixer gets full body width 1428 - 15 = 1413 -> 16 strips.
-        let zoomed_slots =
-            ((zoomed.mixer_inner_w / MIXER_MIN_STRIP_W).floor() as usize).clamp(1, 16);
-        assert_eq!(zoomed_slots, 16);
+        // Zoomed Mixer gets full body width 1428 - 15 = 1413 -> fits all 13 bank + pinned Master!
+        let zoomed_slots = mixer_bank_capacity(zoomed.mixer_inner_w, 14, true);
+        assert_eq!(zoomed_slots, 13);
         assert!(zoomed.mixer_inner_w > docked.mixer_inner_w);
+        assert!(mixer_detail_visible_rows(zoomed.mixer_inner_h) >= 5);
     }
 }

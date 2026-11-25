@@ -17,7 +17,7 @@ pub mod theme;
 use anyhow::{Context, Result};
 use cadence_app::{App, Outcome};
 use cadence_core::runtime::{AudioSnapshot, MidiMessage};
-use decks::mixer::MIXER_MIN_STRIP_W;
+use decks::mixer::{mixer_bank_capacity, mixer_detail_visible_rows};
 use decks::populate_display_list;
 use display::{DisplayList, Rect};
 use gpu::GpuRenderer;
@@ -316,8 +316,11 @@ impl GuiApp<'_> {
         // Keep keyboard PageUp/PageDown & Arrange paging aligned with actual GUI pane geometry.
         let viewport = Rect::new(0.0, 0.0, logical_width.max(1.0), logical_height.max(1.0));
         let metrics = compute_pane_metrics(self.app.layout(), viewport);
+        let total_channels = self.app.channels().len();
         self.app.view_state.mixer_page_size =
-            ((metrics.mixer_inner_w / MIXER_MIN_STRIP_W).floor() as usize).clamp(1, 16);
+            mixer_bank_capacity(metrics.mixer_inner_w, total_channels, true).max(1);
+        self.app.view_state.mixer_detail_rows =
+            mixer_detail_visible_rows(metrics.mixer_inner_h).max(1);
         self.app
             .set_arrange_page_size(self.app.arrange_visible_bars() * 16);
     }

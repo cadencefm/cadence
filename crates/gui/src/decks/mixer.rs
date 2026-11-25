@@ -8,17 +8,204 @@ use crate::decks::output::{
 };
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
-use cadence_app::view::{MixerChannelView, MixerDeckView, MixerRole, MixerSlot, UiModeKind};
+use cadence_app::view::{
+    mixer_bank_scroll_window, mixer_detail_scroll_window, MixerChannelView, MixerDeckView,
+    MixerRole, MixerSlot, UiModeKind,
+};
 use cadence_core::dsp::math::lin_to_db;
 
 /// Minimum logical width of a single vertical mixer channel strip.
 pub const MIXER_MIN_STRIP_W: f32 = 88.0;
+/// Maximum logical width of a single vertical mixer channel strip so strips stay
+/// consistent console widths regardless of channel count, scroll offset, or zoom.
+pub const MIXER_MAX_STRIP_W: f32 = 112.0;
+
+const STRIP_GAP: f32 = 4.0;
+const MASTER_DIVIDER_W: f32 = 10.0;
+const OVERFLOW_RAIL_W: f32 = 20.0;
+const OVERFLOW_RAIL_NARROW_W: f32 = 16.0;
+const OVERFLOW_RAIL_GAP: f32 = 4.0;
+const MAX_CONSOLE_BANK_SLOTS: usize = 24;
 
 const DETAIL_ROW_H: f32 = 20.0;
 const DETAIL_ROW_GAP: f32 = 2.0;
 const DETAIL_ROW_PITCH: f32 = DETAIL_ROW_H + DETAIL_ROW_GAP;
 const DETAIL_HEADER_H: f32 = 22.0;
 const DETAIL_FOOTER_H: f32 = 17.0;
+const DETAIL_CHROME_H: f32 = DETAIL_HEADER_H + DETAIL_FOOTER_H + 8.0;
+
+/// Fixed visible row count for the bottom channel detail stack, determined strictly from
+/// total Mixer deck inner height (never per-channel slot count) so faders and `0 dB`
+/// hairlines stay locked vertically when switching channels.
+pub fn mixer_detail_visible_rows(inner_h: f32) -> usize {
+    if inner_h < 220.0 {
+        0
+    } else if inner_h < 300.0 {
+        2
+    } else if inner_h < 500.0 {
+        3
+    } else if inner_h < 680.0 {
+        4
+    } else if inner_h < 840.0 {
+        5
+    } else {
+        6
+    }
+}
+
+/// Deterministic horizontal console strip geometry computed solely from viewport width
+/// and total channel count (independent of scroll position so strips never shift or resize).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MixerStripLayout {
+    pub master_pinned: bool,
+    pub bank_overflows: bool,
+    pub bank_slots: usize,
+    pub strip_w: f32,
+    pub rail_w: f32,
+    pub left_rail_x: f32,
+    pub bank_x: f32,
+    pub right_rail_x: f32,
+    pub divider_x: f32,
+    pub master_x: f32,
+}
+
+/// Compute uniform horizontal console layout for the Mixer strip bay.
+///
+/// - Pins `Master` on the right behind a console divider whenever `has_master && total_channels >= 2`
+///   and at least two strips fit (`area_w >= 2 * MIXER_MIN_STRIP_W + MASTER_DIVIDER_W`).
+/// - Caps strip width at `MIXER_MAX_STRIP_W` (`112px`) so strips keep consistent console geometry
+///   whether a project has 3 channels or 24.
+/// - When the scrollable bank overflows, reserves both left `<` and right `>` overflow rails for
+///   every scroll offset so strips never shift horizontally when scrolling off index 0.
+pub fn compute_strip_layout(
+    area_x: f32,
+    area_w: f32,
+    total_channels: usize,
+    has_master: bool,
+) -> MixerStripLayout {
+    let can_pin_master =
+        has_master && total_channels >= 2 && area_w >= 2.0 * MIXER_MIN_STRIP_W + MASTER_DIVIDER_W;
+
+    if can_pin_master {
+        let bank_len = total_channels - 1;
+        let unscrolled_w = (area_w - MASTER_DIVIDER_W).max(0.0);
+        let max_unscrolled_bank = (((unscrolled_w - MIXER_MIN_STRIP_W + STRIP_GAP)
+            / (MIXER_MIN_STRIP_W + STRIP_GAP))
+            .floor() as usize)
+            .clamp(1, MAX_CONSOLE_BANK_SLOTS);
+        let bank_overflows = bank_len > max_unscrolled_bank;
+
+        if !bank_overflows {
+            let gaps = bank_len.saturating_sub(1) as f32 * STRIP_GAP;
+            let fit_w = (unscrolled_w - gaps) / total_channels as f32;
+            let strip_w = fit_w.clamp(MIXER_MIN_STRIP_W, MIXER_MAX_STRIP_W);
+            let master_x = area_x + area_w - strip_w;
+            let divider_x = master_x - MASTER_DIVIDER_W;
+            return MixerStripLayout {
+                master_pinned: true,
+                bank_overflows: false,
+                bank_slots: bank_len,
+                strip_w,
+                rail_w: 0.0,
+                left_rail_x: area_x,
+                bank_x: area_x,
+                right_rail_x: divider_x,
+                divider_x,
+                master_x,
+            };
+        }
+
+        let rail_w = if area_w < 360.0 {
+            OVERFLOW_RAIL_NARROW_W
+        } else {
+            OVERFLOW_RAIL_W
+        };
+        let chrome_w = 2.0 * (rail_w + OVERFLOW_RAIL_GAP) + MASTER_DIVIDER_W;
+        let avail = (area_w - chrome_w).max(MIXER_MIN_STRIP_W);
+        let bank_slots = (((avail - MIXER_MIN_STRIP_W + STRIP_GAP)
+            / (MIXER_MIN_STRIP_W + STRIP_GAP))
+            .floor() as usize)
+            .clamp(1, MAX_CONSOLE_BANK_SLOTS.min(bank_len));
+        let gaps = bank_slots.saturating_sub(1) as f32 * STRIP_GAP;
+        let fit_w = (avail - gaps) / (bank_slots + 1) as f32;
+        let strip_w = fit_w.clamp(64.0, MIXER_MAX_STRIP_W);
+        let left_rail_x = area_x;
+        let bank_x = left_rail_x + rail_w + OVERFLOW_RAIL_GAP;
+        let master_x = area_x + area_w - strip_w;
+        let divider_x = master_x - MASTER_DIVIDER_W;
+        let right_rail_x = divider_x - rail_w;
+        return MixerStripLayout {
+            master_pinned: true,
+            bank_overflows: true,
+            bank_slots,
+            strip_w,
+            rail_w,
+            left_rail_x,
+            bank_x,
+            right_rail_x,
+            divider_x,
+            master_x,
+        };
+    }
+
+    // Unpinned mode: either no Master strip in view, only 1 total channel, or ultra-narrow pane.
+    let bank_len = total_channels.max(1);
+    let max_unscrolled = (((area_w + STRIP_GAP) / (MIXER_MIN_STRIP_W + STRIP_GAP)).floor()
+        as usize)
+        .clamp(1, MAX_CONSOLE_BANK_SLOTS);
+    let bank_overflows = bank_len > max_unscrolled;
+    if !bank_overflows {
+        let gaps = bank_len.saturating_sub(1) as f32 * STRIP_GAP;
+        let fit_w = (area_w - gaps) / bank_len as f32;
+        let strip_w = fit_w.clamp(64.0, MIXER_MAX_STRIP_W).min(area_w);
+        return MixerStripLayout {
+            master_pinned: false,
+            bank_overflows: false,
+            bank_slots: bank_len,
+            strip_w,
+            rail_w: 0.0,
+            left_rail_x: area_x,
+            bank_x: area_x,
+            right_rail_x: area_x + area_w,
+            divider_x: area_x + area_w,
+            master_x: area_x + area_w,
+        };
+    }
+
+    let rail_w = if area_w < 360.0 {
+        OVERFLOW_RAIL_NARROW_W
+    } else {
+        OVERFLOW_RAIL_W
+    };
+    let chrome_w = 2.0 * (rail_w + OVERFLOW_RAIL_GAP);
+    let avail = (area_w - chrome_w).max(64.0);
+    let bank_slots = (((avail + STRIP_GAP) / (MIXER_MIN_STRIP_W + STRIP_GAP)).floor() as usize)
+        .clamp(1, MAX_CONSOLE_BANK_SLOTS.min(bank_len));
+    let gaps = bank_slots.saturating_sub(1) as f32 * STRIP_GAP;
+    let fit_w = (avail - gaps) / bank_slots as f32;
+    let strip_w = fit_w.clamp(64.0, MIXER_MAX_STRIP_W).min(avail);
+    let left_rail_x = area_x;
+    let bank_x = left_rail_x + rail_w + OVERFLOW_RAIL_GAP;
+    let right_rail_x = area_x + area_w - rail_w;
+    MixerStripLayout {
+        master_pinned: false,
+        bank_overflows: true,
+        bank_slots,
+        strip_w,
+        rail_w,
+        left_rail_x,
+        bank_x,
+        right_rail_x,
+        divider_x: right_rail_x,
+        master_x: area_x + area_w,
+    }
+}
+
+/// Number of scrollable bank strips visible in a Mixer pane of width `inner_w`.
+/// Shared by `cadence-gui`'s viewport metrics sync (`H`/`L`, `PgUp`/`PgDn`, smooth scroll).
+pub fn mixer_bank_capacity(inner_w: f32, total_channels: usize, has_master: bool) -> usize {
+    compute_strip_layout(0.0, inner_w.max(0.0), total_channels, has_master).bank_slots
+}
 
 struct DetailRow {
     slot: MixerSlot,
@@ -105,6 +292,109 @@ fn build_detail_rows(ch: &MixerChannelView, theme: &Theme) -> Vec<DetailRow> {
     rows
 }
 
+fn draw_overflow_rail(
+    dl: &mut DisplayList,
+    rect: Rect,
+    arrow: &str,
+    hidden_count: usize,
+    theme: &Theme,
+) {
+    let active = hidden_count > 0;
+    dl.panel(
+        rect,
+        if active {
+            theme.accent.focus.with_alpha(0.11)
+        } else {
+            theme.surface.recessed.with_alpha(0.55)
+        },
+        if active {
+            theme.accent.focus.with_alpha(0.55)
+        } else {
+            theme.border.subtle.with_alpha(0.45)
+        },
+        theme.radii.badge,
+        1.0,
+        if active { 0.08 } else { 0.0 },
+    );
+    let cy = rect.y + rect.h * 0.5;
+    let arrow_col = if active {
+        theme.accent.focus
+    } else {
+        theme.text.muted.with_alpha(0.30)
+    };
+    let arrow_y = if active && rect.h >= 54.0 {
+        cy - 15.0
+    } else {
+        cy - 8.0
+    };
+    dl.text(
+        Rect::new(rect.x, arrow_y, rect.w, 16.0),
+        arrow,
+        theme.font.body,
+        true,
+        arrow_col,
+        TextAlign::Center,
+    );
+    if active && rect.h >= 54.0 {
+        dl.text(
+            Rect::new(rect.x, cy + 2.0, rect.w, 14.0),
+            format!("{hidden_count}"),
+            theme.font.small - 1.5,
+            true,
+            theme.accent.focus,
+            TextAlign::Center,
+        );
+    }
+}
+
+fn draw_master_divider(
+    dl: &mut DisplayList,
+    divider_x: f32,
+    y: f32,
+    h: f32,
+    master_selected: bool,
+    theme: &Theme,
+) {
+    let line_col = if master_selected {
+        theme.accent.focus.with_alpha(0.55)
+    } else {
+        theme.border.hairline
+    };
+    dl.rounded(
+        Rect::new(
+            divider_x + (MASTER_DIVIDER_W - 2.0) * 0.5,
+            y + 4.0,
+            2.0,
+            (h - 8.0).max(0.0),
+        ),
+        line_col,
+        1.0,
+    );
+}
+
+fn resolve_bank_window(view: &MixerDeckView, layout: &MixerStripLayout) -> (usize, usize, usize) {
+    let bank_len = if layout.master_pinned {
+        view.channels.len().saturating_sub(1)
+    } else {
+        view.channels.len()
+    };
+    let selected_bank_idx = if layout.master_pinned && view.selected_index >= bank_len {
+        None
+    } else if bank_len > 0 {
+        Some(view.selected_index.min(bank_len - 1))
+    } else {
+        None
+    };
+    let first = mixer_bank_scroll_window(
+        selected_bank_idx,
+        bank_len,
+        layout.bank_slots,
+        view.bank_scroll,
+    );
+    let shown = bank_len.saturating_sub(first).min(layout.bank_slots);
+    (bank_len, first, shown)
+}
+
 pub fn draw_mixer(
     dl: &mut DisplayList,
     area: Rect,
@@ -113,7 +403,32 @@ pub fn draw_mixer(
     mode: UiModeKind,
     theme: &Theme,
 ) {
-    let badge = format!("{} channels", view.channels.len());
+    let est_inner_w = (area.w - crate::chrome::DECK_FRAME_INSET_X).max(0.0);
+    let has_master = view
+        .channels
+        .last()
+        .is_some_and(|c| c.role == MixerRole::Master);
+    let pre_layout = compute_strip_layout(0.0, est_inner_w, view.channels.len(), has_master);
+    let (pre_bank_len, pre_first, pre_shown) = resolve_bank_window(view, &pre_layout);
+    let badge = if pre_layout.bank_overflows && pre_shown > 0 {
+        if pre_layout.master_pinned {
+            format!(
+                "{}-{} / {} + MST",
+                pre_first + 1,
+                pre_first + pre_shown,
+                pre_bank_len
+            )
+        } else {
+            format!(
+                "{}-{} / {}",
+                pre_first + 1,
+                pre_first + pre_shown,
+                pre_bank_len
+            )
+        }
+    } else {
+        format!("{} channels", view.channels.len())
+    };
     let inner = draw_deck_frame(
         dl,
         area,
@@ -135,41 +450,75 @@ pub fn draw_mixer(
     let detail_rows = selected_ch
         .map(|ch| build_detail_rows(ch, theme))
         .unwrap_or_default();
-    let has_empty_audio_hint = selected_ch.is_some_and(|ch| {
-        matches!(ch.role, MixerRole::Audio | MixerRole::Group)
-            && ch.inserts.is_empty()
-            && ch.sends.is_empty()
-            && ch.ducks.is_empty()
-    });
-    let detail_h = if inner.h < 220.0 {
+    let visible_detail_rows = mixer_detail_visible_rows(inner.h);
+    let detail_h = if visible_detail_rows == 0 {
         24.0
     } else {
-        let max_detail_h = (inner.h * 0.36).clamp(70.0, 210.0);
-        let chrome_h = DETAIL_HEADER_H + DETAIL_FOOTER_H + 8.0;
-        let visual_rows = detail_rows.len().max(1) + usize::from(has_empty_audio_hint);
-        let desired_h = chrome_h + visual_rows as f32 * DETAIL_ROW_PITCH;
-        desired_h.clamp(70.0, max_detail_h)
+        let fixed_h = DETAIL_CHROME_H + visible_detail_rows as f32 * DETAIL_ROW_PITCH;
+        fixed_h.min((inner.h * 0.44).max(70.0))
     };
     let (strips_area, detail_area) = inner.split_bottom(detail_h);
+    let strip_h = (strips_area.h - 4.0).max(0.0);
 
-    let max_slots = ((strips_area.w / MIXER_MIN_STRIP_W).floor() as usize).clamp(1, 16);
-    let page = view.selected_index / max_slots;
-    let first = page * max_slots;
-    let shown = view.channels.len().saturating_sub(first).min(max_slots);
-    let strip_w = if shown > 0 {
-        (strips_area.w - 4.0 * (shown - 1) as f32) / shown as f32
-    } else {
-        strips_area.w
-    };
+    let layout = compute_strip_layout(
+        strips_area.x,
+        strips_area.w,
+        view.channels.len(),
+        has_master,
+    );
+    let (bank_len, first, shown_bank) = resolve_bank_window(view, &layout);
+    let left_hidden = first;
+    let right_hidden = bank_len.saturating_sub(first + shown_bank);
 
-    for (slot, ch) in view.channels.iter().skip(first).take(shown).enumerate() {
-        let x = strips_area.x + slot as f32 * (strip_w + 4.0);
-        let rect = Rect::new(x, strips_area.y, strip_w, (strips_area.h - 4.0).max(0.0));
+    if layout.bank_overflows {
+        draw_overflow_rail(
+            dl,
+            Rect::new(layout.left_rail_x, strips_area.y, layout.rail_w, strip_h),
+            "<",
+            left_hidden,
+            theme,
+        );
+    }
+
+    for (slot, ch) in view.channels[..bank_len]
+        .iter()
+        .skip(first)
+        .take(shown_bank)
+        .enumerate()
+    {
+        let x = layout.bank_x + slot as f32 * (layout.strip_w + STRIP_GAP);
+        let rect = Rect::new(x, strips_area.y, layout.strip_w, strip_h);
         let active_slot = ch.selected.then_some(view.focused_slot);
         draw_strip(dl, rect, ch, focused, active_slot, theme);
     }
 
-    // Selected channel inspector: telemetry header + vertical stacked slot list + mod/hint footer.
+    if layout.bank_overflows {
+        draw_overflow_rail(
+            dl,
+            Rect::new(layout.right_rail_x, strips_area.y, layout.rail_w, strip_h),
+            ">",
+            right_hidden,
+            theme,
+        );
+    }
+
+    if layout.master_pinned {
+        if let Some(master) = view.channels.last() {
+            draw_master_divider(
+                dl,
+                layout.divider_x,
+                strips_area.y,
+                strip_h,
+                master.selected,
+                theme,
+            );
+            let mrect = Rect::new(layout.master_x, strips_area.y, layout.strip_w, strip_h);
+            let active_slot = master.selected.then_some(view.focused_slot);
+            draw_strip(dl, mrect, master, focused, active_slot, theme);
+        }
+    }
+
+    // Selected channel inspector: telemetry header + fixed-height scrollable slot list + footer.
     if let Some(ch) = selected_ch {
         draw_detail_stack(
             dl,
@@ -177,6 +526,7 @@ pub fn draw_mixer(
             ch,
             &detail_rows,
             view.focused_slot,
+            view.detail_scroll,
             focused,
             theme,
         );
@@ -218,12 +568,14 @@ fn draw_empty_detail_banner(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_detail_stack(
     dl: &mut DisplayList,
     detail_area: Rect,
     ch: &MixerChannelView,
     rows: &[DetailRow],
     focused_slot: MixerSlot,
+    prev_detail_scroll: usize,
     focused: bool,
     theme: &Theme,
 ) {
@@ -289,13 +641,45 @@ fn draw_detail_stack(
             ch.ducks.get(i).map_or("—", String::as_str)
         ),
     };
+    let list_top = detail_area.y + DETAIL_HEADER_H + 3.0;
+    let footer_y = detail_area.bottom() - DETAIL_FOOTER_H;
+    let list_h = (footer_y - list_top - 3.0).max(0.0);
+    let visible_rows = if detail_area.h >= 64.0 && list_h >= DETAIL_ROW_H {
+        ((list_h + DETAIL_ROW_GAP) / DETAIL_ROW_PITCH)
+            .floor()
+            .max(1.0) as usize
+    } else {
+        0
+    };
+    let focused_idx = rows.iter().position(|r| r.slot == focused_slot);
+    let scroll = if visible_rows > 0 {
+        mixer_detail_scroll_window(focused_idx, rows.len(), visible_rows, prev_detail_scroll)
+    } else {
+        0
+    };
+    let scroll_badge = (visible_rows > 0 && rows.len() > visible_rows).then(|| {
+        let start = scroll + 1;
+        let end = (scroll + visible_rows).min(rows.len());
+        let arrow = match (scroll > 0, end < rows.len()) {
+            (true, true) => "↕",
+            (true, false) => "↑",
+            (false, true) => "↓",
+            (false, false) => "",
+        };
+        format!("{arrow}{start}-{end}/{}", rows.len())
+    });
+
     let cw = theme.char_width(theme.font.small - 0.5);
     let badge_w = (slot_badge.chars().count() as f32 * cw + 14.0).clamp(90.0, 220.0);
+    let scroll_badge_w = scroll_badge
+        .as_ref()
+        .map_or(0.0, |s| s.chars().count() as f32 * cw + 12.0);
+    let scroll_badge_gap = if scroll_badge.is_some() { 6.0 } else { 0.0 };
     let header_line = format!(
         "{} · trim {} dB{live_gain_str} · pan {}{live_pan_str} · {meter_str}",
         ch.name, ch.gain_db, ch.pan_label
     );
-    let hdr_w = (detail_area.w - badge_w - 12.0).max(40.0);
+    let hdr_w = (detail_area.w - badge_w - scroll_badge_w - scroll_badge_gap - 12.0).max(40.0);
     let max_h_chars = (hdr_w / theme.char_width(theme.font.small)).max(12.0) as usize;
     dl.text(
         Rect::new(detail_area.x + 2.0, detail_area.y + 3.0, hdr_w, 18.0),
@@ -311,6 +695,30 @@ fn draw_detail_stack(
         badge_w,
         17.0,
     );
+    if let Some(ref sb_text) = scroll_badge {
+        let sc_rect = Rect::new(
+            sb_rect.x - scroll_badge_gap - scroll_badge_w,
+            detail_area.y + 3.0,
+            scroll_badge_w,
+            17.0,
+        );
+        dl.panel(
+            sc_rect,
+            theme.surface.recessed,
+            theme.border.subtle,
+            theme.radii.badge,
+            1.0,
+            0.0,
+        );
+        dl.text(
+            sc_rect.inset(4.0, 0.0),
+            sb_text,
+            theme.font.small - 1.0,
+            true,
+            theme.text.secondary,
+            TextAlign::Center,
+        );
+    }
     dl.panel(
         sb_rect,
         slot_accent.with_alpha(0.14),
@@ -332,9 +740,6 @@ fn draw_detail_stack(
         return;
     }
 
-    let list_top = detail_area.y + DETAIL_HEADER_H + 3.0;
-    let footer_y = detail_area.bottom() - DETAIL_FOOTER_H;
-    let list_h = (footer_y - list_top - 3.0).max(0.0);
     let list_area = Rect::new(
         detail_area.x + 2.0,
         list_top,
@@ -348,21 +753,7 @@ fn draw_detail_stack(
             let empty_rect = Rect::new(list_area.x, list_area.y, list_area.w, DETAIL_ROW_H);
             draw_empty_detail_banner(dl, empty_rect, ch.role, cw, theme);
         } else {
-            let visible_rows = ((list_area.h + DETAIL_ROW_GAP) / DETAIL_ROW_PITCH)
-                .floor()
-                .max(1.0) as usize;
             let needs_scroll = rows.len() > visible_rows;
-            let scroll = if needs_scroll {
-                let focused_idx = rows
-                    .iter()
-                    .position(|r| r.slot == focused_slot)
-                    .unwrap_or(0);
-                focused_idx
-                    .saturating_sub(visible_rows / 2)
-                    .min(rows.len() - visible_rows)
-            } else {
-                0
-            };
             let row_w = if needs_scroll {
                 (list_area.w - 9.0).max(40.0)
             } else {
@@ -1469,6 +1860,8 @@ mod tests {
             channels: vec![crowded],
             selected_index: 0,
             focused_slot: MixerSlot::Duck(1),
+            bank_scroll: 0,
+            detail_scroll: 0,
             pending: false,
             solo_audition: false,
         };
@@ -1504,65 +1897,118 @@ mod tests {
     }
 
     #[test]
-    fn horizontal_strip_paging_slices_channels_by_selected_page() {
+    fn smooth_console_scrolling_pins_master_locks_strip_widths_and_keeps_detail_height_stable() {
         let theme = Theme::cadence_dark();
-        let make_channels = |selected_idx: usize| -> Vec<MixerChannelView> {
-            (0..10)
+        let make_console = |selected_idx: usize| -> Vec<MixerChannelView> {
+            let mut chs: Vec<MixerChannelView> = (0..13)
                 .map(|i| {
-                    let mut ch = sample_channel(MixerRole::Audio, 0, 0, 0);
+                    // Alternate empty vs heavily loaded channels to prove detail height never shifts.
+                    let (ins, snd, dck) = if i % 2 == 0 { (0, 0, 0) } else { (5, 2, 1) };
+                    let mut ch = sample_channel(MixerRole::Audio, ins, snd, dck);
                     ch.channel = ChannelRef::Channel(i as u64 + 1);
                     ch.index = i;
                     ch.name = format!("Ch{i:02}");
                     ch.selected = i == selected_idx;
                     ch
                 })
-                .collect()
+                .collect();
+            let mut master = sample_channel(MixerRole::Master, 1, 0, 0);
+            master.channel = ChannelRef::Master;
+            master.index = 13;
+            master.name = "Master".into();
+            master.selected = selected_idx == 13;
+            chs.push(master);
+            chs
         };
 
-        // Area width 380 -> inner_w ~ 365 -> max_slots = floor(365 / 88) = 4 strips per page.
-        let area = Rect::new(0.0, 0.0, 380.0, 420.0);
+        // 1. Standard Mix split width (1060px): 13 bank + pinned Master overflows -> 9 bank + Master + `<` & `>` rails.
+        let area = Rect::new(0.0, 0.0, 1075.0, 400.0);
+        let layout_a = compute_strip_layout(0.0, 1060.0, 14, true);
+        assert!(layout_a.master_pinned);
+        assert!(layout_a.bank_overflows);
+        assert_eq!(layout_a.bank_slots, 9);
+        assert!(layout_a.strip_w >= MIXER_MIN_STRIP_W && layout_a.strip_w <= MIXER_MAX_STRIP_W);
 
-        let view_p0 = MixerDeckView {
-            channels: make_channels(1),
-            selected_index: 1,
+        // Render at scroll 0 (Ch00 selected): Ch00..Ch08 + Master visible, `>` rail shows 4 hidden strips!
+        let view0 = MixerDeckView {
+            channels: make_console(0),
+            selected_index: 0,
             focused_slot: MixerSlot::Fader,
+            bank_scroll: 0,
+            detail_scroll: 0,
             pending: false,
             solo_audition: false,
         };
-        let mut dl0 = DisplayList::new(380.0, 420.0, 1.0);
-        draw_mixer(&mut dl0, area, &view_p0, true, UiModeKind::Normal, &theme);
+        let mut dl0 = DisplayList::new(1075.0, 400.0, 1.0);
+        draw_mixer(&mut dl0, area, &view0, true, UiModeKind::Normal, &theme);
         assert_eq!(dl0.current_clip(), dl0.viewport);
         let texts0: Vec<&str> = dl0.base.texts.iter().map(|t| t.text.as_str()).collect();
-        assert!(texts0.contains(&"Ch00") && texts0.contains(&"Ch03"));
-        assert!(!texts0.contains(&"Ch04"));
+        assert!(texts0.contains(&"Ch00") && texts0.contains(&"Ch08"));
+        assert!(!texts0.contains(&"Ch09"));
+        assert!(
+            texts0.contains(&"Master"),
+            "Master must stay pinned on right"
+        );
+        assert!(texts0.contains(&">") && texts0.contains(&"4"));
 
-        let view_p1 = MixerDeckView {
-            channels: make_channels(5),
+        // Render at scroll 2 (Ch05 selected — crowded channel with 9 detail rows):
+        // Ch02..Ch10 + Master visible, `<` shows 2 hidden, `>` shows 2 hidden, and Master X/Y + detail divider Y stay IDENTICAL!
+        let view2 = MixerDeckView {
+            channels: make_console(5),
             selected_index: 5,
             focused_slot: MixerSlot::Fader,
+            bank_scroll: 2,
+            detail_scroll: 0,
             pending: false,
             solo_audition: false,
         };
-        let mut dl1 = DisplayList::new(380.0, 420.0, 1.0);
-        draw_mixer(&mut dl1, area, &view_p1, true, UiModeKind::Normal, &theme);
-        assert_eq!(dl1.current_clip(), dl1.viewport);
-        let texts1: Vec<&str> = dl1.base.texts.iter().map(|t| t.text.as_str()).collect();
-        assert!(texts1.contains(&"Ch04") && texts1.contains(&"Ch07"));
-        assert!(!texts1.contains(&"Ch00") && !texts1.contains(&"Ch08"));
-
-        let view_p2 = MixerDeckView {
-            channels: make_channels(9),
-            selected_index: 9,
-            focused_slot: MixerSlot::Fader,
-            pending: false,
-            solo_audition: false,
-        };
-        let mut dl2 = DisplayList::new(380.0, 420.0, 1.0);
-        draw_mixer(&mut dl2, area, &view_p2, true, UiModeKind::Normal, &theme);
-        assert_eq!(dl2.current_clip(), dl2.viewport);
+        let mut dl2 = DisplayList::new(1075.0, 400.0, 1.0);
+        draw_mixer(&mut dl2, area, &view2, true, UiModeKind::Normal, &theme);
         let texts2: Vec<&str> = dl2.base.texts.iter().map(|t| t.text.as_str()).collect();
-        assert!(texts2.contains(&"Ch08") && texts2.contains(&"Ch09"));
-        assert!(!texts2.contains(&"Ch07"));
+        assert!(texts2.contains(&"Ch02") && texts2.contains(&"Ch10"));
+        assert!(!texts2.contains(&"Ch01") && !texts2.contains(&"Ch11"));
+        assert!(texts2.contains(&"Master"));
+        assert!(texts2.contains(&"<") && texts2.contains(&">"));
+        assert!(texts2.iter().any(|t| t.contains("1-3/9")));
+
+        // Verify zero horizontal Master drift and zero vertical detail bounce between empty Ch00 and 9-row Ch05!
+        let master_rect = |dl: &DisplayList| {
+            dl.base
+                .texts
+                .iter()
+                .find(|t| t.text == "Master")
+                .expect("Master label")
+                .rect
+        };
+        let detail_hdr_y = |dl: &DisplayList| {
+            dl.base
+                .texts
+                .iter()
+                .find(|t| t.text.starts_with("ROW: FADER"))
+                .expect("ROW badge")
+                .rect
+                .y
+        };
+        assert!((master_rect(&dl0).x - master_rect(&dl2).x).abs() < 0.01);
+        assert!((master_rect(&dl0).w - master_rect(&dl2).w).abs() < 0.01);
+        assert!(
+            (detail_hdr_y(&dl0) - detail_hdr_y(&dl2)).abs() < 0.01,
+            "Detail stack height must remain locked across empty vs crowded channels"
+        );
+
+        // 2. Small 4-channel project caps strips at MIXER_MAX_STRIP_W (112px) without ballooning.
+        let small = compute_strip_layout(0.0, 1060.0, 4, true);
+        assert!(small.master_pinned && !small.bank_overflows);
+        assert!((small.strip_w - MIXER_MAX_STRIP_W).abs() < 0.01);
+        assert!((small.master_x - (1060.0 - MIXER_MAX_STRIP_W)).abs() < 0.01);
+
+        // 3. Height-responsive detail rows: compact (0), short (2), standard (3), tall (4), zoomed (5..=6).
+        assert_eq!(mixer_detail_visible_rows(180.0), 0);
+        assert_eq!(mixer_detail_visible_rows(260.0), 2);
+        assert_eq!(mixer_detail_visible_rows(380.0), 3);
+        assert_eq!(mixer_detail_visible_rows(560.0), 4);
+        assert_eq!(mixer_detail_visible_rows(740.0), 5);
+        assert_eq!(mixer_detail_visible_rows(900.0), 6);
     }
 
     #[test]
@@ -1573,11 +2019,13 @@ mod tests {
             channels: vec![ch],
             selected_index: 0,
             focused_slot: MixerSlot::Fader,
+            bank_scroll: 0,
+            detail_scroll: 0,
             pending: false,
             solo_audition: false,
         };
 
-        // 1. Wide tall single strip shows dB scale labels (`-12`, `-24`, `-48`) AND Audio empty-state hint (`w add send`).
+        // 1. Standard 112px strip shows dB scale labels (`-12`, `-24`, `-48`) AND Audio empty-state hint (`w add send`).
         let mut dl_wide = DisplayList::new(620.0, 460.0, 1.0);
         draw_mixer(
             &mut dl_wide,
@@ -1595,7 +2043,7 @@ mod tests {
             .iter()
             .any(|t| t.text.contains("f add fx · w add send · d add duck")));
 
-        // 2. Narrow 4-strip page (~88 px/strip) with GR bar collapses dB scale labels cleanly
+        // 2. Narrow 4-strip bank (~88 px/strip) with GR bar collapses dB scale labels cleanly
         //    (`mf.w < core_w + 26.0` when GR column is shown).
         let mut channels_4 = Vec::new();
         for i in 0..4 {
@@ -1613,6 +2061,8 @@ mod tests {
             channels: channels_4,
             selected_index: 0,
             focused_slot: MixerSlot::Fader,
+            bank_scroll: 0,
+            detail_scroll: 0,
             pending: false,
             solo_audition: false,
         };
@@ -1700,6 +2150,8 @@ mod tests {
             channels: vec![hot_audio, clipped_master],
             selected_index: 0,
             focused_slot: MixerSlot::Fader,
+            bank_scroll: 0,
+            detail_scroll: 0,
             pending: false,
             solo_audition: false,
         };
