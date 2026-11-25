@@ -846,7 +846,8 @@ fn acid_303_accent_and_drumkit_rack_with_hat_choke_render_cleanly() {
 
 #[test]
 fn per_channel_stem_export_writes_master_and_isolated_audio_stems() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir1 = tempfile::tempdir().unwrap();
+    let dir2 = tempfile::tempdir().unwrap();
     let fx = crate::test_fixtures::kitchen_sink_fixture(24_000);
     let flags = cadence_core::mixer::LiveFlags::default();
     let expected_audio_channels = fx
@@ -856,26 +857,65 @@ fn per_channel_stem_export_writes_master_and_isolated_audio_stems() {
         .iter()
         .filter(|c| c.kind == ChannelKind::Audio)
         .count();
-    let summary = render_stems_with_samples_report(
+    let summary1 = render_stems_with_samples_report(
         &fx.project,
         &flags,
-        fx.samples,
-        dir.path(),
+        fx.samples.clone(),
+        dir1.path(),
         0,
         16,
         24_000,
     )
     .unwrap();
-    assert!(summary.master_path.is_file());
-    assert_eq!(summary.stem_paths.len(), expected_audio_channels);
-    for stem in &summary.stem_paths {
-        assert!(stem.is_file(), "Missing stem {}", stem.display());
-        let reader = hound::WavReader::open(stem).unwrap();
+    let summary2 = render_stems_with_samples_report(
+        &fx.project,
+        &flags,
+        fx.samples,
+        dir2.path(),
+        0,
+        16,
+        24_000,
+    )
+    .unwrap();
+
+    assert!(summary1.master_path.is_file());
+    assert_eq!(summary1.stem_paths.len(), expected_audio_channels);
+    assert_eq!(summary1.master_report, summary2.master_report);
+    assert_eq!(
+        std::fs::read(&summary1.master_path).unwrap(),
+        std::fs::read(&summary2.master_path).unwrap(),
+        "parallel stem export Master WAV must be bit-identical across runs"
+    );
+    for (idx, (stem1, stem2)) in summary1
+        .stem_paths
+        .iter()
+        .zip(summary2.stem_paths.iter())
+        .enumerate()
+    {
+        assert!(stem1.is_file(), "Missing stem {}", stem1.display());
+        assert_eq!(stem1.file_name(), stem2.file_name());
+        let expected_prefix = format!("{:02}-", idx + 1);
+        assert!(
+            stem1
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&expected_prefix),
+            "stem {idx} filename order mismatch: {}",
+            stem1.display()
+        );
+        let reader = hound::WavReader::open(stem1).unwrap();
         assert_eq!(reader.spec().channels, 2);
         assert_eq!(reader.spec().sample_rate, 24_000);
         assert!(reader.len() > 0);
+        assert_eq!(
+            std::fs::read(stem1).unwrap(),
+            std::fs::read(stem2).unwrap(),
+            "parallel stem export {} must be bit-identical across runs",
+            stem1.display()
+        );
     }
-    assert!(summary.master_report.output.peak[0] > 0.05);
+    assert!(summary1.master_report.output.peak[0] > 0.05);
 }
 
 #[test]

@@ -533,6 +533,10 @@ fn sanitize_stem_name(name: &str) -> String {
 
 /// Export `00-Master.wav` plus one isolated stereo WAV per active `Audio` channel
 /// (`01-<Name>.wav`, `02-<Name>.wav`, ...) through the exact production mixer & FX graph.
+///
+/// Compiles all stem jobs deterministically upfront and renders independent WAVs in
+/// parallel across scoped worker threads capped to [`std::thread::available_parallelism`],
+/// preserving deterministic filenames, `stem_paths` order, and error propagation.
 pub fn render_stems_with_samples_report(
     project: &cadence_core::material::Project,
     flags: &cadence_core::mixer::LiveFlags,
@@ -542,20 +546,14 @@ pub fn render_stems_with_samples_report(
     steps: u64,
     sample_rate: u32,
 ) -> Result<StemExportSummary> {
+    use std::sync::atomic::AtomicUsize;
+
     let dir = out_dir.as_ref();
     std::fs::create_dir_all(dir)
         .with_context(|| format!("Creating stems directory {}", dir.display()))?;
 
     let master_score = project.compile_with_flags(flags)?;
     let master_path = dir.join("00-Master.wav");
-    let master_report = render_schedule_report(
-        &[(0, &master_score)],
-        start_step,
-        steps,
-        samples.clone(),
-        &master_path,
-        sample_rate,
-    )?;
 
     let is_ancestor_group_muted = |mut out: ChannelRef| -> bool {
         for _ in 0..MAX_MIXER_CHANNELS {
@@ -576,6 +574,9 @@ pub fn render_stems_with_samples_report(
         false
     };
 
+    let mut jobs: Vec<(ScoreWindow, std::path::PathBuf)> = Vec::new();
+    jobs.push((master_score, master_path.clone()));
+
     let mut stem_paths = Vec::new();
     let mut stem_idx = 1usize;
     for ch in &project.mixer.channels {
@@ -591,17 +592,84 @@ pub fn render_stems_with_samples_report(
         let stem_score = project.compile_with_flags(&solo_flags)?;
         let filename = format!("{stem_idx:02}-{}.wav", sanitize_stem_name(&ch.name));
         let stem_path = dir.join(filename);
-        render_schedule_report(
-            &[(0, &stem_score)],
-            start_step,
-            steps,
-            samples.clone(),
-            &stem_path,
-            sample_rate,
-        )?;
-        stem_paths.push(stem_path);
+        stem_paths.push(stem_path.clone());
+        jobs.push((stem_score, stem_path));
         stem_idx += 1;
     }
+
+    let worker_count = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .clamp(1, jobs.len());
+
+    let mut outcomes: Vec<Option<Result<RenderReport>>> = (0..jobs.len()).map(|_| None).collect();
+    if worker_count <= 1 {
+        for (idx, (score, path)) in jobs.iter().enumerate() {
+            outcomes[idx] = Some(render_schedule_report(
+                &[(0, score)],
+                start_step,
+                steps,
+                samples.clone(),
+                path,
+                sample_rate,
+            ));
+        }
+    } else {
+        let next_job = AtomicUsize::new(0);
+        let jobs_ref = &jobs;
+        let samples_ref = &samples;
+        let batches: Vec<Vec<(usize, Result<RenderReport>)>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..worker_count)
+                .map(|_| {
+                    let next_job = &next_job;
+                    scope.spawn(move || {
+                        let mut local = Vec::new();
+                        loop {
+                            let idx = next_job.fetch_add(1, Ordering::Relaxed);
+                            let Some((score, path)) = jobs_ref.get(idx) else {
+                                break;
+                            };
+                            let res = render_schedule_report(
+                                &[(0, score)],
+                                start_step,
+                                steps,
+                                samples_ref.clone(),
+                                path,
+                                sample_rate,
+                            );
+                            local.push((idx, res));
+                        }
+                        local
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join().unwrap_or_else(|_| {
+                        vec![(0, Err(anyhow::anyhow!("Stem export worker panicked")))]
+                    })
+                })
+                .collect()
+        });
+        for batch in batches {
+            for (idx, res) in batch {
+                if let Some(slot) = outcomes.get_mut(idx) {
+                    *slot = Some(res);
+                }
+            }
+        }
+    }
+
+    let mut master_report = None;
+    for (idx, outcome) in outcomes.into_iter().enumerate() {
+        let report =
+            outcome.with_context(|| format!("Missing render result for stem job {idx}"))??;
+        if idx == 0 {
+            master_report = Some(report);
+        }
+    }
+    let master_report = master_report.context("Missing master render report")?;
 
     Ok(StemExportSummary {
         master_path,
