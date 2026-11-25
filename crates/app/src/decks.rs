@@ -66,6 +66,10 @@ impl App {
         self.focused_deck_kind() == Some(DeckKind::Pattern)
     }
 
+    pub fn sample_deck_focused(&self) -> bool {
+        self.focused_deck_kind() == Some(DeckKind::Sample)
+    }
+
     pub fn mixer_canvas_focused(&self) -> bool {
         self.focused_deck_kind() == Some(DeckKind::Mixer)
     }
@@ -124,7 +128,7 @@ impl App {
             Target::Part(id) => Detail::Part(id),
             Target::Channel(channel) => Detail::Channel(channel),
             Target::Effect(id) => Detail::Effect(id),
-            Target::Song | Target::Pattern(_) => Detail::None,
+            Target::Song | Target::Pattern(_) | Target::Sample { .. } => Detail::None,
         }
     }
 
@@ -267,6 +271,16 @@ impl App {
         let name = match deck.target {
             Target::Song => None,
             Target::Pattern(id) => self.pattern(id).map(|p| p.name.clone()),
+            Target::Sample {
+                instrument, zone, ..
+            } => self.instrument(instrument).map(|inst| {
+                if inst.rack.zones.len() > 1 {
+                    let zn = inst.rack.zone(zone).map_or("Zone", |z| z.name.as_str());
+                    format!("{} · {zn}", inst.name)
+                } else {
+                    inst.name.clone()
+                }
+            }),
             Target::Instrument(id) => self.instrument(id).map(|i| i.name.clone()),
             Target::Part(id) => self.part(id).map(|b| b.name.clone()),
             Target::Placement(id) => self.placement(id).and_then(|(lane, placement)| {
@@ -359,6 +373,14 @@ impl App {
         };
         let target = match deck.kind {
             DeckKind::Pattern => self.selected_pattern.map(Target::Pattern),
+            DeckKind::Sample => self
+                .selected_instrument
+                .and_then(|id| self.sampler_target_for_instrument(id))
+                .map(|(instrument, zone, module)| Target::Sample {
+                    instrument,
+                    zone,
+                    module,
+                }),
             DeckKind::Instrument => self.selected_instrument.map(Target::Instrument),
             DeckKind::Part => self.selected_part.map(Target::Part),
             DeckKind::Placement => self.selected_placement.map(Target::Placement),
@@ -413,6 +435,15 @@ impl App {
         let exists = |deck: &Deck| match deck.target {
             Target::Song => true,
             Target::Pattern(id) => project.pattern(id).is_some(),
+            Target::Sample {
+                instrument,
+                zone,
+                module,
+            } => project
+                .instrument(instrument)
+                .and_then(|i| i.rack.zone(zone))
+                .and_then(|z| z.module(module))
+                .is_some_and(|m| matches!(m.kind, ModuleKind::Sampler(_))),
             Target::Instrument(id) => project.instrument(id).is_some(),
             Target::Part(id) => project.part(id).is_some(),
             Target::Placement(id) => project

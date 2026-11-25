@@ -28,7 +28,6 @@ use cadence_core::store::SessionDir;
 use cadence_engine::audio::AudioRuntime;
 use std::{
     path::PathBuf,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -375,8 +374,8 @@ fn sync_audio_runtime(
     if let Some((patch, midi, velocity)) = &out.rack_audition {
         engine.preview_rack(patch.clone(), *midi, *velocity)?;
     }
-    if let Some(sample) = &out.preview_sample {
-        engine.preview_sample(Arc::clone(sample));
+    if let Some(spec) = &out.preview_sample {
+        engine.preview_sample_spec(spec.clone());
     }
     if let Some((instrument, midi, velocity)) = out.audition_instrument {
         engine.audition_instrument(instrument, midi, velocity);

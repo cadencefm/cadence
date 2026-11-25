@@ -137,6 +137,7 @@ No individual deck may shadow any global prefix, performance key, or `Ctrl` shor
 | --- | --- | --- |
 | **Arrange** | `ga` | **`Ctrl+a`** |
 | **Pattern** | `gp` | **`Ctrl+p`** |
+| **Sample / Waveform** | `gw` *(also `W` from Rack)* | — |
 | **Bank** | `gb` | **`Ctrl+b`** |
 | **Mixer** | `gm` | **`Ctrl+m`** |
 | **Instrument Rack** | `gi` | **`Ctrl+i`** |
@@ -171,7 +172,7 @@ No individual deck may shadow any global prefix, performance key, or `Ctrl` shor
 | `Ctrl+z` / `Ctrl+Shift+z` *(+ `Ctrl+r`)* | Normal | Undo / Redo *(alongside `u` / `U`)* |
 | `Ctrl+c` | Any mode | Cancel overlay/input back to Normal (restoring preview browsers); in Normal opens Quit confirm |
 | `Ctrl+w` | Normal | Window / Deck prefix (`Mode::Window`, alias of `z`) |
-| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Normal / Insert | Horizontal zoom in / out / reset *(only when Arrange or Pattern focused)* |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Normal / Insert | Horizontal zoom in / out / reset *(when Arrange, Pattern, or Sample focused)* |
 | `Ctrl+u` | Text inputs / Search | Clear active input buffer |
 
 #### `Alt` — Top-Row Live Performance + Home-Row Direct Manipulation
@@ -194,7 +195,7 @@ Text-entry fields keep `Alt+b`, `Alt+f`, `Alt+d`, and `Alt+[` free.
 
 | Key | Behavior |
 | --- | --- |
-| `g` | Go prefix: `ga` Arrange · `gp` Pattern · `gb` Bank · `gm` Mixer · `gi` Instrument · `gk` Macros · `gG` Signal Graph · `gd` Devices (`Audio \| MIDI`) · `gt` Take · `go` Output · `gj` Jam · `gf` File Hub · `gP` Song Properties · `g,` Settings · `gS` Sample Browser · `gs` Follow Source / Pattern Def · `gg` Start · `ge` End |
+| `g` | Go prefix: `ga` Arrange · `gp` Pattern · `gw` Sample/Wave · `gb` Bank · `gm` Mixer · `gi` Instrument · `gk` Macros · `gG` Signal Graph · `gd` Devices (`Audio \| MIDI`) · `gt` Take · `go` Output · `gj` Jam · `gf` File Hub · `gP` Song Properties · `g,` Settings · `gS` Sample Browser · `gs` Follow Source / Pattern Def · `gg` Start · `ge` End |
 | `t` | Transport prefix: `tf` Follow · `tg` Cue bar · `tl` Loop section · `tx` Clear loop · `tX` Cancel pending · `ts` Stop · `te` End rule · `tr` Take arm · `tR` Restart loop · **`ta` Toggle 24-bit audio record · `tA` Record Audio dialog · `ti` Cycle input monitor (`Off\|Auto\|On`)** · `tc` Cue · `tp` Cue & play · `tb` Bounce dialog · `tq` Launch quantize · `tQ` Cycle boundary · `tE` Edit timing · `tC` Clear all clipped meters |
 | `z` | Window prefix: `zw`/`Tab` cycle · `zz` zoom deck · `zp` pin · `zx` close · `zo` only · `zh/j/k/l` directional focus · `z=/z-/z0` timeline zoom · `z1..4` layout presets |
 | `:` / `/` / `?` | Action Palette / Bank Material search / Help |
@@ -253,23 +254,24 @@ Six deck layout alignments guarantee every `hjkl` and `Alt+hjkl` binding matches
 5. **Macros 1D horizontal dial strip + scrollable Bindings (`crates/gui/src/decks/macros.rs`):** Keeps `M1–M8` in a single horizontal strip across all pane widths and scrolls the vertical Bindings table around the focused row.
 6. **Devices (`Audio | MIDI`) navigable inspector rows (`crates/gui/src/decks/midi.rs`):** Renders `Audio` tab rows (`AUDIO INTERFACE`, `AUDIO INPUT & RECORDING`, `ENGINE & RECOVERY` — 11 typed `AudioDeckRow`s) and `MIDI` tab rows (`DEVICE & PROFILE` — 5 typed `MidiDeckRow`s: `IN`, `OUT`, `Profile`, `Pads`, `Pickup` — directly above `MAPPINGS`) as standard vertical inspector rows with `H`/`L` switching tabs, keeping global `t`, `i`, and `Backspace` unshadowed.
 
-### 4C. All 11 Primary Deck Surfaces
+### 4C. All 12 Primary Deck Surfaces
 
-`DeckKind` defines 14 targetable deck kinds projected into 11 visual surfaces (`Placement`, `Part`, and `Channel` share the unified `ObjectDeckView`):
+`DeckKind` defines 15 targetable deck kinds projected into 12 visual surfaces (`Placement`, `Part`, and `Channel` share the unified `ObjectDeckView`):
 
 | # | Deck | Jump | `DeckView` | Role & Key Capabilities |
 | --- | --- | --- | --- | --- |
 | 1 | **Arrange** | `ga` / `Ctrl+a` | `Arrange` | Placements (`vp`), Evaluated Overview (`vo`), Evaluated Piano Roll (`vr`), live override rows, pending/staged badges, sections (`H`/`L`, `w`/`b`), Event Provenance (`Enter`) |
 | 2 | **Bank** | `gb` / `Ctrl+b` | `Bank` | Row-oriented Launchpad (`Parts`) & searchable `Material` pattern/section library (`v` toggles) |
 | 3 | **Pattern** | `gp` / `Ctrl+p` | `Pattern` | 2D polyphonic voice-sorted piano roll (`j`/`k` voice, `o` stack, `Alt+j/k` pitch, `Alt+h/l` gate, `,/.` velocity, `i` Step Insert), fractional sub-step visualization, rhythm matrix, `Values` Hold/Ramp curve editor, `MiniEditor` (`Enter`), derived source inspector (`gs`/`Enter`) |
-| 4 | **Mixer** | `gm` / `Ctrl+m` | `Mixer` | 32-bit float console (`Audio`, `Group`, `Return`, `Master`), `-60..+6 dB` faders with `0 dB` hairline, pre-fader ticks, `HOT`/`!CLIP`, `CMP`/`LIM` GR bars, vertical detail slots (`Fader`/`Pan`/`Inserts`/`Sends`/`Output`/`Duck`), `o` Channel deck |
-| 5 | **Macros** | `gk` / `Ctrl+k` | `Macros` | All 8 Project Macros (`M1..M8`) in 1 horizontal strip + scrollable Bindings, automated sweeps, native-unit spans, inverted badges, MIDI CC badges |
-| 6 | **Devices (`Audio \| MIDI`)** | `gd` / `Ctrl+d` | `Midi` | Two-tab hardware deck (`H`/`L` switches **`Audio`** ↔ **`MIDI`**): `Audio` configures output/input device, sample rate, buffer size, cue out, input mode (`Stereo \| Left \| Right`), input monitor (`Off \| Auto \| On`), latency trim (`-250..+250 ms`), audio panic/restart/rescan + real-time input meters & health; `MIDI` configures ports, profile, pads, soft pickup, Smart Macro & RGB pad previews, mappings, and event log |
-| 7 | **Graph** | `gG` / `Ctrl+g` | `Graph` | Interactive 5/6-column Signal Graph patchbay (`Sources` → `Derived` → `Parts` → [`Macros`] → `Instruments` [`RACK`, `{z}z · {m}m` badge] → `Mixer / FX`), illuminated cubic-Bezier cables via shared `cable_graph.rs`, undo-safe wiring (`o`/`a`/`s`/`m`/`d`/`e`/`x`/`X`) |
-| 8 | **Take** | `gt` / `Ctrl+t` | `Take` | Explicitly armed performance timeline (`tr` toggle, default OFF; `Auto-Record Takes` setting; Chrome `TAKE ARM` / `● REC TAKE` / `● TAKE CAPPED` badges), bar summaries, event markers, `v` Visual range selection, `Enter`/`Alt+c` keep with auto-forking, `Ctrl+s` save, `X` confirm-guarded discard |
-| 9 | **Instrument** | `gi` / `Ctrl+i` | `Instrument` | Unified 11-module Eurorack Modular Rack (`Panel` \| `Patchbay` \| `Zones` via `H`/`L`): `Panel` (Quick `panel_pins` + module strip + 12 pre-sampled DSP `ModuleVisualView` visualizers), `Patchbay` (4-column `cable_graph.rs` with bipolar attenuverters & dashed `z-1` feedback), `Zones` (horizontal zone strip + 32-zone key/vel/choke map); universal `P` Preset Browser, `B` Sample Browser, `A` audition, `r` rename |
-| 10 | **Effect / Object** | `Enter` | `Effect` / `Object` | Dedicated visualizers for all 8 `EffectKind`s (EQ response, Filter + `FilterEnv` step bars, Comp/Limiter transfer + GR, Drive 3-mode curve, Chorus LFO, Delay taps, Reverb RT60) + `ObjectDeckView` for `Placement`, `Part`, and `Channel` |
-| 11 | **Output** | `go` / `Ctrl+o` | `Output` | Non-focusable stereo oscilloscope, L/R 32-bit float meters, `0 dB` hairline, Master `HOT`/`!CLIP` latch, and Master `LIM`/`CMP` GR badge |
+| 4 | **Sample** | `gw` / Rack `W` | `Sample` | Dedicated zoomable Waveform & Slicer deck (`1.0×..128×`, overview minimap, time ruler, `[`/`]` crop & `{`/`}` loop overlays, zero-crossing snap `v`, manual `s` / transient `d` / grid `D` slicing, active-slice audition `A`, one-step `K` Slice→Rack Kit + Pattern, lossless `W` RIFF `inst`/`smpl`/`cue `/`labl` WAV write-back) |
+| 5 | **Mixer** | `gm` / `Ctrl+m` | `Mixer` | 32-bit float console (`Audio`, `Group`, `Return`, `Master`), `-60..+6 dB` faders with `0 dB` hairline, pre-fader ticks, `HOT`/`!CLIP`, `CMP`/`LIM` GR bars, vertical detail slots (`Fader`/`Pan`/`Inserts`/`Sends`/`Output`/`Duck`), `o` Channel deck |
+| 6 | **Macros** | `gk` / `Ctrl+k` | `Macros` | All 8 Project Macros (`M1..M8`) in 1 horizontal strip + scrollable Bindings, automated sweeps, native-unit spans, inverted badges, MIDI CC badges |
+| 7 | **Devices (`Audio \| MIDI`)** | `gd` / `Ctrl+d` | `Midi` | Two-tab hardware deck (`H`/`L` switches **`Audio`** ↔ **`MIDI`**): `Audio` configures output/input device, sample rate, buffer size, cue out, input mode (`Stereo \| Left \| Right`), input monitor (`Off \| Auto \| On`), latency trim (`-250..+250 ms`), audio panic/restart/rescan + real-time input meters & health; `MIDI` configures ports, profile, pads, soft pickup, Smart Macro & RGB pad previews, mappings, and event log |
+| 8 | **Graph** | `gG` / `Ctrl+g` | `Graph` | Interactive 5/6-column Signal Graph patchbay (`Sources` → `Derived` → `Parts` → [`Macros`] → `Instruments` [`RACK`, `{z}z · {m}m` badge] → `Mixer / FX`), illuminated cubic-Bezier cables via shared `cable_graph.rs`, undo-safe wiring (`o`/`a`/`s`/`m`/`d`/`e`/`x`/`X`) |
+| 9 | **Take** | `gt` / `Ctrl+t` | `Take` | Explicitly armed performance timeline (`tr` toggle, default OFF; `Auto-Record Takes` setting; Chrome `TAKE ARM` / `● REC TAKE` / `● TAKE CAPPED` badges), bar summaries, event markers, `v` Visual range selection, `Enter`/`Alt+c` keep with auto-forking, `Ctrl+s` save, `X` confirm-guarded discard |
+| 10 | **Instrument** | `gi` / `Ctrl+i` | `Instrument` | Unified 11-module Eurorack Modular Rack (`Panel` \| `Patchbay` \| `Zones` via `H`/`L`): `Panel` (Quick `panel_pins` + module strip + 12 pre-sampled DSP `ModuleVisualView` visualizers), `Patchbay` (4-column `cable_graph.rs` with bipolar attenuverters & dashed `z-1` feedback), `Zones` (horizontal zone strip + 32-zone key/vel/choke map); universal `P` Preset Browser, `B` Sample Browser, `W` Sample Deck, `A` audition, `r` rename |
+| 11 | **Effect / Object** | `Enter` | `Effect` / `Object` | Dedicated visualizers for all 8 `EffectKind`s (EQ response, Filter + `FilterEnv` step bars, Comp/Limiter transfer + GR, Drive 3-mode curve, Chorus LFO, Delay taps, Reverb RT60) + `ObjectDeckView` for `Placement`, `Part`, and `Channel` |
+| 12 | **Output** | `go` / `Ctrl+o` | `Output` | Non-focusable stereo oscilloscope, L/R 32-bit float meters, `0 dB` hairline, Master `HOT`/`!CLIP` latch, and Master `LIM`/`CMP` GR badge |
 
 ### 4D. Deck-by-Deck Binding Contract
 
@@ -283,6 +285,11 @@ Six deck layout alignments guarantee every `hjkl` and `Alt+hjkl` binding matches
   - *Values:* `w`/`b` next/prev breakpoint · `Alt+j`/`k` & `,`/`.` value fine (`±0.01` / `±1` deg) · `Alt+J`/`K` & `<`/`>` coarse (`±0.10` / `±7` deg) · `Alt+h`/`l` slide breakpoint `±1` step (`Alt+H`/`L` `±4`) · `Enter` exact `ValueInput` · `m` toggle `Hold ↔ Ramp` · `x` delete breakpoint · `e` inspect/jump downstream Modulation/Link consumers.
   - *Rhythm:* `w`/`b` next/prev hit · `Enter` / `x` toggle hit directly.
   - *Derived / Mini / Generators:* `j`/`k` source chip (Derived) · `Enter` / `gs` open selected source (Derived) or `Mode::MiniEditor` (Mini) · `F` freeze to literal pattern.
+- **Sample / Waveform (`gw` / Rack `W`):**
+  - *Nav (Tier 1, non-mutating):* `h`/`l` fine scrub (`1%` visible) · `H`/`L` coarse scrub (`10%` visible) · `w`/`b` jump next/prev marker (`sample_start`, slices, `sample_end`) · `0`/`$`/`G` file start/end · `PgUp`/`PgDn` half-window page · `j`/`k` bottom toolbar control (`Cursor`, `Sensitivity`, `MinGap`, `GridDivisions`, `LoopXfade`, `SnapZero`) · `=`/`-`/`z0` (`Ctrl+=`/`-`/`0`) horizontal zoom `1.0×..128×`.
+  - *Direct Manipulation (Tiers 3 & 4):* `Alt+h`/`l` & `,`/`.` fine (`Alt+H`/`L` & `<`/`>` coarse) slide active slice marker (coalesced undo) when on `Cursor`, or adjust focused toolbar control (`Sensitivity`, `MinGap`, `GridDivisions`, `LoopXfade`, `SnapZero`) · `Alt+Backspace` reset crop/loop or toolbar default · `Enter` exact `ValueInput` (or rename active slice / browse if unloaded).
+  - *Verbs:* `[`/`]` crop start/end · `{`/`}` loop start/end (auto-enables Forward) · `m` cycle `SampleLoopMode` · `v` toggle zero-crossing snap · `s` split slice at cursor · `x`/`X` delete slice / clear all · `d`/`D` transient auto-slice / equal-grid slice · `r` rename active slice label · `A` audition active slice region · `B` Sample Browser · `K` Slice→Rack Kit picker · `W` lossless RIFF WAV metadata write-back.
+  - *Ex Commands:* `:wave [INSTRUMENT]`, `:slice auto|grid|add|rename|del|clear|kit ...`, `:sample write-meta`.
 - **Modular Rack (`gi` / `Ctrl+i` — `Panel`, `Patchbay`, `Zones`):**
   - *Shared:* `H`/`L` switch tab (`Panel | Patchbay | Zones`, or `:page panel|patchbay|zones`) · `A` audition · `P` Preset Browser *(incl. Save Preset & `R` reload)* · `B` Sample Browser (auto-inserts `Sampler -> Out.In` via `ensure_zone_sampler_module` when absent and applies RIFF `smpl`/`inst` metadata) · `o` route output channel · `r` rename instrument (or focused module/pin/zone) · `X` delete instrument (confirm).
   - *`Panel`:* `h`/`l` Module pill (`Quick` + every module) · `j`/`k` vertical control (`w`/`b` group) · `Alt+h`/`l` & `,`/`.` fine (`Alt+H`/`L` & `<`/`>` coarse) · `Alt+Backspace` reset · `Enter` exact `ValueInput` (or open Sampler/Link) · `Alt+j`/`k` reorder pin (`Quick` pill) · `a` add module · `x` remove module (never `Out`) · `p` pin/unpin · `e` edit/bind Macro & Modulation links. Displays all 12 pre-sampled GPU `ModuleVisualView` visualizers (`PinnedOverview`, `Vco`, `Sampler`, `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`).

@@ -1852,7 +1852,7 @@ fn arrange_and_pattern_zoom_are_monotonic_across_short_and_long_horizons_and_foc
             "focus {focus_keys} must not mutate pattern zoom"
         );
         assert!(
-            app.status.contains("Arrange or Pattern"),
+            app.status.contains("Arrange, Pattern, or Sample"),
             "focus {focus_keys} must report zoom hint, got {}",
             app.status
         );

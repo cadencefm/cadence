@@ -449,6 +449,52 @@ pub enum Action {
         instrument: Option<Id>,
         folder: String,
     },
+    /// Update crop, loop mode/bounds, and loop crossfade on a specific Sampler module.
+    SetSamplerRegion {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+        #[serde(default)]
+        sample_start: Option<usize>,
+        #[serde(default)]
+        sample_end: Option<usize>,
+        #[serde(default)]
+        loop_mode: Option<cadence_core::rack::SampleLoopMode>,
+        #[serde(default)]
+        loop_start: Option<usize>,
+        #[serde(default)]
+        loop_end: Option<usize>,
+        #[serde(default)]
+        loop_xfade_ms: Option<f32>,
+    },
+    /// Replace the persisted slice markers on a specific Sampler module.
+    SetSamplerSlices {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+        slices: Vec<cadence_core::sampler::SampleSlice>,
+    },
+    /// Convert a Sampler module's slice markers into a multi-zone chromatic Rack Kit
+    /// (with optional sequential slice Pattern + Arrange Placement in one undoable transaction).
+    SliceToRackKit {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+        #[serde(default)]
+        replace_existing: bool,
+        #[serde(default)]
+        create_pattern: bool,
+        #[serde(default)]
+        choke_group: Option<u8>,
+        #[serde(default)]
+        kit_name: Option<String>,
+    },
+    /// Losslessly write a Sampler module's loop/root/cue slice markers into its RIFF WAV file on disk.
+    WriteSampleRiffMetadata {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+    },
     /// Resample / bounce a part, pattern, or bar range to a portable WAV + playable `Sampler`
     /// or directly into a Rack zone.
     Bounce {

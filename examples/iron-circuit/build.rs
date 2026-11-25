@@ -434,6 +434,7 @@ fn tr808_kick_rack() -> RackPatch {
                     loop_xfade_ms: 4.0,
                     one_shot: true,
                     level: 1.0,
+                    slices: Vec::new(),
                 }),
             ),
             RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
@@ -609,6 +610,7 @@ fn electro_stab_rack() -> RackPatch {
                     loop_xfade_ms: 4.0,
                     one_shot: false,
                     level: 1.0,
+                    slices: Vec::new(),
                 }),
             ),
             RackModule::new(

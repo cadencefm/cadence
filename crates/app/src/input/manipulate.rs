@@ -61,6 +61,13 @@ impl App {
             };
         }
 
+        if self.sample_deck_focused() {
+            return match axis {
+                Axis::Horiz => self.nudge_sample_deck(dir, coarse, repeat),
+                Axis::Vert => Ok(Outcome::default()),
+            };
+        }
+
         if self.midi_focused() {
             return match axis {
                 Axis::Horiz if !repeat => {
@@ -220,6 +227,9 @@ impl App {
         if self.macros_focused() {
             return self.nudge_macro_focused(direction, coarse, repeat);
         }
+        if self.sample_deck_focused() {
+            return self.nudge_sample_deck(direction, coarse, repeat);
+        }
         if self.midi_focused() {
             if repeat {
                 return Ok(Outcome::default());
@@ -267,6 +277,9 @@ impl App {
     pub(super) fn handle_reset_focused(&mut self) -> Result<Outcome> {
         if self.macros_focused() {
             return self.reset_macro_focused();
+        }
+        if self.sample_deck_focused() {
+            return self.reset_sample_deck_focused();
         }
         if self.midi_focused() {
             return if self.devices.tab == DevicesTab::Audio {

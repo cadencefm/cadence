@@ -62,6 +62,10 @@ enum PaletteAction {
     ReloadSamples,
     ReloadPresets,
     BrowseSamples,
+    SampleAutoSlice,
+    SampleGridSlice,
+    SampleSliceToKit,
+    SampleWriteRiffMeta,
     EditMiniNotation,
     GoDeck(layout::DeckKind),
     GoDevices(DevicesTab),
@@ -400,6 +404,42 @@ impl App {
             "samples browser audio wav kit",
             "B / gS / Ctrl+Shift+b",
             PaletteAction::BrowseSamples,
+        );
+        push(
+            &mut entries,
+            "SOUND",
+            "Auto-Slice Sample Transients",
+            "Detect percussive onsets and place slice markers in Sample deck",
+            "slice auto transient onset detect chop drum break beat",
+            "Sample: d",
+            PaletteAction::SampleAutoSlice,
+        );
+        push(
+            &mut entries,
+            "SOUND",
+            "Grid-Slice Sample Regions",
+            "Divide cropped sample into equal zero-crossing-snapped slices",
+            "slice grid equal divisions chop loop sample",
+            "Sample: D",
+            PaletteAction::SampleGridSlice,
+        );
+        push(
+            &mut entries,
+            "SOUND",
+            "Slice Sample to Rack Kit",
+            "Convert slice markers into a chromatic multi-zone Rack Kit (+ optional Pattern)",
+            "slice kit zones drum pads chop convert pattern",
+            "Sample: K",
+            PaletteAction::SampleSliceToKit,
+        );
+        push(
+            &mut entries,
+            "SOUND",
+            "Write Sample RIFF Cue/Loop Metadata",
+            "Losslessly save slice cues and loop bounds into source WAV file",
+            "sample riff cue labl smpl inst write save metadata wav",
+            "Sample: W",
+            PaletteAction::SampleWriteRiffMeta,
         );
         push(
             &mut entries,
@@ -819,6 +859,12 @@ impl App {
                 "deck pattern piano roll notes values",
                 "gp / Ctrl+p",
                 layout::DeckKind::Pattern,
+            ),
+            (
+                "Open Sample / Waveform Deck",
+                "deck sample waveform slice chop cue riff loop crop",
+                "gw",
+                layout::DeckKind::Sample,
             ),
             (
                 "Open Mixer Deck",
@@ -1766,6 +1812,27 @@ impl App {
                 Ok(Outcome::default())
             }
             PaletteAction::BrowseSamples => self.browse_samples(),
+            PaletteAction::SampleAutoSlice => {
+                let (inst, zone, module) = self
+                    .resolve_sample_deck_target()
+                    .context("No Sampler instrument in project")?;
+                self.open_sample_deck_for(inst, zone, module)?;
+                self.auto_slice_transients(inst, zone, module)
+            }
+            PaletteAction::SampleGridSlice => {
+                let (inst, zone, module) = self
+                    .resolve_sample_deck_target()
+                    .context("No Sampler instrument in project")?;
+                self.open_sample_deck_for(inst, zone, module)?;
+                self.auto_slice_grid(inst, zone, module)
+            }
+            PaletteAction::SampleSliceToKit => {
+                let (inst, zone, module) = self
+                    .resolve_sample_deck_target()
+                    .context("No Sampler instrument in project")?;
+                self.open_slice_to_kit_picker(inst, zone, module)
+            }
+            PaletteAction::SampleWriteRiffMeta => self.execute_sample_write_meta_command(),
             PaletteAction::EditMiniNotation => self.open_active_mini_editor(),
             PaletteAction::GoDeck(kind) => self.focus_docked_deck(kind),
             PaletteAction::GoDevices(tab) => {

@@ -222,6 +222,10 @@ impl App {
                     0
                 };
             }
+            Some(layout::DeckKind::Sample) => {
+                self.navigate_sample_deck_edge(end);
+                return;
+            }
             Some(layout::DeckKind::Arrange) => {
                 self.arrange_ui.step = if end {
                     if self.arrange_ui.view == ArrangeView::Placements {
@@ -388,6 +392,10 @@ impl App {
                     self.takes.cursor_bar.saturating_sub(stride)
                 };
                 self.sync_take_visual_marks();
+            }
+            Some(layout::DeckKind::Sample) => {
+                self.navigate_sample_deck_page(forward, step_count);
+                return Ok(Outcome::default());
             }
             Some(layout::DeckKind::Macros) => {
                 self.step_macro_vertical(signed(6), false);

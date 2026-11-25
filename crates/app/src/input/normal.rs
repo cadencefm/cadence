@@ -50,7 +50,10 @@ impl App {
                         | 'R'
                         | 'S'
                         | 'B'
+                        | 'D'
                         | 'F'
+                        | 'K'
+                        | 'W'
                         | 'i'
                         | 'I'
                         | 'o'
@@ -91,6 +94,11 @@ impl App {
         }
         if self.bank_focused() {
             if let Some(result) = self.handle_bank_key(key, count) {
+                return result;
+            }
+        }
+        if self.sample_deck_focused() {
+            if let Some(result) = self.handle_sample_deck_key(key, count) {
                 return result;
             }
         }
@@ -143,12 +151,16 @@ impl App {
             KeyCode::Char('z') => self.input.mode = Mode::Window,
             KeyCode::Char(':') => self.open_palette(String::new(), None),
             KeyCode::Char('=' | '+')
-                if self.arrange_canvas_focused() || self.pattern_canvas_focused() =>
+                if self.arrange_canvas_focused()
+                    || self.pattern_canvas_focused()
+                    || self.sample_deck_focused() =>
             {
                 self.zoom_view(1);
             }
             KeyCode::Char('-')
-                if self.arrange_canvas_focused() || self.pattern_canvas_focused() =>
+                if self.arrange_canvas_focused()
+                    || self.pattern_canvas_focused()
+                    || self.sample_deck_focused() =>
             {
                 self.zoom_view(-1);
             }

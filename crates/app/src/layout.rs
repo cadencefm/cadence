@@ -10,6 +10,7 @@ pub enum DeckKind {
     Arrange,
     Bank,
     Pattern,
+    Sample,
     Mixer,
     Output,
     Take,
@@ -51,6 +52,7 @@ impl DeckKind {
             DeckKind::Arrange => "ARRANGE",
             DeckKind::Bank => "BANK",
             DeckKind::Pattern => "PATTERN",
+            DeckKind::Sample => "SAMPLE",
             DeckKind::Mixer => "MIXER",
             DeckKind::Output => "OUTPUT",
             DeckKind::Take => "TAKE",
@@ -88,6 +90,11 @@ impl DeckKind {
 pub enum Target {
     Song,
     Pattern(Id),
+    Sample {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+    },
     Instrument(Id),
     Placement(Id),
     Part(Id),

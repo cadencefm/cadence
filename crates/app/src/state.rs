@@ -565,6 +565,88 @@ impl HelpUiState {
     }
 }
 
+/// Focused bottom-toolbar control inside the dedicated Sample / Waveform deck (`gw`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SampleToolbarField {
+    #[default]
+    Cursor,
+    Sensitivity,
+    MinGap,
+    GridDivisions,
+    LoopXfade,
+    SnapZero,
+}
+
+impl SampleToolbarField {
+    pub const ALL: [Self; 6] = [
+        Self::Cursor,
+        Self::Sensitivity,
+        Self::MinGap,
+        Self::GridDivisions,
+        Self::LoopXfade,
+        Self::SnapZero,
+    ];
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|&f| f == self).unwrap_or(0)
+    }
+
+    pub fn step(self, delta: isize) -> Self {
+        let len = Self::ALL.len() as isize;
+        let next = (self.index() as isize + delta).rem_euclid(len) as usize;
+        Self::ALL[next]
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Cursor => "CURSOR",
+            Self::Sensitivity => "SENSITIVITY",
+            Self::MinGap => "MIN GAP",
+            Self::GridDivisions => "GRID",
+            Self::LoopXfade => "LOOP XFADE",
+            Self::SnapZero => "SNAP",
+        }
+    }
+}
+
+/// Dedicated Sample / Waveform deck (`gw`) viewport, slicing analysis parameters, and edit cursor.
+#[derive(Clone, Debug)]
+pub struct SampleDeckUiState {
+    pub cursor_frame: usize,
+    /// Horizontal waveform zoom (`1.0` = full sample, up to `128.0` = fine sample inspection).
+    pub zoom: f32,
+    /// Leftmost visible frame index for smooth horizontal scrolloff.
+    pub view_start_frame: Cell<usize>,
+    /// Transient detector sensitivity (`0.05..=1.0`, higher detects softer hits).
+    pub sensitivity: f32,
+    /// Minimum refractory gap between transient slices in milliseconds (`10..=500`).
+    pub min_gap_ms: f32,
+    /// Equal-grid slice count (`2..=32`).
+    pub grid_divisions: usize,
+    /// Snap new/adjusted crop, loop, and slice boundaries to nearest zero-crossing.
+    pub snap_zero: bool,
+    /// Active bottom-toolbar control (`j`/`k` cycles).
+    pub toolbar_field: SampleToolbarField,
+    /// Last projected `(instrument, zone, module)` target so switching targets resets zoom/cursor cleanly.
+    pub last_target: Cell<Option<(Id, u16, u16)>>,
+}
+
+impl Default for SampleDeckUiState {
+    fn default() -> Self {
+        Self {
+            cursor_frame: 0,
+            zoom: 1.0,
+            view_start_frame: Cell::new(0),
+            sensitivity: 0.55,
+            min_gap_ms: 50.0,
+            grid_divisions: 8,
+            snap_zero: true,
+            toolbar_field: SampleToolbarField::Cursor,
+            last_target: Cell::new(None),
+        }
+    }
+}
+
 /// Instrument Rack deck tab, Panel module pill cursor, Zone cursor, and 2D Patchbay selection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RackUiState {

@@ -66,7 +66,7 @@ Every zone executes its modules at full `f64` audio rate inside zero-allocation 
 | # | Module | Patchbay Column | Accepted `InPort`s | DSP Highlights & Key Parameters |
 |---|---|---|---|---|
 | 1 | **`Vco`** | `SOURCES` | `PitchCv`, `FmIn`, `PwCv` | Bandlimited PolyBLEP/PolyBLAMP (`Sine`, `Triangle`, `Saw`, `Pulse` with DC-compensated PWM), up to **7-voice stereo unison** (`unison_detune`, `unison_width`), `Chromatic`/`Fixed` pitch tracking, `±48 st` / `±100 ct` tuning, and **2× `Halfband2x`-oversampled through-zero linear FM** (`step_vco_bank_fm_2x`) via `FmIn`. |
-| 2 | **`Sampler`** | `SOURCES` | `PitchCv`, `TrigIn` | Pure-Rust stereo sample player (**PCM/Float WAV, Ogg-in-RIFF WAV, FLAC, Ogg Vorbis, MP3, AIFF, WavPack `.wv`**) with 4-point Catmull-Rom cubic Hermite interpolation (`SamplerVoice`), automatic RIFF `smpl`/`inst` root & loop metadata (`Off`/`Forward`/`PingPong`, `loop_xfade`), start/end trim, `one_shot`, audio-rate `PitchCv`, and external `TrigIn` retriggering. |
+| 2 | **`Sampler`** | `SOURCES` | `PitchCv`, `TrigIn` | Pure-Rust stereo sample player (**PCM/Float WAV, Ogg-in-RIFF WAV, FLAC, Ogg Vorbis, MP3, AIFF, WavPack `.wv`**) with 4-point Catmull-Rom cubic Hermite interpolation (`SamplerVoice`), automatic RIFF `smpl`/`inst`/`cue `/`labl` root, loop & slice metadata (`Off`/`Forward`/`PingPong`, `loop_xfade`), start/end trim, `one_shot`, audio-rate `PitchCv`, and external `TrigIn` retriggering. |
 | 3 | **`Noise`** | `SOURCES` | *(none)* | Sample-rate-invariant `White` (`NoiseGen`) or Paul Kellet 7-pole `Pink` (`PinkFilter`) noise with dedicated TPT `highpass` (`20..18k Hz`), `lowpass` (`20..20k Hz`), and `level`—freely patchable pre- or post-filter. |
 | 4 | **`Env`** | `MODULATORS` | `TrigIn` | `ModularEnv` supporting both **`Adsr`** and **`HoldDecay`** modes, `Gate`/`OneShot` trigger modes, **pre-delay** (`0..500 ms`), and **1..=8 multi-bursts** (`2..50 ms` spacing for authentic TR-909 claps & flams), plus Acid accent decay snap and click-free `3.5 ms` choke fades. |
 | 5 | **`Lfo`** | `MODULATORS` | *(none)* | `Sine`, `Triangle`, `Saw`, `Square`, or `SampleHold`; free rate (`0.01..40 Hz`) or tempo-synced across 12 rhythmic divisions (`1/64..4/1`), key retrigger, and bipolar (`[-1, 1]`) vs unipolar (`[0, 1]`) polarity. |
@@ -167,6 +167,26 @@ Every continuous Rack bus control (`gain`, `pan`, `tune`, `cutoff`, `resonance`)
 | `:zone name NAME` · `:zone choke none\|1..8` | Rename zone or assign choke group |
 | `:zone range LOW HIGH [ROOT]` · `:zone vel LOW HIGH` | Set MIDI key split (`C2` or `36`) and velocity layer (`0%..100%`) |
 | `:zone set FIELD VALUE` | Set any zone field (`low_midi`, `root_midi`, `choke`, `gain`, `pan`) or module param |
+
+### Dedicated Sample / Waveform & Slicer Deck (`gw`, or `W` from Rack)
+Open any `Sampler` module on its own zoomable waveform deck (`gw` globally, **`W`** from the Instrument Rack deck, or `:wave [INSTRUMENT]`):
+
+- **Zoomable Waveform, Minimap & Time Ruler:** Scrub with **`h`/`l`** (fine) and **`H`/`L`** (coarse), jump markers with **`w`/`b`**, jump file edges with **`0`/`$`**, page with **`PgUp`/`PgDn`**, and zoom **`1.0×..128×`** with **`=`/`-`** / **`Ctrl+=`/`-`/`0`** (`z0` resets).
+- **Non-Destructive Crop, Loop & Zero-Crossing Snap:** Set crop bounds with **`[`** / **`]`**, loop bounds with **`{`** / **`}`** (auto-enables Forward loop), cycle loop mode (`Off` → `Forward` → `PingPong`) with **`m`**, and toggle zero-crossing snap (`SNAP ZC` / `SNAP FREE`) with **`v`**.
+- **Transient, Grid & Manual Slicing:** Auto-slice percussive hits with **`d`** (tunable `SENSITIVITY` and `MIN GAP` via **`j`/`k`** + **`Alt+h`/`l`** / **`,`/`.`** / **`Enter`**), equal-grid slice with **`D`** (`2..32` divisions), drop a manual slice at cursor with **`s`**, rename the active slice label with **`r`**, nudge the active slice left/right with **`Alt+h`/`l`** or **`,`/`.`** (coalesced single undo), delete with **`x`**, clear all with **`X`**, and audition the active slice region with **`A`**.
+- **One-Step Slice → Rack Kit (`K` / `:slice kit`):** Converts your slices into a chromatic multi-zone Rack Kit starting at **C2 (MIDI 36)** with fixed pitch, choke group 1, preserved slice labels, and an optional musically timed sequential slice Pattern + Arrange Placement in one undoable transaction (choose **New Kit + Slice Pattern**, **New Kit Only**, or **Replace Current Rack**).
+- **Lossless RIFF WAV Metadata Read & Write (`W` / `:sample write-meta`):** Loading a WAV automatically imports standard RIFF `smpl`, `inst`, `cue `, and `LIST/adtl/labl` slice markers (compatible with FL Studio Edison/Slicex, Ableton, Reaper, etc.). Pressing **`W`** or running **`:sample write-meta`** losslessly rewrites those metadata chunks back into the source WAV file while keeping all audio frames and unknown chunks bit-for-bit intact.
+
+```text
+:wave [INSTRUMENT]                       # Open Sample / Waveform deck
+:slice auto [sens] [min_gap_ms]          # Detect transient slices (e.g. :slice auto 65% 40ms)
+:slice grid <2..=32>                     # Equal-division zero-crossing grid slice
+:slice add [frame|ms|s] [label]          # Add slice marker at cursor or offset
+:slice rename <1-based-idx> <label>      # Rename slice marker label
+:slice del <1-based-idx> | clear         # Delete one slice or clear all slices
+:slice kit [replace] [nopattern]         # Convert slices into a chromatic Rack Kit (+ Pattern)
+:sample write-meta                       # Losslessly write RIFF inst/smpl/cue/labl to WAV
+```
 
 ### Bounce / Resample to Sampler or Rack Zone (`tb` / `:bounce`)
 Resample any Part, Pattern, or Arrangement bar range offline at studio quality into your project's `samples/` folder and load it immediately—either as a brand-new Sampler Rack (`BounceTarget::NewSampler`) or straight into a multi-zone Rack's active zone (`BounceTarget::RackZone`):

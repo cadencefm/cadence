@@ -114,6 +114,17 @@ pub(super) enum CoalesceKey {
         pattern: Id,
     },
     PlacementShape(Id),
+    SampleSliceMove {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+        index: usize,
+    },
+    SampleLoopXfade {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+    },
 }
 
 /// The authored document: the project and its compiled score, its live flags
@@ -1034,6 +1045,7 @@ impl App {
         self.view_state.mixer_scroll.set(0);
         self.view_state.mixer_detail_scroll.set(0);
         self.view_state.mixer_detail_channel.set(None);
+        self.sample_ui = SampleDeckUiState::default();
         self.arrange_ui.event = None;
         self.arrange_ui.pitch_anchor = None;
         self.arrange_ui.pitch_lane = None;

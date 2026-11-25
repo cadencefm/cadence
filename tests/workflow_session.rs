@@ -233,7 +233,7 @@ fn sample_browser_assigns_exact_duplicate_alias_only_on_accept_and_undo_restores
     let view = a.browser_view().unwrap();
     assert_eq!(view.sample.unwrap().frames, 1600);
     let audition = a.press_keys("A").unwrap().pop().unwrap();
-    assert_eq!(audition.preview_sample.unwrap().frames, 1600);
+    assert_eq!(audition.preview_sample.unwrap().sample.frames, 1600);
     assert_eq!(a.project(), &before);
     let cancel = a.press_keys("<Esc>").unwrap().pop().unwrap();
     assert!(cancel.stop_audition);
@@ -270,7 +270,7 @@ fn browser_decode_and_home_never_publish_late_auditions_or_stale_selections() {
     assert_eq!(a.browser_view().unwrap().sample.unwrap().frames, 1600);
     assert_eq!(a.project(), &before);
     let out = a.press_keys("A").unwrap().pop().unwrap();
-    assert_eq!(out.preview_sample.unwrap().frames, 1600);
+    assert_eq!(out.preview_sample.unwrap().sample.frames, 1600);
     a.press_keys("<Esc>").unwrap();
     for _ in 0..3 {
         assert!(a.poll_browser_updates().unwrap().preview_sample.is_none());

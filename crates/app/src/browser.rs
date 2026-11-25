@@ -210,7 +210,13 @@ impl App {
         })
     }
     pub(super) fn browse_samples(&mut self) -> Result<Outcome> {
-        let target = if let Some(inst_id) = self.active_instrument() {
+        let target = if let Some((instrument, zone_id, module_id)) = self.focused_sample_target() {
+            BrowserTarget::AssignModule {
+                instrument,
+                zone_id,
+                module_id: Some(module_id),
+            }
+        } else if let Some(inst_id) = self.active_instrument() {
             if let Some(inst) = self.instrument(inst_id) {
                 let z_idx = self.active_zone_index(&inst.rack);
                 if let Some(zone) = inst.rack.zones.get(z_idx) {
@@ -489,7 +495,8 @@ impl App {
                     }
                     if audition {
                         out.stop_audition = true;
-                        out.preview_sample = Some(sample);
+                        out.preview_sample =
+                            Some(cadence_core::sampler::SamplePreview::full(sample));
                     }
                 }
                 Err(error) => state.error = Some(error),
@@ -850,7 +857,9 @@ impl App {
                 if let Some(sample) = &state.sample {
                     return Ok(Outcome {
                         stop_audition: true,
-                        preview_sample: Some(Arc::clone(sample)),
+                        preview_sample: Some(cadence_core::sampler::SamplePreview::full(
+                            Arc::clone(sample),
+                        )),
                         ..Outcome::default()
                     });
                 }

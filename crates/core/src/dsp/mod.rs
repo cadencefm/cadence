@@ -21,6 +21,7 @@ pub mod resonator;
 pub mod reverb;
 pub mod sampler_voice;
 pub mod saturate;
+pub mod slice;
 
 #[cfg(test)]
 mod contract_tests;
@@ -93,6 +94,10 @@ pub use saturate::{
     Halfband2x, Halfband2xDryAlign, SoftClipCoeffs, DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ,
     DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ, VOICE_GUARD_CEILING, VOICE_GUARD_HEADROOM,
     VOICE_GUARD_KNEE,
+};
+pub use slice::{
+    compute_waveform_peaks_window, default_zero_snap_radius, detect_grid_slices,
+    detect_transient_slices, slice_regions, snap_to_zero_crossing,
 };
 
 /// Uniform zero-allocation stereo insert effect contract implemented by all
