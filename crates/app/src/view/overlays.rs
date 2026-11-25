@@ -149,8 +149,8 @@ pub const HELP_ENTRIES: &[HelpEntry] = &[
     HelpEntry {
         tab: HelpTab::Navigate,
         category: "DECKS",
-        keys: "ga/Ctrl+a · gb/Ctrl+b · gp/Ctrl+p · gm/Ctrl+m · gi/Ctrl+i · gk/Ctrl+k · gt/Ctrl+t · gG/Ctrl+g · gd/Ctrl+d · go/Ctrl+o",
-        summary: "Jump directly to Arrange · Bank · Pattern · Mixer · Instrument · Macros · Take · Signal Graph · Devices (Audio/MIDI) · Output",
+        keys: "ga/Ctrl+a · gb/Ctrl+b · gp/Ctrl+p · gw · gm/Ctrl+m · gi/Ctrl+i · gk/Ctrl+k · gt/Ctrl+t · gG/Ctrl+g · gd/Ctrl+d · go/Ctrl+o",
+        summary: "Jump directly to Arrange · Bank · Pattern · Sample/Wave · Mixer · Instrument · Macros · Take · Signal Graph · Devices · Output",
     },
     HelpEntry {
         tab: HelpTab::Navigate,
@@ -327,7 +327,13 @@ pub const HELP_ENTRIES: &[HelpEntry] = &[
         tab: HelpTab::SoundFx,
         category: "SAMPLES",
         keys: "B/gS/Ctrl+Shift+b · Sample row Enter · / filter · A audition · r/R reload/rescan · Esc",
-        summary: "Open Sample Browser to load WAV into active zone's Sampler module (auto-adds Sampler if needed) with RIFF smpl/inst metadata",
+        summary: "Open Sample Browser to load WAV into active zone's Sampler module (auto-adds Sampler if needed) with RIFF smpl/inst/cue metadata",
+    },
+    HelpEntry {
+        tab: HelpTab::SoundFx,
+        category: "SAMPLE / SLICE",
+        keys: "gw · W (Rack) · h/l scrub · w/b slice · =/- zoom · [/] crop · {/} loop · s/x/X split · d/D auto/grid · A play · K kit · W write RIFF",
+        summary: "Dedicated zoomable Waveform & Slicer deck: non-destructive crop/loop with zero-crossing snap, transient & grid slicing, Slice→Rack Kit & lossless RIFF cue/labl write",
     },
     // Live Performance, Launchpad & Jam
     HelpEntry {

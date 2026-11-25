@@ -131,7 +131,17 @@ impl App {
                 self.browse_samples()
             }
             InstrumentVerb::Sample => {
-                require_args(args, 1, ":sample PATH")?;
+                ensure!(!args.is_empty(), "Usage: :sample PATH | deck | write-meta");
+                if args.len() == 1 && args[0].eq_ignore_ascii_case("deck") {
+                    return self.open_sample_deck();
+                }
+                if args.len() == 1
+                    && (args[0].eq_ignore_ascii_case("write-meta")
+                        || args[0].eq_ignore_ascii_case("write-riff"))
+                {
+                    return self.execute_sample_write_meta_command();
+                }
+                require_args(args, 1, ":sample PATH | deck | write-meta")?;
                 let id = self
                     .active_instrument()
                     .or(self.selected_instrument)
@@ -162,6 +172,19 @@ impl App {
                     out.samples_changed = true;
                 }
                 Ok(out)
+            }
+            InstrumentVerb::Slice => self.execute_slice_command(args),
+            InstrumentVerb::Wave => {
+                ensure!(args.len() <= 1, "Usage: :wave [INSTRUMENT]");
+                if let Some(name) = args.first() {
+                    let id = self.instrument_id(name)?;
+                    let (inst, zone, module) = self
+                        .sampler_target_for_instrument(id)
+                        .with_context(|| format!("Instrument '{name}' has no Sampler module"))?;
+                    self.open_sample_deck_for(inst, zone, module)
+                } else {
+                    self.open_sample_deck()
+                }
             }
         }
     }

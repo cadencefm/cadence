@@ -1599,7 +1599,7 @@ impl RackPatch {
                 ResolvedEntry {
                     name: name.as_str(),
                     rel_path: rel_path.as_str(),
-                    meta: *meta,
+                    meta: meta.clone(),
                     frames: *frames,
                     root_midi,
                     has_pitch,
@@ -1720,6 +1720,103 @@ impl RackPatch {
 
         let patch = Self {
             kit_name: "Multisample".into(),
+            zones,
+            gain_db: 0.0,
+            pan: 0.0,
+            tune_semitones: 0.0,
+            cutoff_hz: default_cutoff(),
+            resonance: 0.0,
+            panel_pins: Vec::new(),
+        };
+        patch.validate()?;
+        Ok(patch)
+    }
+
+    /// Convert a sliced `SamplerModule` into a chromatic multi-zone Rack drum kit starting at
+    /// C2 (MIDI 36), mapping each slice region (`[start, end)`) to its own fixed-pitch zone
+    /// with optional choke group (capped to `MAX_ZONES = 32` pads).
+    pub fn from_sample_slices(
+        source_name: &str,
+        source: &SamplerModule,
+        frames: usize,
+        choke_group: Option<u8>,
+    ) -> Result<Self> {
+        ensure!(
+            source.path.is_some() && frames > 0,
+            "Cannot slice to Rack kit without a loaded sample"
+        );
+        let start = source.sample_start.min(frames.saturating_sub(1));
+        let end = if source.sample_end == 0 {
+            frames
+        } else {
+            source.sample_end.clamp(start + 1, frames)
+        };
+        let regions = crate::dsp::slice_regions(&source.slices, start, end);
+        ensure!(
+            !regions.is_empty(),
+            "Sample has no playable slice regions inside start..end"
+        );
+        let pad_count = regions.len().min(MAX_ZONES);
+        let choke = choke_group.map(|g| g.clamp(1, MAX_CHOKE_GROUPS));
+        let mut used_names: Vec<String> = Vec::with_capacity(pad_count);
+        let mut zones = Vec::with_capacity(pad_count);
+
+        for (i, &(r_start, r_end, label)) in regions.iter().take(pad_count).enumerate() {
+            let zone_id = (i + 1) as u16;
+            let midi = (36usize + i).min(127) as u8;
+            let raw_name = label
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.chars().take(32).collect::<String>())
+                .unwrap_or_else(|| format!("Slice {:02}", i + 1));
+            let mut zone_name = raw_name.clone();
+            let mut suffix = 2usize;
+            while used_names
+                .iter()
+                .any(|existing| existing.eq_ignore_ascii_case(&zone_name))
+            {
+                let tag = format!(" {suffix}");
+                let max_base = 32usize.saturating_sub(tag.len());
+                let prefix: String = raw_name.chars().take(max_base).collect();
+                zone_name = format!("{}{tag}", prefix.trim_end());
+                suffix += 1;
+            }
+            used_names.push(zone_name.clone());
+
+            let mut zone = RackZone::blank_sample(zone_id, zone_name);
+            zone.low_midi = midi;
+            zone.high_midi = midi;
+            zone.root_midi = midi;
+            zone.choke_group = choke;
+            zone.voice.pitch_tracking = PitchTracking::Fixed;
+            if let Some(ModuleKind::Sampler(smp)) = zone.modules.first_mut().map(|m| &mut m.kind) {
+                smp.path = source.path.clone();
+                smp.root_midi = midi;
+                smp.coarse_semitones = source.coarse_semitones;
+                smp.fine_cents = source.fine_cents;
+                smp.sample_start = r_start;
+                smp.sample_end = r_end;
+                smp.loop_mode = crate::sampler::SampleLoopMode::Off;
+                smp.loop_start = r_start;
+                smp.loop_end = r_end;
+                smp.one_shot = true;
+                smp.level = source.level;
+                smp.slices.clear();
+            }
+            zones.push(zone);
+        }
+
+        let kit_name: String = format!("{} Kit", source_name.trim())
+            .trim()
+            .chars()
+            .take(64)
+            .collect();
+        let patch = Self {
+            kit_name: if kit_name.is_empty() {
+                "Sliced Kit".into()
+            } else {
+                kit_name
+            },
             zones,
             gain_db: 0.0,
             pan: 0.0,

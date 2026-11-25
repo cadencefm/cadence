@@ -103,6 +103,11 @@ pub(super) enum Purpose {
     AudioBufferSize {
         sizes: Vec<Option<u32>>,
     },
+    SliceToKit {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+    },
 }
 
 impl Purpose {
@@ -132,6 +137,7 @@ impl Purpose {
             | Self::AudioSampleRate { .. }
             | Self::AudioBufferSize { .. } => "Audio device settings unchanged",
             Self::RackAddZone { .. } | Self::RackZonePreset { .. } => "Zones unchanged",
+            Self::SliceToKit { .. } => "Slice to Rack Kit cancelled",
             Self::Replace { .. } | Self::ReplacePart { .. } => "Nothing replaced",
         }
     }
@@ -1180,6 +1186,61 @@ impl App {
         Ok(Outcome::default())
     }
 
+    pub(crate) fn open_slice_to_kit_picker(
+        &mut self,
+        instrument: Id,
+        zone: u16,
+        module: u16,
+    ) -> Result<Outcome> {
+        let smp = self
+            .sampler_module_at(instrument, zone, module)
+            .context("Sampler module missing")?;
+        ensure!(
+            !smp.slices.is_empty(),
+            "No slice markers yet · press d (auto), D (grid), or s (split) first"
+        );
+        let sample = self
+            .loaded_sample_for(instrument, zone, module)
+            .context("Load a sample before slicing to a Rack kit")?;
+        let (crop_start, crop_end) =
+            crate::sample_deck::effective_sampler_bounds(smp, sample.frames);
+        let region_count =
+            cadence_core::dsp::slice_regions(&smp.slices, crop_start, crop_end).len();
+        let pad_count = region_count.min(cadence_core::rack::MAX_ZONES);
+        let items = vec![
+            (
+                0,
+                format!("New Rack Kit + Slice Pattern ({pad_count} pads)"),
+                "Creates a new Audio channel, chromatic Rack Kit (C2+), sequential Pattern & Arrange Placement".into(),
+            ),
+            (
+                1,
+                format!("New Rack Kit Only ({pad_count} pads)"),
+                "Creates a new Audio channel and chromatic Rack Kit (C2+) with choke group 1".into(),
+            ),
+            (
+                2,
+                format!("Replace Current Rack with Sliced Kit ({pad_count} pads)"),
+                "Replaces this instrument's Rack zones with the sliced kit (single undoable step)".into(),
+            ),
+        ];
+        self.open_picker(Picker {
+            purpose: Purpose::SliceToKit {
+                instrument,
+                zone,
+                module,
+            },
+            title: format!("SLICE TO RACK KIT · {} ({pad_count} pads)", sample.name),
+            items,
+            current: Some(0),
+            query: String::new(),
+            searching: false,
+            cursor: 0,
+        });
+        self.status = "Slice to Rack Kit · 1–3 / Enter choose · Esc cancel".into();
+        Ok(Outcome::default())
+    }
+
     pub(crate) fn open_midi_pad_mode_picker(&mut self) -> Result<Outcome> {
         use cadence_core::midi_map::MidiPadMode;
         let items: Vec<(Id, String, String)> = MidiPadMode::ALL
@@ -1736,7 +1797,8 @@ impl App {
                     | Purpose::AudioOutput { .. }
                     | Purpose::AudioInput { .. }
                     | Purpose::AudioSampleRate { .. }
-                    | Purpose::AudioBufferSize { .. } => {}
+                    | Purpose::AudioBufferSize { .. }
+                    | Purpose::SliceToKit { .. } => {}
                 }
             }
             _ => {}
@@ -2048,6 +2110,40 @@ impl App {
                     .context("Audio buffer size choice missing")?;
                 self.set_audio_buffer_size_choice(size)
             }
+            Purpose::SliceToKit {
+                instrument,
+                zone,
+                module,
+            } => match chosen {
+                0 => self.apply(Action::SliceToRackKit {
+                    instrument,
+                    zone,
+                    module,
+                    replace_existing: false,
+                    create_pattern: true,
+                    choke_group: Some(1),
+                    kit_name: None,
+                })?,
+                1 => self.apply(Action::SliceToRackKit {
+                    instrument,
+                    zone,
+                    module,
+                    replace_existing: false,
+                    create_pattern: false,
+                    choke_group: Some(1),
+                    kit_name: None,
+                })?,
+                2 => self.apply(Action::SliceToRackKit {
+                    instrument,
+                    zone,
+                    module,
+                    replace_existing: true,
+                    create_pattern: false,
+                    choke_group: Some(1),
+                    kit_name: None,
+                })?,
+                _ => Outcome::default(),
+            },
         };
         out.merge(edit);
         Ok(out)

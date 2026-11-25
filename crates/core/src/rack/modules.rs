@@ -9,7 +9,8 @@ use crate::rack::types::{
     Waveform,
 };
 use crate::sampler::{
-    parse_filename_midi, ParamDescriptor, SampleData, SampleLoopMode, SampleMetadata,
+    normalize_slices, parse_filename_midi, ParamDescriptor, SampleData, SampleLoopMode,
+    SampleMetadata, SampleSlice, MAX_SAMPLE_SLICES,
 };
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -559,6 +560,9 @@ pub struct SamplerModule {
     pub one_shot: bool,
     #[serde(default = "default_one")]
     pub level: f32,
+    /// Optional slice / cue markers (sorted ascending by frame), synced from/to RIFF `cue `/`labl`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub slices: Vec<SampleSlice>,
 }
 
 impl Default for SamplerModule {
@@ -577,6 +581,7 @@ impl Default for SamplerModule {
             loop_xfade_ms: p.loop_xfade_ms,
             one_shot: p.one_shot,
             level: p.level,
+            slices: Vec::new(),
         }
     }
 }
@@ -667,6 +672,41 @@ impl SamplerModule {
             self.loop_end = frames;
             self.one_shot = true;
         }
+        self.slices = meta.slices.clone();
+        normalize_slices(&mut self.slices, (frames > 0).then_some(frames));
+    }
+
+    /// Build RIFF `SampleMetadata` (`inst`, `smpl`, `cue `, `labl`) from this module's current
+    /// pitch, loop, and slice settings, preserving key/velocity bounds from `base` when provided.
+    pub fn to_riff_metadata(&self, frames: usize, base: Option<&SampleMetadata>) -> SampleMetadata {
+        let mut meta = base.cloned().unwrap_or_default();
+        meta.root_midi = self.root_midi.min(127);
+        meta.has_root = true;
+        meta.fine_cents = self.fine_cents.clamp(-100.0, 100.0);
+        if self.loop_mode != SampleLoopMode::Off && frames > 1 {
+            let le = if self.loop_end == 0 {
+                frames
+            } else {
+                self.loop_end.min(frames)
+            };
+            let ls = self.loop_start.min(le.saturating_sub(1));
+            if le > ls {
+                meta.loop_mode = self.loop_mode;
+                meta.loop_start = ls;
+                meta.loop_end = le;
+            } else {
+                meta.loop_mode = SampleLoopMode::Off;
+                meta.loop_start = 0;
+                meta.loop_end = 0;
+            }
+        } else {
+            meta.loop_mode = SampleLoopMode::Off;
+            meta.loop_start = 0;
+            meta.loop_end = 0;
+        }
+        meta.slices = self.slices.clone();
+        normalize_slices(&mut meta.slices, (frames > 0).then_some(frames));
+        meta
     }
 
     /// Populate pitch & loop fields when loading a fresh sample from disk.
@@ -1078,6 +1118,18 @@ impl ModuleKind {
                     !p.trim().is_empty() && p.len() <= 1024 && !p.chars().any(char::is_control),
                     "Sample path must be 1–1024 printable characters"
                 );
+            }
+            ensure!(
+                smp.slices.len() <= MAX_SAMPLE_SLICES,
+                "Sampler supports at most {MAX_SAMPLE_SLICES} slice markers"
+            );
+            for sl in &smp.slices {
+                if let Some(lbl) = &sl.label {
+                    ensure!(
+                        lbl.chars().count() <= 48 && !lbl.chars().any(char::is_control),
+                        "Sample slice label must be <= 48 printable characters"
+                    );
+                }
             }
         }
         if let Self::Lfo(lfo) = self {
@@ -1647,6 +1699,10 @@ mod tests {
             loop_xfade_ms: 8.5,
             one_shot: false,
             level: 0.85,
+            slices: vec![
+                SampleSlice::new(100, Some("Hit 1".into())),
+                SampleSlice::new(2000, None),
+            ],
         };
 
         // Flat wire JSON format and strict `deny_unknown_fields` preserved.

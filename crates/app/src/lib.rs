@@ -68,6 +68,7 @@ mod preset_browser;
 mod preview;
 pub mod rack;
 mod recording;
+mod sample_deck;
 mod sections;
 mod song_props;
 mod state;
@@ -109,8 +110,8 @@ pub use recording::{
 };
 pub use song_props::{SongPropRowView, SongPropertiesView};
 pub use state::{
-    ArrangeUiState, AssetCatalogs, HelpUiState, MidiState, RackUiState, SettingsUiState,
-    TakeSession, ViewState,
+    ArrangeUiState, AssetCatalogs, HelpUiState, MidiState, RackUiState, SampleDeckUiState,
+    SampleToolbarField, SettingsUiState, TakeSession, ViewState,
 };
 pub use transport::Transport;
 pub use value_editor::{ValueCursorView, ValueInputView};
@@ -310,7 +311,7 @@ pub struct Outcome {
     pub audition_instrument: Option<(Id, u8, f32)>,
     pub live_notes_on: Vec<InstrumentNoteOn>,
     pub live_notes_off: Vec<InstrumentNoteOff>,
-    pub preview_sample: Option<Arc<SampleData>>,
+    pub preview_sample: Option<cadence_core::sampler::SamplePreview>,
     pub stop_audition: bool,
     pub clear_mixer_meters: Option<Option<ChannelRef>>,
     pub export: Option<ExportRequest>,
@@ -553,6 +554,7 @@ pub struct App {
     pub settings_ui: SettingsUiState,
     pub help_ui: HelpUiState,
     pub rack_ui: RackUiState,
+    pub sample_ui: SampleDeckUiState,
     pub arrange_ui: ArrangeUiState,
     pub view_state: ViewState,
 
@@ -668,6 +670,7 @@ impl App {
             settings_ui: SettingsUiState::default(),
             help_ui: HelpUiState::default(),
             rack_ui: RackUiState::default(),
+            sample_ui: SampleDeckUiState::default(),
             arrange_ui: ArrangeUiState::new(selected_lane),
             view_state: ViewState::default(),
             detail: Detail::None,

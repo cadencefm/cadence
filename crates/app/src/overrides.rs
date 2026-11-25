@@ -166,13 +166,16 @@ impl App {
             } else {
                 self.status = format!("Arrange zoom {pct:.0}% · {target_bars} {unit}");
             }
+        } else if self.sample_deck_focused() {
+            self.zoom_sample_deck(direction);
         } else {
-            self.status = "Zoom applies to Arrange or Pattern · ga or gp to focus".into();
+            self.status =
+                "Zoom applies to Arrange, Pattern, or Sample · ga, gp, or gw to focus".into();
         }
     }
 
-    /// Reset horizontal zoom on the focused Arrange or Pattern deck back to 100%.
-    /// Does not mutate zoom when neither Arrange nor Pattern is focused.
+    /// Reset horizontal zoom on the focused Arrange, Pattern, or Sample deck back to 100%.
+    /// Does not mutate zoom when none of those decks is focused.
     pub fn zoom_view_reset(&mut self) {
         if self.pattern_canvas_focused() {
             self.view_state.pattern_zoom = 1.0;
@@ -196,8 +199,11 @@ impl App {
             } else {
                 format!("Arrange zoom 100% · {bars} {unit}")
             };
+        } else if self.sample_deck_focused() {
+            self.zoom_sample_deck_reset();
         } else {
-            self.status = "Zoom applies to Arrange or Pattern · ga or gp to focus".into();
+            self.status =
+                "Zoom applies to Arrange, Pattern, or Sample · ga, gp, or gw to focus".into();
         }
     }
 

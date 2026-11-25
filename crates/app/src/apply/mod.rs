@@ -347,6 +347,55 @@ impl App {
             Action::ZoneImportFolder { instrument, folder } => {
                 self.apply_zone_import_folder(instrument, folder)
             }
+            Action::SetSamplerRegion {
+                instrument,
+                zone,
+                module,
+                sample_start,
+                sample_end,
+                loop_mode,
+                loop_start,
+                loop_end,
+                loop_xfade_ms,
+            } => self.apply_set_sampler_region(
+                instrument,
+                zone,
+                module,
+                sample_start,
+                sample_end,
+                loop_mode,
+                loop_start,
+                loop_end,
+                loop_xfade_ms,
+            ),
+            Action::SetSamplerSlices {
+                instrument,
+                zone,
+                module,
+                slices,
+            } => self.apply_set_sampler_slices(instrument, zone, module, slices),
+            Action::SliceToRackKit {
+                instrument,
+                zone,
+                module,
+                replace_existing,
+                create_pattern,
+                choke_group,
+                kit_name,
+            } => self.apply_slice_to_rack_kit(
+                instrument,
+                zone,
+                module,
+                replace_existing,
+                create_pattern,
+                choke_group,
+                kit_name,
+            ),
+            Action::WriteSampleRiffMetadata {
+                instrument,
+                zone,
+                module,
+            } => self.apply_write_sample_riff_metadata(instrument, zone, module),
             Action::Bounce {
                 scope,
                 name,

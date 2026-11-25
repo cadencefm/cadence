@@ -11,6 +11,7 @@ pub mod mixer;
 pub mod object;
 pub mod output;
 pub mod pattern;
+pub mod sample;
 pub mod take;
 
 use crate::chrome::{draw_footer, draw_header, draw_trail};
@@ -49,6 +50,7 @@ pub fn populate_display_list(
         match &slot.view {
             DeckView::Arrange(v) => arrange::draw_arrange(dl, *rect, v, mode, theme),
             DeckView::Pattern(v) => pattern::draw_pattern(dl, *rect, v, mode, theme),
+            DeckView::Sample(v) => sample::draw_sample(dl, *rect, v, slot.focused, mode, theme),
             DeckView::Bank(v) => bank::draw_bank(dl, *rect, v, slot.focused, mode, theme),
             DeckView::Mixer(v) => mixer::draw_mixer(dl, *rect, v, slot.focused, mode, theme),
             DeckView::Take(v) => take::draw_take(dl, *rect, v, slot.focused, mode, theme),

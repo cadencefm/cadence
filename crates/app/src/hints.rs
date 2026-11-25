@@ -344,6 +344,7 @@ impl App {
                 ("a", "Arrange"),
                 ("b", "Bank"),
                 ("p", "Pattern"),
+                ("w", "Sample/Wave"),
                 ("m", "Mixer"),
                 ("t", "Take"),
                 ("G", "Graph"),
@@ -580,6 +581,21 @@ impl App {
                     ]
                 }
             }
+            Mode::Normal if self.sample_deck_focused() => vec![
+                ("h/l H/L", "scrub"),
+                ("w/b", "slice"),
+                ("=/-", "zoom"),
+                ("[/] {/}", "crop/loop"),
+                ("s/x/X", "split/del/clr"),
+                ("d/D", "auto/grid"),
+                ("Alt+h/l ,/.", "nudge"),
+                ("j/k", "ctrl"),
+                ("v/m", "snap/loop"),
+                ("A", "play"),
+                ("K", "kit"),
+                ("W", "write RIFF"),
+                ("B", "browse"),
+            ],
             Mode::Normal if self.deck_focused() && matches!(self.detail, Detail::Instrument(_)) => {
                 match self.rack_ui.tab {
                     RackTab::Panel => vec![
@@ -593,6 +609,7 @@ impl App {
                         ("o/X", "route/del inst"),
                         ("P", "presets"),
                         ("B", "sample"),
+                        ("W", "wave"),
                         ("A", "audition"),
                     ],
                     RackTab::Patchbay => vec![

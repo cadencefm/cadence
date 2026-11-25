@@ -178,6 +178,17 @@ pub(super) enum ValueInputTarget {
         subtitle: String,
         current_label: String,
     },
+    SampleSliceLabel {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+        slice_index: usize,
+        current_label: String,
+    },
+    SampleToolbar {
+        field: SampleToolbarField,
+        current_display: String,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -470,6 +481,37 @@ impl App {
                 "1–32 printable characters (Quick Panel label)".into(),
                 current_label.clone(),
             ),
+            ValueInputTarget::SampleSliceLabel {
+                slice_index,
+                current_label,
+                ..
+            } => (
+                format!("Rename Slice {}", slice_index + 1),
+                "SAMPLE DECK  ·  RIFF cue/labl slice label".into(),
+                "1–48 printable characters (empty clears label)".into(),
+                if current_label.is_empty() {
+                    format!("Slice {:02}", slice_index + 1)
+                } else {
+                    current_label.clone()
+                },
+            ),
+            ValueInputTarget::SampleToolbar {
+                field,
+                current_display,
+            } => {
+                let hint = match field {
+                    SampleToolbarField::Sensitivity => "5%..100% or 0.05..1.0",
+                    SampleToolbarField::MinGap => "10..500 ms (refractory gap)",
+                    SampleToolbarField::GridDivisions => "2..32 equal divisions",
+                    _ => "Value",
+                };
+                (
+                    format!("Sample · {}", field.label()),
+                    "SAMPLE DECK  ·  Slicing parameter".into(),
+                    hint.into(),
+                    current_display.clone(),
+                )
+            }
         };
         Some(ValueInputView {
             title,
@@ -1262,6 +1304,47 @@ impl App {
                 let clean = drafts::form::validate_printable_name("Pin label", trimmed, 32)?;
                 Ok(Some(clean))
             }
+            ValueInputTarget::SampleSliceLabel { .. } => {
+                if trimmed.is_empty() {
+                    return Ok(Some("(clear label)".into()));
+                }
+                let clean = drafts::form::validate_printable_name("Slice label", trimmed, 48)?;
+                Ok(Some(clean))
+            }
+            ValueInputTarget::SampleToolbar { field, .. } => match field {
+                SampleToolbarField::Sensitivity => {
+                    let v: f32 = trimmed
+                        .trim_end_matches('%')
+                        .trim()
+                        .parse()
+                        .context("Enter 5%..100% or 0.05..1.0")?;
+                    let norm = if trimmed.ends_with('%') || v > 1.0 {
+                        v / 100.0
+                    } else {
+                        v
+                    };
+                    ensure!(
+                        (0.05..=1.0).contains(&norm),
+                        "Sensitivity must be 5%..100% (0.05..1.0)"
+                    );
+                    Ok(Some(format!("{:.0}%", norm * 100.0)))
+                }
+                SampleToolbarField::MinGap => {
+                    let v: f32 = trimmed
+                        .trim_end_matches("ms")
+                        .trim()
+                        .parse()
+                        .context("Enter 10..500 ms")?;
+                    ensure!((10.0..=500.0).contains(&v), "Min gap must be 10..500 ms");
+                    Ok(Some(format!("{v:.0}ms")))
+                }
+                SampleToolbarField::GridDivisions => {
+                    let n: usize = trimmed.parse().context("Enter integer 2..32")?;
+                    ensure!((2..=32).contains(&n), "Grid divisions must be 2..32");
+                    Ok(Some(format!("{n} slices")))
+                }
+                _ => Ok(None),
+            },
         }
     }
 
@@ -1770,14 +1853,143 @@ impl App {
                     format!("Renamed Quick Pin → '{clean}'"),
                 )
             }
+            ValueInputTarget::SampleSliceLabel {
+                instrument,
+                zone,
+                module,
+                slice_index,
+                ..
+            } => {
+                let smp = self
+                    .sampler_module_at(*instrument, *zone, *module)
+                    .context("Sampler module missing")?
+                    .clone();
+                let mut slices = smp.slices;
+                ensure!(*slice_index < slices.len(), "Slice marker missing");
+                let label = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(drafts::form::validate_printable_name(
+                        "Slice label",
+                        trimmed,
+                        48,
+                    )?)
+                };
+                slices[*slice_index].label = label;
+                self.apply(Action::SetSamplerSlices {
+                    instrument: *instrument,
+                    zone: *zone,
+                    module: *module,
+                    slices,
+                })
+            }
+            ValueInputTarget::SampleToolbar { field, .. } => {
+                if trimmed.is_empty() {
+                    return Ok(Outcome::default());
+                }
+                match field {
+                    SampleToolbarField::Sensitivity => {
+                        let v: f32 = trimmed
+                            .trim_end_matches('%')
+                            .trim()
+                            .parse()
+                            .context("Enter 5%..100% or 0.05..1.0")?;
+                        let norm = if trimmed.ends_with('%') || v > 1.0 {
+                            v / 100.0
+                        } else {
+                            v
+                        };
+                        ensure!(
+                            (0.05..=1.0).contains(&norm),
+                            "Sensitivity must be 5%..100% (0.05..1.0)"
+                        );
+                        self.sample_ui.sensitivity = norm;
+                        self.status = format!(
+                            "Transient sensitivity → {:.0}% · press d to re-slice",
+                            norm * 100.0
+                        );
+                    }
+                    SampleToolbarField::MinGap => {
+                        let v: f32 = trimmed
+                            .trim_end_matches("ms")
+                            .trim()
+                            .parse()
+                            .context("Enter 10..500 ms")?;
+                        ensure!((10.0..=500.0).contains(&v), "Min gap must be 10..500 ms");
+                        self.sample_ui.min_gap_ms = v;
+                        self.status = format!("Transient min gap → {v:.0}ms · press d to re-slice");
+                    }
+                    SampleToolbarField::GridDivisions => {
+                        let n: usize = trimmed.parse().context("Enter integer 2..32")?;
+                        ensure!((2..=32).contains(&n), "Grid divisions must be 2..32");
+                        self.sample_ui.grid_divisions = n;
+                        self.status = format!("Grid divisions → {n} · press D to grid-slice");
+                    }
+                    _ => {}
+                }
+                Ok(Outcome::default())
+            }
         }
+    }
+
+    pub(crate) fn begin_sample_slice_label_input(
+        &mut self,
+        instrument: Id,
+        zone: u16,
+        module: u16,
+        slice_index: usize,
+        current_label: String,
+    ) -> Result<Outcome> {
+        self.open_value_input_state(
+            ValueInputTarget::SampleSliceLabel {
+                instrument,
+                zone,
+                module,
+                slice_index,
+                current_label: current_label.clone(),
+            },
+            current_label,
+            Mode::Normal,
+            format!(
+                "Rename Slice {} · Enter applies · Esc cancels",
+                slice_index + 1
+            ),
+        )
+    }
+
+    pub(crate) fn begin_sample_toolbar_value_input(
+        &mut self,
+        field: SampleToolbarField,
+    ) -> Result<Outcome> {
+        let current_display = match field {
+            SampleToolbarField::Sensitivity => {
+                format!("{:.0}%", self.sample_ui.sensitivity * 100.0)
+            }
+            SampleToolbarField::MinGap => format!("{:.0}ms", self.sample_ui.min_gap_ms),
+            SampleToolbarField::GridDivisions => format!("{}", self.sample_ui.grid_divisions),
+            _ => String::new(),
+        };
+        self.open_value_input_state(
+            ValueInputTarget::SampleToolbar {
+                field,
+                current_display,
+            },
+            String::new(),
+            Mode::Normal,
+            format!("Exact {} · Enter applies · Esc cancels", field.label()),
+        )
     }
 
     pub(super) fn count_digit(&mut self, key: KeyEvent) -> bool {
         let accepts_count = self.focused_canvas().is_some()
             || matches!(
                 self.focused_deck_kind(),
-                Some(layout::DeckKind::Take | layout::DeckKind::Graph | layout::DeckKind::Midi)
+                Some(
+                    layout::DeckKind::Take
+                        | layout::DeckKind::Graph
+                        | layout::DeckKind::Midi
+                        | layout::DeckKind::Sample
+                )
             );
         if !accepts_count || !key.modifiers.is_empty() {
             return false;

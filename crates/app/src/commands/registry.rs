@@ -75,6 +75,8 @@ pub(crate) enum InstrumentVerb {
     ReloadPresets,
     Samples,
     Sample,
+    Slice,
+    Wave,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -262,6 +264,9 @@ pub(crate) const EX_VERBS: &[(&str, ExVerb)] = &[
     ("samples", ExVerb::Instrument(InstrumentVerb::Samples)),
     ("browser", ExVerb::Instrument(InstrumentVerb::Samples)),
     ("sample", ExVerb::Instrument(InstrumentVerb::Sample)),
+    ("slice", ExVerb::Instrument(InstrumentVerb::Slice)),
+    ("wave", ExVerb::Instrument(InstrumentVerb::Wave)),
+    ("waveform", ExVerb::Instrument(InstrumentVerb::Wave)),
     // Mixer, routing, effects, modulation, macros, export
     ("mod", ExVerb::Mixer(MixerVerb::Mod)),
     ("macro", ExVerb::Mixer(MixerVerb::Macro)),
@@ -378,7 +383,8 @@ impl ExVerb {
             Self::Instrument(v) => match v {
                 InstrumentVerb::ReloadSamples
                 | InstrumentVerb::ReloadPresets
-                | InstrumentVerb::Samples => true,
+                | InstrumentVerb::Samples
+                | InstrumentVerb::Wave => true,
                 InstrumentVerb::Instrument
                 | InstrumentVerb::Kit
                 | InstrumentVerb::Sampler
@@ -386,7 +392,8 @@ impl ExVerb {
                 | InstrumentVerb::PresetSave
                 | InstrumentVerb::PresetLoad
                 | InstrumentVerb::Tab
-                | InstrumentVerb::Sample => false,
+                | InstrumentVerb::Sample
+                | InstrumentVerb::Slice => false,
             },
             Self::Mixer(v) => match v {
                 MixerVerb::Macro | MixerVerb::Mixer | MixerVerb::Wav | MixerVerb::Bundle => true,

@@ -15,6 +15,7 @@ mod midi;
 mod mixer;
 mod overlays;
 mod pattern;
+mod sample;
 mod take;
 #[cfg(test)]
 mod tests;
@@ -53,6 +54,7 @@ pub use pattern::{
     PatternRhythmStep, PatternSourceChip, PatternVoiceView, SourcePreviewKind, SourcePreviewStrip,
     SubStepNoteView,
 };
+pub use sample::{SampleDeckView, SampleSliceView};
 pub use take::{TakeBarSummary, TakeDeckView, TakeEventMarker};
 
 /// Semantic UI modality driving deck border / halo shader styling.
@@ -187,6 +189,7 @@ pub struct DeckSlot {
 pub enum DeckView {
     Arrange(ArrangeDeckView),
     Pattern(PatternDeckView),
+    Sample(SampleDeckView),
     Bank(BankDeckView),
     Mixer(MixerDeckView),
     Take(TakeDeckView),
@@ -555,6 +558,17 @@ impl App {
                     },
                     snapshot,
                 ))
+            }
+            DeckKind::Sample => {
+                let (instrument, zone, module) = match deck.target {
+                    Target::Sample {
+                        instrument,
+                        zone,
+                        module,
+                    } => (instrument, zone, module),
+                    _ => self.resolve_sample_deck_target().unwrap_or((0, 0, 0)),
+                };
+                DeckView::Sample(self.build_sample_deck_view(instrument, zone, module))
             }
             DeckKind::Bank => DeckView::Bank(self.build_bank_view()),
             DeckKind::Mixer => DeckView::Mixer(self.build_mixer_view(snapshot)),

@@ -393,6 +393,20 @@ impl App {
             KeyCode::Char('r') => {
                 return Some(self.rename_focused_rack_item(instrument_id));
             }
+            KeyCode::Char('W') => {
+                return Some(
+                    if let Some((inst, zone, module)) =
+                        self.sampler_target_for_instrument(instrument_id)
+                    {
+                        self.open_sample_deck_for(inst, zone, module)
+                    } else {
+                        self.status =
+                            "Add a Sampler module first (press a or B) to open Waveform deck"
+                                .into();
+                        Ok(Outcome::default())
+                    },
+                );
+            }
             _ => {}
         }
         match self.rack_ui.tab {

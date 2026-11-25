@@ -342,7 +342,7 @@ impl App {
                     .cache_prepared(&path, Arc::clone(&loaded));
                 Ok::<_, anyhow::Error>(loaded)
             })?;
-            entries.push((stem, locator, sample.meta, sample.frames));
+            entries.push((stem, locator, sample.meta.clone(), sample.frames));
         }
         let mut rack = RackPatch::from_multisample_entries(&entries)?;
         let label = Path::new(folder.trim())

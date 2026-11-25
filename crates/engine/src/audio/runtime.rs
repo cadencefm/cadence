@@ -1025,20 +1025,37 @@ impl AudioRuntime {
     /// An absolute audition request: the latest pending selection wins. The
     /// prepared resource and its trigger travel together, avoiding stale buffers.
     pub fn preview_sample(&self, sample: Arc<SampleData>) {
+        self.preview_sample_spec(cadence_core::sampler::SamplePreview::full(sample));
+    }
+
+    /// Preview a sample region, slice, or custom pitch/loop spec off-timeline through
+    /// the lock-free audition voice.
+    pub fn preview_sample_spec(&self, spec: cadence_core::sampler::SamplePreview) {
         let mut zone = RackZone::blank_sample(1, "Preview");
-        let root = sample.meta.root_midi.min(127);
+        let root = spec.root_midi.min(127);
+        let frames = spec.sample.frames;
         zone.root_midi = root;
         if let Some(ModuleKind::Sampler(smp)) = zone.modules.first_mut().map(|m| &mut m.kind) {
             smp.root_midi = root;
-            smp.fine_cents = sample.meta.fine_cents.clamp(-100.0, 100.0);
-            smp.sample_start = 0;
-            smp.sample_end = sample.frames;
-            smp.one_shot = true;
-            smp.loop_mode = SampleLoopMode::Off;
+            smp.coarse_semitones = spec.coarse_semitones.clamp(-48, 48);
+            smp.fine_cents = spec.fine_cents.clamp(-100.0, 100.0);
+            smp.sample_start = spec.sample_start.min(frames.saturating_sub(1));
+            smp.sample_end = if spec.sample_end == 0 {
+                frames
+            } else {
+                spec.sample_end
+                    .clamp(smp.sample_start.saturating_add(1).min(frames), frames)
+            };
+            smp.loop_mode = spec.loop_mode;
+            smp.loop_start = spec.loop_start.min(frames.saturating_sub(1));
+            smp.loop_end = spec.loop_end.min(frames);
+            smp.loop_xfade_ms = spec.loop_xfade_ms.clamp(0.0, 250.0);
+            smp.one_shot = spec.loop_mode == SampleLoopMode::Off;
+            smp.level = spec.level.clamp(0.0, 2.0);
         }
         if let Ok(graph) = compile_zone_graph(&zone) {
             self.publish_audition(AuditionKind::Sample {
-                sample,
+                sample: spec.sample,
                 zone,
                 graph,
             });

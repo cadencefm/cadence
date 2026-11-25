@@ -112,6 +112,9 @@ impl App {
             layout::DeckKind::Pattern => {
                 self.go_to_deck(self.workspace_deck(Workspace::Pattern));
             }
+            layout::DeckKind::Sample => {
+                return self.open_sample_deck();
+            }
             layout::DeckKind::Bank => {
                 self.view_state.bank_mode = BankMode::Parts;
                 self.go_to_deck(layout::Deck::song(layout::DeckKind::Bank));
@@ -158,6 +161,7 @@ impl App {
             KeyCode::Char('o') => return self.focus_docked_deck(layout::DeckKind::Output),
             KeyCode::Char('a') => return self.focus_docked_deck(layout::DeckKind::Arrange),
             KeyCode::Char('p') => return self.focus_docked_deck(layout::DeckKind::Pattern),
+            KeyCode::Char('w') => return self.focus_docked_deck(layout::DeckKind::Sample),
             KeyCode::Char('b') => return self.focus_docked_deck(layout::DeckKind::Bank),
             KeyCode::Char('m') => return self.focus_docked_deck(layout::DeckKind::Mixer),
             KeyCode::Char('t') => return self.focus_docked_deck(layout::DeckKind::Take),

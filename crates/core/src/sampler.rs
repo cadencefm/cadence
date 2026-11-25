@@ -1,8 +1,9 @@
 //! Universal sample loader (PCM/Float WAV, FL Ogg-in-RIFF WAV, FLAC, Ogg, MP3,
-//! AIFF, and pure-Rust WavPack `.wv`), RIFF `smpl`/`inst` loop metadata parser,
-//! shared `ParamDescriptor`, and fast fuzzy `SampleLibrary` index.
+//! AIFF, and pure-Rust WavPack `.wv`), RIFF `smpl`/`inst`/`cue `/`LIST(adtl)`
+//! loop & slice metadata codec, shared `ParamDescriptor`, and fast fuzzy `SampleLibrary` index.
 
 use anyhow::{ensure, Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::io::Cursor;
@@ -17,11 +18,70 @@ use symphonia::core::{
 };
 
 pub const PEAK_BINS: usize = 512;
-const MAX_SAMPLE_FILE_BYTES: u64 = 128 * 1024 * 1024;
+pub const MAX_SAMPLE_SLICES: usize = 64;
+pub const MAX_SAMPLE_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const MAX_DECODED_SAMPLES: usize = 128 * 1024 * 1024 / std::mem::size_of::<f32>();
 const MAX_LIBRARY_ENTRIES: usize = 25_000;
 const MAX_LIBRARY_SCAN_ITEMS: usize = 100_000;
 const MAX_CACHE_BYTES: usize = 256 * 1024 * 1024;
+const MAX_RIFF_CUE_POINTS: usize = 4_096;
+
+/// One slice / cue marker inside an audio sample (frame offset + optional RIFF `labl` name).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SampleSlice {
+    pub frame: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+impl SampleSlice {
+    pub fn new(frame: usize, label: Option<String>) -> Self {
+        let cleaned = label
+            .map(|s| s.trim().chars().take(48).collect::<String>())
+            .filter(|s| !s.is_empty());
+        Self {
+            frame,
+            label: cleaned,
+        }
+    }
+}
+
+/// Sort, deduplicate, optionally clamp against `frames`, and cap `slices` to `MAX_SAMPLE_SLICES`.
+pub fn normalize_slices(slices: &mut Vec<SampleSlice>, frames: Option<usize>) {
+    if let Some(total) = frames {
+        if total == 0 {
+            slices.clear();
+            return;
+        }
+        slices.retain(|s| s.frame < total);
+    }
+    for s in slices.iter_mut() {
+        if let Some(lbl) = s.label.take() {
+            let trimmed: String = lbl.trim().chars().take(48).collect();
+            if !trimmed.is_empty() {
+                s.label = Some(trimmed);
+            }
+        }
+    }
+    slices.sort_by_key(|s| s.frame);
+    let mut deduped: Vec<SampleSlice> = Vec::with_capacity(slices.len().min(MAX_SAMPLE_SLICES));
+    for s in slices.drain(..) {
+        if let Some(last) = deduped.last_mut() {
+            if last.frame == s.frame {
+                if last.label.is_none() && s.label.is_some() {
+                    last.label = s.label;
+                }
+                continue;
+            }
+        }
+        if deduped.len() >= MAX_SAMPLE_SLICES {
+            break;
+        }
+        deduped.push(s);
+    }
+    *slices = deduped;
+}
 
 crate::define_choice_enum! {
     #[derive(Default)]
@@ -33,7 +93,7 @@ crate::define_choice_enum! {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SampleMetadata {
     pub root_midi: u8,
     /// True when `root_midi` came from embedded RIFF `smpl` or `inst` metadata rather than the default `60`.
@@ -46,6 +106,8 @@ pub struct SampleMetadata {
     pub loop_mode: SampleLoopMode,
     pub loop_start: usize,
     pub loop_end: usize,
+    /// Embedded RIFF `cue ` + `LIST/adtl/labl` slice markers (sorted ascending by frame).
+    pub slices: Vec<SampleSlice>,
 }
 
 impl Default for SampleMetadata {
@@ -61,6 +123,7 @@ impl Default for SampleMetadata {
             loop_mode: SampleLoopMode::Off,
             loop_start: 0,
             loop_end: 0,
+            slices: Vec::new(),
         }
     }
 }
@@ -103,6 +166,59 @@ impl SampleData {
     }
 }
 
+/// Off-timeline preview playback spec for a full sample, cropped region, or slice.
+#[derive(Clone, Debug)]
+pub struct SamplePreview {
+    pub sample: Arc<SampleData>,
+    pub sample_start: usize,
+    pub sample_end: usize,
+    pub root_midi: u8,
+    pub coarse_semitones: i16,
+    pub fine_cents: f32,
+    pub loop_mode: SampleLoopMode,
+    pub loop_start: usize,
+    pub loop_end: usize,
+    pub loop_xfade_ms: f32,
+    pub level: f32,
+}
+
+impl SamplePreview {
+    /// Preview the entire sample as a clean one-shot at its embedded root pitch.
+    pub fn full(sample: Arc<SampleData>) -> Self {
+        let frames = sample.frames;
+        let root_midi = sample.meta.root_midi.min(127);
+        let fine_cents = sample.meta.fine_cents.clamp(-100.0, 100.0);
+        Self {
+            sample,
+            sample_start: 0,
+            sample_end: frames,
+            root_midi,
+            coarse_semitones: 0,
+            fine_cents,
+            loop_mode: SampleLoopMode::Off,
+            loop_start: 0,
+            loop_end: frames,
+            loop_xfade_ms: 0.0,
+            level: 1.0,
+        }
+    }
+
+    /// Preview a specific frame region `[start, end)` (e.g. a single slice) as a clean one-shot.
+    pub fn region(sample: Arc<SampleData>, start: usize, end: usize) -> Self {
+        let frames = sample.frames;
+        let mut spec = Self::full(sample);
+        if frames > 0 {
+            let s = start.min(frames.saturating_sub(1));
+            let e = end.clamp(s + 1, frames);
+            spec.sample_start = s;
+            spec.sample_end = e;
+            spec.loop_start = s;
+            spec.loop_end = e;
+        }
+        spec
+    }
+}
+
 /// Unified parameter metadata shared by Sampler and Synth decks.
 #[derive(Clone, Debug)]
 pub struct ParamDescriptor {
@@ -133,6 +249,8 @@ fn parse_riff_wave(bytes: &[u8]) -> Option<RiffParse<'_>> {
     let mut data_chunk = None;
     let mut meta = SampleMetadata::default();
     let mut has_smpl_root = false;
+    let mut raw_cues: Vec<(u32, usize)> = Vec::new();
+    let mut cue_labels: HashMap<u32, String> = HashMap::new();
 
     let mut pos = 12usize;
     while pos + 8 <= bytes.len() {
@@ -209,11 +327,65 @@ fn parse_riff_wave(bytes: &[u8]) -> Option<RiffParse<'_>> {
                     }
                 }
             }
+            b"cue " if body.len() >= 4 => {
+                let declared = read_le_u32(body, 0).unwrap_or(0) as usize;
+                let max_fit = body.len().saturating_sub(4) / 24;
+                let count = declared.min(max_fit).min(MAX_RIFF_CUE_POINTS);
+                for i in 0..count {
+                    let off = 4 + i * 24;
+                    if let (Some(cue_id), Some(dw_pos), Some(sample_off)) = (
+                        read_le_u32(body, off),
+                        read_le_u32(body, off + 4),
+                        read_le_u32(body, off + 20),
+                    ) {
+                        let frame = if sample_off > 0 || dw_pos == 0 {
+                            sample_off as usize
+                        } else {
+                            dw_pos as usize
+                        };
+                        raw_cues.push((cue_id, frame));
+                    }
+                }
+            }
+            b"LIST" if body.len() >= 4 && &body[0..4] == b"adtl" => {
+                let mut sub = 4usize;
+                while sub + 8 <= body.len() {
+                    let sub_id = &body[sub..sub + 4];
+                    let Some(sub_sz) = read_le_u32(body, sub + 4).map(|v| v as usize) else {
+                        break;
+                    };
+                    let sub_start = sub + 8;
+                    let sub_end = sub_start.saturating_add(sub_sz).min(body.len());
+                    if sub_id == b"labl" && sub_end >= sub_start + 4 {
+                        if let Some(cue_id) = read_le_u32(body, sub_start) {
+                            let raw_txt = &body[sub_start + 4..sub_end];
+                            let trimmed_bytes = match raw_txt.iter().position(|&b| b == 0) {
+                                Some(nul) => &raw_txt[..nul],
+                                None => raw_txt,
+                            };
+                            let text = String::from_utf8_lossy(trimmed_bytes).trim().to_string();
+                            if !text.is_empty() {
+                                cue_labels.entry(cue_id).or_insert(text);
+                            }
+                        }
+                    }
+                    let padded_sub = sub_sz.saturating_add(sub_sz & 1);
+                    sub = sub_start.saturating_add(padded_sub);
+                }
+            }
             _ => {}
         }
 
         let padded = csz.saturating_add(csz & 1);
         pos = body_start.saturating_add(padded);
+    }
+
+    if !raw_cues.is_empty() {
+        meta.slices = raw_cues
+            .into_iter()
+            .map(|(id, frame)| SampleSlice::new(frame, cue_labels.get(&id).cloned()))
+            .collect();
+        normalize_slices(&mut meta.slices, None);
     }
 
     Some(RiffParse {
@@ -223,9 +395,166 @@ fn parse_riff_wave(bytes: &[u8]) -> Option<RiffParse<'_>> {
     })
 }
 
+/// Encode standard RIFF metadata chunks (`inst`, `smpl`, and optional `cue ` + `LIST/adtl/labl`)
+/// with exact 2-byte RIFF word alignment. Shared by [`write_wav_with_metadata`] and
+/// [`update_wav_riff_metadata_bytes`].
+fn encode_riff_metadata_chunks(sample_rate: u32, frames: usize, meta: &SampleMetadata) -> Vec<u8> {
+    let mut out = Vec::new();
+    let root = meta.root_midi.min(127);
+    let fine_i8 = meta.fine_cents.round().clamp(-50.0, 50.0) as i8;
+    let lo_note = meta.low_midi.unwrap_or(0).min(127);
+    let hi_note = meta.high_midi.unwrap_or(127).min(127).max(lo_note);
+    let lo_vel = meta.low_vel.unwrap_or(0).min(127);
+    let hi_vel = meta.high_vel.unwrap_or(127).min(127).max(lo_vel).max(1);
+
+    // 7-byte RIFF `inst` chunk (+ 1 word-alignment pad byte).
+    out.extend_from_slice(b"inst");
+    out.extend_from_slice(&7u32.to_le_bytes());
+    out.extend_from_slice(&[root, fine_i8 as u8, 0, lo_note, hi_note, lo_vel, hi_vel]);
+    out.push(0);
+
+    // RIFF `smpl` chunk (MIDI unity note, pitch fraction, and optional loop record).
+    let has_loop = meta.loop_mode != SampleLoopMode::Off && meta.loop_end > meta.loop_start;
+    let smpl_body_len: usize = if has_loop { 36 + 24 } else { 36 };
+    let sample_period_ns = (1_000_000_000u64 / u64::from(sample_rate.max(1))) as u32;
+    let pitch_frac = if meta.fine_cents.is_finite() && meta.fine_cents > 0.0 {
+        ((f64::from(meta.fine_cents.clamp(0.0, 99.999)) / 100.0) * f64::from(u32::MAX)).round()
+            as u32
+    } else {
+        0
+    };
+    let mut smpl = vec![0u8; smpl_body_len];
+    smpl[8..12].copy_from_slice(&sample_period_ns.to_le_bytes());
+    smpl[12..16].copy_from_slice(&u32::from(root).to_le_bytes());
+    smpl[16..20].copy_from_slice(&pitch_frac.to_le_bytes());
+    if has_loop {
+        let loop_start = meta.loop_start.min(frames.saturating_sub(1)) as u32;
+        let loop_end_inclusive = meta
+            .loop_end
+            .min(frames)
+            .saturating_sub(1)
+            .max(loop_start as usize) as u32;
+        let loop_type: u32 = match meta.loop_mode {
+            SampleLoopMode::PingPong => 1,
+            _ => 0,
+        };
+        smpl[28..32].copy_from_slice(&1u32.to_le_bytes());
+        smpl[40..44].copy_from_slice(&loop_type.to_le_bytes());
+        smpl[44..48].copy_from_slice(&loop_start.to_le_bytes());
+        smpl[48..52].copy_from_slice(&loop_end_inclusive.to_le_bytes());
+    }
+    out.extend_from_slice(b"smpl");
+    out.extend_from_slice(&(smpl.len() as u32).to_le_bytes());
+    out.extend_from_slice(&smpl);
+
+    // Standard RIFF `cue ` chunk + optional `LIST`/`adtl` (`labl`) slice markers.
+    let mut slices = meta.slices.clone();
+    normalize_slices(&mut slices, (frames > 0).then_some(frames));
+    if !slices.is_empty() {
+        let cue_body_len = 4 + slices.len() * 24;
+        out.extend_from_slice(b"cue ");
+        out.extend_from_slice(&(cue_body_len as u32).to_le_bytes());
+        out.extend_from_slice(&(slices.len() as u32).to_le_bytes());
+        for (idx, sl) in slices.iter().enumerate() {
+            let cue_id = (idx as u32) + 1;
+            let frame_u32 = sl.frame.min(u32::MAX as usize) as u32;
+            out.extend_from_slice(&cue_id.to_le_bytes()); // dwName
+            out.extend_from_slice(&frame_u32.to_le_bytes()); // dwPosition
+            out.extend_from_slice(b"data"); // fccChunk
+            out.extend_from_slice(&0u32.to_le_bytes()); // dwChunkStart
+            out.extend_from_slice(&0u32.to_le_bytes()); // dwBlockStart
+            out.extend_from_slice(&frame_u32.to_le_bytes()); // dwSampleOffset
+        }
+
+        let mut adtl_body = Vec::new();
+        for (idx, sl) in slices.iter().enumerate() {
+            if let Some(ref lbl) = sl.label {
+                let cue_id = (idx as u32) + 1;
+                let mut text_bytes = lbl.as_bytes().to_vec();
+                text_bytes.push(0); // NUL-terminated per RIFF `labl` spec
+                let sub_len = 4 + text_bytes.len();
+                adtl_body.extend_from_slice(b"labl");
+                adtl_body.extend_from_slice(&(sub_len as u32).to_le_bytes());
+                adtl_body.extend_from_slice(&cue_id.to_le_bytes());
+                adtl_body.extend_from_slice(&text_bytes);
+                if sub_len & 1 == 1 {
+                    adtl_body.push(0);
+                }
+            }
+        }
+        if !adtl_body.is_empty() {
+            let list_len = 4 + adtl_body.len();
+            out.extend_from_slice(b"LIST");
+            out.extend_from_slice(&(list_len as u32).to_le_bytes());
+            out.extend_from_slice(b"adtl");
+            out.extend_from_slice(&adtl_body);
+        }
+    }
+
+    out
+}
+
+/// Losslessly rewrite RIFF metadata chunks (`inst`, `smpl`, `cue `, `LIST/adtl`) inside an
+/// existing RIFF WAVE byte stream while preserving `fmt `, `data`, and all other chunks
+/// bit-for-bit untouched (supports 16-bit PCM, 24-bit PCM, 32-bit float, and Ogg-in-RIFF WAVs).
+pub fn update_wav_riff_metadata_bytes(
+    existing_wav: &[u8],
+    sample_rate: u32,
+    frames: usize,
+    meta: &SampleMetadata,
+) -> Result<Vec<u8>> {
+    ensure!(
+        existing_wav.len() >= 12
+            && &existing_wav[0..4] == b"RIFF"
+            && &existing_wav[8..12] == b"WAVE",
+        "Target file is not a RIFF WAVE container"
+    );
+    let meta_chunks = encode_riff_metadata_chunks(sample_rate, frames, meta);
+    let mut preserved = Vec::with_capacity(existing_wav.len());
+    let mut pos = 12usize;
+    while pos + 8 <= existing_wav.len() {
+        let cid = &existing_wav[pos..pos + 4];
+        let csz = read_le_u32(existing_wav, pos + 4).context("Truncated RIFF chunk size")? as usize;
+        let body_start = pos + 8;
+        let body_end = body_start.saturating_add(csz).min(existing_wav.len());
+        let is_adtl_list = cid == b"LIST"
+            && body_end >= body_start + 4
+            && &existing_wav[body_start..body_start + 4] == b"adtl";
+        let strip = matches!(cid, b"inst" | b"smpl" | b"cue ") || is_adtl_list;
+        if !strip {
+            let body = &existing_wav[body_start..body_end];
+            preserved.extend_from_slice(cid);
+            preserved.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            preserved.extend_from_slice(body);
+            if body.len() & 1 == 1 {
+                preserved.push(0);
+            }
+        }
+        let padded = csz.saturating_add(csz & 1);
+        pos = body_start.saturating_add(padded);
+    }
+
+    let total_len = 12usize
+        .checked_add(preserved.len())
+        .and_then(|n| n.checked_add(meta_chunks.len()))
+        .context("RIFF WAVE size overflow")?;
+    ensure!(
+        total_len as u64 <= MAX_SAMPLE_FILE_BYTES,
+        "Updated WAV exceeds maximum sample size"
+    );
+    let mut out = Vec::with_capacity(total_len);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&((total_len - 8) as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(&preserved);
+    out.extend_from_slice(&meta_chunks);
+    Ok(out)
+}
+
 /// Write a mono (`right: None`) or stereo (`right: Some(..)`) 16-bit PCM RIFF WAVE file
-/// atomically with embedded RIFF `inst` (root, fine tune, key & velocity range) and
-/// `smpl` (MIDI unity note, pitch fraction, and optional loop points) chunks.
+/// atomically with embedded RIFF `inst` (root, fine tune, key & velocity range),
+/// `smpl` (MIDI unity note, pitch fraction, optional loop points), and `cue ` / `LIST(adtl)`
+/// slice marker chunks.
 pub fn write_wav_with_metadata(
     path: &Path,
     left: &[f32],
@@ -252,17 +581,14 @@ pub fn write_wav_with_metadata(
         .checked_mul(usize::from(channels))
         .and_then(|n| n.checked_mul(2))
         .context("WAV PCM size overflow")?;
+    let meta_chunks = encode_riff_metadata_chunks(sample_rate, frames, meta);
+    let total_len = 12 + (8 + 16) + (8 + data_bytes) + meta_chunks.len();
     ensure!(
-        data_bytes as u64 <= MAX_SAMPLE_FILE_BYTES.saturating_sub(1024),
+        total_len as u64 <= MAX_SAMPLE_FILE_BYTES,
         "WAV exceeds maximum sample size"
     );
 
     crate::store::write_atomic(path, MAX_SAMPLE_FILE_BYTES, |buf| {
-        let has_loop = meta.loop_mode != SampleLoopMode::Off && meta.loop_end > meta.loop_start;
-        let smpl_body_len: usize = if has_loop { 36 + 24 } else { 36 };
-        let inst_chunk_len: usize = 8 + 7 + 1; // 7-byte body + 1 RIFF word-alignment pad
-        let smpl_chunk_len: usize = 8 + smpl_body_len;
-        let total_len = 12 + (8 + 16) + (8 + data_bytes) + inst_chunk_len + smpl_chunk_len;
         buf.reserve(total_len);
 
         // RIFF WAVE header
@@ -300,49 +626,7 @@ pub fn write_wav_with_metadata(
             }
         }
 
-        // 7-byte RIFF `inst` chunk (+ 1 pad byte)
-        let root = meta.root_midi.min(127);
-        let fine_i8 = meta.fine_cents.round().clamp(-50.0, 50.0) as i8;
-        let lo_note = meta.low_midi.unwrap_or(0).min(127);
-        let hi_note = meta.high_midi.unwrap_or(127).min(127).max(lo_note);
-        let lo_vel = meta.low_vel.unwrap_or(0).min(127);
-        let hi_vel = meta.high_vel.unwrap_or(127).min(127).max(lo_vel).max(1);
-        buf.extend_from_slice(b"inst");
-        buf.extend_from_slice(&7u32.to_le_bytes());
-        buf.extend_from_slice(&[root, fine_i8 as u8, 0, lo_note, hi_note, lo_vel, hi_vel]);
-        buf.push(0); // word-alignment pad
-
-        // RIFF `smpl` chunk (unity MIDI note + optional loop record)
-        let sample_period_ns = (1_000_000_000u64 / u64::from(sample_rate)) as u32;
-        let pitch_frac = if meta.fine_cents.is_finite() && meta.fine_cents > 0.0 {
-            ((f64::from(meta.fine_cents.clamp(0.0, 99.999)) / 100.0) * f64::from(u32::MAX)).round()
-                as u32
-        } else {
-            0
-        };
-        let mut smpl = vec![0u8; smpl_body_len];
-        smpl[8..12].copy_from_slice(&sample_period_ns.to_le_bytes());
-        smpl[12..16].copy_from_slice(&u32::from(root).to_le_bytes());
-        smpl[16..20].copy_from_slice(&pitch_frac.to_le_bytes());
-        if has_loop {
-            let loop_start = meta.loop_start.min(frames.saturating_sub(1)) as u32;
-            let loop_end_inclusive = meta
-                .loop_end
-                .min(frames)
-                .saturating_sub(1)
-                .max(loop_start as usize) as u32;
-            let loop_type: u32 = match meta.loop_mode {
-                SampleLoopMode::PingPong => 1,
-                _ => 0,
-            };
-            smpl[28..32].copy_from_slice(&1u32.to_le_bytes());
-            smpl[40..44].copy_from_slice(&loop_type.to_le_bytes());
-            smpl[44..48].copy_from_slice(&loop_start.to_le_bytes());
-            smpl[48..52].copy_from_slice(&loop_end_inclusive.to_le_bytes());
-        }
-        buf.extend_from_slice(b"smpl");
-        buf.extend_from_slice(&(smpl.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&smpl);
+        buf.extend_from_slice(&meta_chunks);
         Ok(())
     })
 }
@@ -666,24 +950,9 @@ fn finish_sample(
             meta.loop_mode = SampleLoopMode::Off;
         }
     }
-    let bins = PEAK_BINS.min(frames).max(1);
-    let mut peaks = Vec::with_capacity(bins);
-    for b in 0..bins {
-        let start = b * frames / bins;
-        let end = ((b + 1) * frames / bins).max(start + 1).min(frames);
-        let mut lo = 0.0_f32;
-        let mut hi = 0.0_f32;
-        for i in start..end {
-            let mono = if let Some(r) = &right {
-                crate::dsp::stereo_mid_f32([left[i], r[i]])
-            } else {
-                left[i]
-            };
-            lo = lo.min(mono);
-            hi = hi.max(mono);
-        }
-        peaks.push((lo, hi));
-    }
+    normalize_slices(&mut meta.slices, Some(frames));
+    let peaks =
+        crate::dsp::compute_waveform_peaks_window(&left, right.as_deref(), 0, frames, PEAK_BINS);
     let channels = if right.is_some() { 2 } else { 1 };
     Ok(Arc::new(SampleData {
         path_label,
@@ -695,7 +964,7 @@ fn finish_sample(
         left: left.into_boxed_slice(),
         right: right.map(Vec::into_boxed_slice),
         peaks: peaks.into_boxed_slice(),
-        meta: *meta,
+        meta: meta.clone(),
     }))
 }
 
@@ -1684,6 +1953,12 @@ mod decode_and_metadata_tests {
             loop_mode: SampleLoopMode::Forward,
             loop_start: 120,
             loop_end: 820,
+            slices: vec![
+                SampleSlice::new(0, Some("Kick".into())),
+                SampleSlice::new(256, Some("Snare".into())),
+                SampleSlice::new(512, None),
+                SampleSlice::new(768, Some("Open Hat".into())),
+            ],
         };
         write_wav_with_metadata(&path, &left, Some(&right), 48_000, &meta).unwrap();
         let loaded = load_sample_file(&path, None).unwrap();
@@ -1699,12 +1974,51 @@ mod decode_and_metadata_tests {
         assert_eq!(loaded.meta.loop_mode, SampleLoopMode::Forward);
         assert_eq!(loaded.meta.loop_start, 120);
         assert_eq!(loaded.meta.loop_end, 820);
+        assert_eq!(loaded.meta.slices, meta.slices);
         for i in 0..1024 {
             assert!((loaded.left[i] - left[i]).abs() < 1e-3);
             assert!((loaded.right.as_ref().unwrap()[i] - right[i]).abs() < 1e-3);
         }
 
-        // Mono one-shot roundtrip without loop
+        // Lossless RIFF metadata update replaces `cue `/`labl`/`smpl` while preserving raw `data` and custom chunks!
+        let mut orig_bytes = fs::read(&path).unwrap();
+        let custom_payload = b"CUSTOM!"; // 7 bytes (odd length -> tests RIFF pad handling)
+        let orig_riff_sz = u32::from_le_bytes(orig_bytes[4..8].try_into().unwrap());
+        orig_bytes.extend_from_slice(b"JUNK");
+        orig_bytes.extend_from_slice(&(custom_payload.len() as u32).to_le_bytes());
+        orig_bytes.extend_from_slice(custom_payload);
+        orig_bytes.push(0);
+        let new_riff_sz = orig_riff_sz + 8 + 8;
+        orig_bytes[4..8].copy_from_slice(&new_riff_sz.to_le_bytes());
+
+        let updated_meta = SampleMetadata {
+            root_midi: 48,
+            has_root: true,
+            loop_mode: SampleLoopMode::PingPong,
+            loop_start: 100,
+            loop_end: 600,
+            slices: vec![
+                SampleSlice::new(64, Some("Attack".into())),
+                SampleSlice::new(500, Some("Tail".into())),
+            ],
+            ..SampleMetadata::default()
+        };
+        let rewritten =
+            update_wav_riff_metadata_bytes(&orig_bytes, 48_000, 1024, &updated_meta).unwrap();
+        assert!(
+            rewritten
+                .windows(custom_payload.len())
+                .any(|w| w == custom_payload),
+            "Lossless RIFF metadata rewrite must preserve unknown chunks bit-for-bit"
+        );
+        let reloaded =
+            decode_sample_bytes(&rewritten, "pad".into(), "pad.wav".into(), path.clone()).unwrap();
+        assert_eq!(reloaded.meta.root_midi, 48);
+        assert_eq!(reloaded.meta.loop_mode, SampleLoopMode::PingPong);
+        assert_eq!(reloaded.meta.slices, updated_meta.slices);
+        assert_eq!(reloaded.left.as_ref(), loaded.left.as_ref());
+
+        // Mono one-shot roundtrip without loop or slices
         let mono_path = dir.path().join("hit.wav");
         let mono_meta = SampleMetadata {
             root_midi: 42,
@@ -1717,6 +2031,7 @@ mod decode_and_metadata_tests {
             loop_mode: SampleLoopMode::Off,
             loop_start: 0,
             loop_end: 0,
+            slices: Vec::new(),
         };
         write_wav_with_metadata(&mono_path, &left, None, 48_000, &mono_meta).unwrap();
         let loaded_mono = load_sample_file(&mono_path, None).unwrap();
