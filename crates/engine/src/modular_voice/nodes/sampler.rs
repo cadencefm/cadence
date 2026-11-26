@@ -148,11 +148,8 @@ impl VoiceModule for SamplerNode {
             .filter(|(k, _)| *k == self.sample_key)
         {
             Some(data)
-        } else if let Some((idx, (_, data))) = ctx
-            .bank
-            .iter()
-            .enumerate()
-            .find(|(_, (id, _))| *id == self.sample_key)
+        } else if let Some((idx, data)) =
+            cadence_core::runtime::lookup_sample_in_bank(ctx.bank, self.sample_key)
         {
             self.cached_bank_idx = Some(idx);
             Some(data)

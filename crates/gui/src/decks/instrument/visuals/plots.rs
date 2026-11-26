@@ -1,18 +1,15 @@
 //! Pure GPU curve, envelope, sampler peak, modal resonator, and Out telemetry plot painters
 //! composed by `decks::instrument::visuals`.
 use super::super::{draw_badge_header, draw_card_panel};
+use crate::decks::vis::{draw_log_freq_grid as vis_log_freq_grid, draw_zero_db_line};
 use crate::display::{build_curve_pts, sample_curve_y, trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
-use cadence_core::dsp::log_to_norm;
 use cadence_core::params::format_pan;
 use cadence_core::sampler::SampleLoopMode;
 
-/// Subtle log-frequency vertical reference lines (100 Hz, 1 kHz, 10 kHz) via core SPOT.
+/// Subtle log-frequency vertical reference lines (100 Hz, 1 kHz, 10 kHz) via shared `decks::vis` SPOT.
 fn draw_log_freq_grid(dl: &mut DisplayList, plot: Rect, theme: &Theme) {
-    for hz in [100.0_f32, 1_000.0, 10_000.0] {
-        let x = plot.x + plot.w * log_to_norm(hz, 20.0, 20_000.0);
-        dl.fill(Rect::new(x, plot.y, 1.0, plot.h), theme.border.grid_step);
-    }
+    vis_log_freq_grid(dl, plot, 20_000.0, false, theme);
 }
 
 pub(super) fn draw_wave_plot(
@@ -65,13 +62,7 @@ pub(super) fn draw_filter_plot(
     if show_grid {
         draw_log_freq_grid(dl, plot, theme);
     }
-    // 0 dB reference line.
-    let zero_norm = ((0.0 - bounds[0]) / (bounds[1] - bounds[0])).clamp(0.0, 1.0);
-    let zero_y = plot.bottom() - 3.0 - zero_norm * (plot.h - 6.0).max(1.0);
-    dl.fill(
-        Rect::new(plot.x, zero_y, plot.w, 1.0),
-        theme.border.grid_beat,
-    );
+    let _ = draw_zero_db_line(dl, plot, bounds, theme);
 
     let pts = build_curve_pts(values, bounds, plot);
     dl.polyline(
@@ -198,12 +189,7 @@ pub(super) fn draw_noise_band_plot(
         );
     }
 
-    let zero_norm = ((0.0 - bounds[0]) / (bounds[1] - bounds[0])).clamp(0.0, 1.0);
-    let zero_y = plot.bottom() - 3.0 - zero_norm * (plot.h - 6.0).max(1.0);
-    dl.fill(
-        Rect::new(plot.x, zero_y, plot.w, 1.0),
-        theme.border.grid_beat,
-    );
+    let _ = draw_zero_db_line(dl, plot, bounds, theme);
 
     let pts = build_curve_pts(band_curve, bounds, plot);
     dl.polyline(

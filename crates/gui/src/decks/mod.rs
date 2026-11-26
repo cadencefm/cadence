@@ -13,6 +13,7 @@ pub mod output;
 pub mod pattern;
 pub mod sample;
 pub mod take;
+pub(crate) mod vis;
 
 use crate::chrome::{draw_footer, draw_header, draw_trail};
 use crate::display::{DisplayList, Rect};

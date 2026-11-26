@@ -4,7 +4,7 @@
 //! can be loaded. Keep the score intact while reporting every unavailable part.
 
 use crate::rack::module_sample_key;
-use crate::runtime::SampleBank;
+use crate::runtime::{lookup_sample_in_bank, sort_sample_bank, SampleBank};
 use crate::sampler::{load_sample_file, SampleData, SampleLibrary};
 use crate::score::ScoreWindow;
 use anyhow::{bail, Result};
@@ -94,6 +94,7 @@ pub fn load_project_samples_with(
             });
         }
     }
+    sort_sample_bank(&mut report.bank);
     report
 }
 
@@ -110,22 +111,20 @@ pub fn load_schedule_samples<'a>(
     };
     for score in scores {
         let segment = load_project_samples(score, library);
-        for (id, sample) in segment.bank {
-            if !report.bank.iter().any(|(existing, _)| *existing == id) {
-                report.bank.push((id, sample));
-            }
-        }
+        report.bank.extend(segment.bank);
         for issue in segment.issues {
             if !report.issues.contains(&issue) {
                 report.issues.push(issue);
             }
         }
     }
+    sort_sample_bank(&mut report.bank);
     report
 }
 
 /// Defend public DSP/export APIs against incomplete caller-provided banks.
 pub fn ensure_sample_bank_ready(score: &ScoreWindow, bank: &SampleBank) -> Result<()> {
+    let sorted = bank.is_sorted_by_key(|(id, _)| *id);
     let mut issues = Vec::new();
     for inst in &score.instruments {
         if !score.required_instrument_ids.contains(&inst.id) {
@@ -135,17 +134,18 @@ pub fn ensure_sample_bank_ready(score: &ScoreWindow, bank: &SampleBank) -> Resul
         for (zone_id, zone, mod_id, smp) in inst.rack.sampler_modules() {
             let key = module_sample_key(inst.id, zone_id, mod_id);
             let path = smp.path.clone();
+            let found = if sorted {
+                lookup_sample_in_bank(bank, key).map(|(_, s)| s)
+            } else {
+                bank.iter().find(|(id, _)| *id == key).map(|(_, s)| s)
+            };
             let message = if path.is_none() {
                 if zone_count <= 1 {
                     Some("No sample assigned; load a sample before rendering")
                 } else {
                     Some("Zone sample is unassigned; load a sample before rendering")
                 }
-            } else if !bank
-                .iter()
-                .find(|(id, _)| *id == key)
-                .is_some_and(|(_, sample)| sample.frames > 0)
-            {
+            } else if !found.is_some_and(|sample| sample.frames > 0) {
                 Some("Required sample has no prepared audio buffer; load or relink it before rendering")
             } else {
                 None

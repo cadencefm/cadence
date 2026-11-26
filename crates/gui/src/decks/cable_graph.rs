@@ -121,6 +121,9 @@ pub struct CableEdge<'a> {
     pub dashed: bool,
     /// Extra-bright focused cable highlight (when focusing a cable to edit attenuverter or cut).
     pub selected: bool,
+    /// Normalized `0.0..=1.0` live signal energy flowing across this cable (`0.0` = idle).
+    /// Audio cables should be mapped through [`audio_activity_norm`].
+    pub activity: f32,
     /// Normalized vertical jack position on the source card (`0.0..=1.0`, default `0.5` = center).
     pub from_port_y: f32,
     /// Normalized vertical jack position on the target card (`0.0..=1.0`, default `0.5` = center).
@@ -148,6 +151,7 @@ impl<'a> CableEdge<'a> {
             label: None,
             dashed: false,
             selected: false,
+            activity: 0.0,
             from_port_y: 0.5,
             to_port_y: 0.5,
         }
@@ -170,6 +174,11 @@ impl<'a> CableEdge<'a> {
 
     pub const fn with_selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    pub const fn with_activity(mut self, activity: f32) -> Self {
+        self.activity = activity;
         self
     }
 
@@ -754,7 +763,16 @@ fn draw_visible_edge(
         sample_cubic((x0, from_y), c0, c1, (x1, to_y), 16)
     };
 
-    emit_edge_stroke(dl, &pts, edge.color, tier, edge.dashed, false, theme);
+    emit_edge_stroke(
+        dl,
+        &pts,
+        edge.color,
+        tier,
+        edge.dashed,
+        edge.activity,
+        false,
+        theme,
+    );
 
     match tier {
         EdgeTier::Dim => {}
@@ -849,7 +867,16 @@ fn draw_offscreen_edge(
         (vx, px, pts)
     };
 
-    emit_edge_stroke(dl, &pts, edge.color, tier, edge.dashed, true, theme);
+    emit_edge_stroke(
+        dl,
+        &pts,
+        edge.color,
+        tier,
+        edge.dashed,
+        edge.activity,
+        true,
+        theme,
+    );
 
     match tier {
         EdgeTier::Dim => {
@@ -910,33 +937,75 @@ fn draw_offscreen_edge(
     Some(pts)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_edge_stroke(
     dl: &mut DisplayList,
     pts: &[(f32, f32)],
     base_col: Color,
     tier: EdgeTier,
     dashed: bool,
+    activity: f32,
     offscreen: bool,
     theme: &Theme,
 ) {
+    let act = if activity.is_finite() {
+        activity.clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let live = act > 0.02;
     match tier {
         EdgeTier::Dim => {
-            let alpha = if offscreen { 0.22 } else { 0.18 };
-            stroke_curve(dl, pts, 1.1, base_col.with_alpha(alpha), 0.0, dashed);
+            let base_alpha = if offscreen { 0.22 } else { 0.18 };
+            if live {
+                let alpha = (base_alpha + act * 0.44).min(0.68);
+                let width = 1.1 + act * 0.75;
+                let glow = act * 0.34;
+                stroke_curve(dl, pts, width, base_col.with_alpha(alpha), glow, dashed);
+            } else {
+                stroke_curve(dl, pts, 1.1, base_col.with_alpha(base_alpha), 0.0, dashed);
+            }
         }
         EdgeTier::Highlighted => {
-            let glow = if offscreen { 0.46 } else { 0.42 };
-            stroke_curve(dl, pts, 2.2, base_col, glow, dashed);
+            let base_glow = if offscreen { 0.46 } else { 0.42 };
+            if live {
+                let halo_col = base_col.with_alpha(0.14 + act * 0.18);
+                stroke_curve(
+                    dl,
+                    pts,
+                    2.4 + act * 2.2,
+                    halo_col,
+                    0.32 + act * 0.24,
+                    dashed,
+                );
+                let core = base_col.mix(theme.text.primary, act * 0.16);
+                stroke_curve(
+                    dl,
+                    pts,
+                    2.2 + act * 0.55,
+                    core,
+                    base_glow + act * 0.24,
+                    dashed,
+                );
+            } else {
+                stroke_curve(dl, pts, 2.2, base_col, base_glow, dashed);
+            }
         }
         EdgeTier::Selected => {
             // Soft outer luminous halo + bright core stroke so focused cables pop cleanly
             // across both dark phosphor and studio-light themes.
+            let halo_alpha = if live { 0.32 + act * 0.16 } else { 0.32 };
             let halo = base_col
                 .mix(theme.accent.warning_key, 0.35)
-                .with_alpha(0.32);
-            let core = base_col.mix(theme.text.primary, 0.30);
-            stroke_curve(dl, pts, 5.2, halo, 0.55, dashed);
-            stroke_curve(dl, pts, 2.8, core, 0.72, dashed);
+                .with_alpha(halo_alpha);
+            let core = base_col.mix(
+                theme.text.primary,
+                if live { 0.30 + act * 0.14 } else { 0.30 },
+            );
+            let halo_w = if live { 5.2 + act * 1.6 } else { 5.2 };
+            let core_glow = if live { 0.72 + act * 0.22 } else { 0.72 };
+            stroke_curve(dl, pts, halo_w, halo, 0.55 + act * 0.15, dashed);
+            stroke_curve(dl, pts, 2.8 + act * 0.35, core, core_glow, dashed);
         }
     }
 }

@@ -106,7 +106,11 @@ All captures below are `1440×860` Metal GPU renders driven by real-time 48 kHz 
 | ![Iron Circuit TR-808 2D Zones Map](docs/screenshots/04-rack-zones.png) | ![Iron Circuit Project Macros Deck](docs/screenshots/07-macros-deck.png) |
 
 <details>
-<summary>More screenshots (10 more views: Preset Browser, Filter PCF, :mini Roll, Action Palette, Audio &amp; MIDI Devices, Jam HUD, Take Deck, Light &amp; Neon themes)</summary>
+<summary>More screenshots (11 more views: Sample Waveform &amp; Slicer Deck, Preset Browser, Filter PCF, :mini Roll, Action Palette, Audio &amp; MIDI Devices, Jam HUD, Take Deck, Light &amp; Neon themes)</summary>
+
+**Sample / Waveform & Slicer Deck (`gw` · *Afterglow*)**
+
+![Afterglow Sample Waveform and Slicer Deck](docs/screenshots/18-sample-deck.png)
 
 | 6-Category Preset Browser (`P` · *Iron Circuit*) | Rhythmic `Filter` & Response Curve (*Iron Circuit*) |
 | --- | --- |

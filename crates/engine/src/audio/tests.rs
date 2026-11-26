@@ -2362,7 +2362,7 @@ fn engine_and_mixer_multi_sample_rate_stability_pdc_and_zero_rt_allocs() {
         assert!(peak > 0.05, "expected audible mix at {sr} Hz, got {peak}");
     }
 
-    // Verify SamplerNode cached_bank_idx seamlessly recovers if the SampleBank order changes mid-voice.
+    // Verify SamplerNode cached_bank_idx seamlessly recovers when a sorted SampleBank shifts slot indices mid-voice.
     let mut smp_zone = RackPatch::default_sampler().zones.remove(0);
     if let ModuleKind::Sampler(ref mut smp) = smp_zone.modules[0].kind {
         smp.path = Some("./test.wav".into());
@@ -2373,7 +2373,10 @@ fn engine_and_mixer_multi_sample_rate_stability_pdc_and_zero_rt_allocs() {
     let decoy = synthetic_sample(256, 48_000, 110.0);
     let smp_key = module_sample_key(2, 1, 1);
     let bank_a = vec![(111, Arc::clone(&decoy)), (smp_key, Arc::clone(&sample))];
-    let bank_b = vec![(smp_key, Arc::clone(&sample)), (111, Arc::clone(&decoy))];
+    let bank_b = vec![
+        (smp_key, Arc::clone(&sample)),
+        (u64::MAX, Arc::clone(&decoy)),
+    ];
     let mut voice = crate::modular_voice::ModularVoice::new_boxed(
         &crate::modular_voice::ZoneTriggerSpec {
             inst_id: 2,
@@ -4473,5 +4476,91 @@ fn reconfigure_preserves_transport_step_inside_live_window_and_resumes_audible_p
     assert!(
         rewound_peak > 0.05,
         "clamped start_step must also produce immediate audio, got peak={rewound_peak}"
+    );
+}
+
+#[test]
+fn rack_activity_telemetry_captures_modules_cables_zero_alloc_and_decays() {
+    let project = Project::demo();
+    let score = project.compile().expect("compile demo");
+    let inst = &score.instruments[0];
+    let inst_id = inst.id;
+    let zone = &inst.rack.zones[0];
+    let zone_id = zone.id;
+    assert!(!zone.modules.is_empty());
+    assert!(!zone.cables.is_empty());
+
+    let sr = 48_000u32;
+    let shared = Shared::new_arc();
+    shared.playing.store(true, Ordering::Release);
+    shared.rack_watch_zone_id.store(zone_id, Ordering::Release);
+    shared.rack_watch_inst_id.store(inst_id, Ordering::Release);
+    let mut engine = Engine::new(score.clone(), Vec::new(), sr, Arc::clone(&shared));
+
+    // Render 24 blocks (~32 ms) strictly with zero heap operations while telemetry is active.
+    let mut buf = [[0.0_f32; 2]; 64];
+    for _ in 0..24 {
+        crate::mix_engine::tests::assert_no_heap_operations(|| {
+            engine.render_block(&mut buf);
+        });
+    }
+
+    let snap = engine.rack_activity_snapshot();
+    assert!(snap.is_for(inst_id, zone_id));
+    assert!(
+        snap.module_count > 0 && snap.cable_count > 0,
+        "watched active zone must report module and cable telemetry: {snap:?}"
+    );
+    let max_mod = (0..usize::from(snap.module_count))
+        .map(|i| snap.module_peaks[i])
+        .fold(0.0_f32, f32::max);
+    let max_cable = (0..usize::from(snap.cable_count))
+        .map(|i| snap.cable_peaks[i])
+        .fold(0.0_f32, f32::max);
+    assert!(
+        max_mod > 0.05 && max_cable > 0.05,
+        "active demo synth must produce live module ({max_mod}) and cable ({max_cable}) peaks"
+    );
+
+    // Also verify Shared seqlock publication & reading matches.
+    let published = shared.rack_activity.read();
+    assert!(published.is_for(inst_id, zone_id));
+    assert!(published.module_count > 0);
+
+    // Pause and release voices: peaks must decay smoothly toward zero without allocations.
+    shared.playing.store(false, Ordering::Release);
+    engine.voice_pool_release_all_for_test();
+    for _ in 0..800 {
+        crate::mix_engine::tests::assert_no_heap_operations(|| {
+            engine.render_block(&mut buf);
+        });
+    }
+    let decayed = engine.rack_activity_snapshot();
+    let decayed_max = (0..usize::from(decayed.module_count))
+        .map(|i| decayed.module_peaks[i])
+        .fold(0.0_f32, f32::max);
+    assert!(
+        decayed_max < max_mod * 0.25,
+        "decayed module peak ({decayed_max}) must fall well below active peak ({max_mod})"
+    );
+
+    // Clearing watch target stops telemetry cleanly.
+    shared.rack_watch_inst_id.store(0, Ordering::Release);
+    for _ in 0..8 {
+        engine.render_block(&mut buf);
+    }
+    assert!(!engine.rack_activity_snapshot().is_active());
+    assert!(!shared.rack_activity.read().is_active());
+
+    // Offline render helper produces authentic live telemetry for the same zone.
+    let offline = render_rack_activity_snapshot(&score, Vec::new(), sr, 0, 2, inst_id, zone_id)
+        .expect("offline rack activity snapshot");
+    assert!(offline.is_for(inst_id, zone_id));
+    let offline_max = (0..usize::from(offline.module_count))
+        .map(|i| offline.module_peaks[i])
+        .fold(0.0_f32, f32::max);
+    assert!(
+        offline_max > 0.05,
+        "offline capture must report live module peaks, got {offline_max}"
     );
 }

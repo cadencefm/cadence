@@ -4,12 +4,40 @@
 //! and the host binary without pulling audio/MIDI/windowing crates into the
 //! domain or controller layers.
 use crate::mixer::{ChannelRef, MAX_EFFECT_DEVICES};
+use crate::rack::{MAX_CABLES_PER_ZONE, MAX_MODULES_PER_ZONE};
 use crate::sampler::SampleData;
 use crate::score::MAX_INSTRUMENTS;
 use serde::Serialize;
 use std::sync::Arc;
 
 pub type SampleBank = Vec<(u64, Arc<SampleData>)>;
+
+/// Sort a [`SampleBank`] in ascending key order (deduplicating duplicate keys,
+/// preserving the first entry per key) so real-time audio lookups run in strict
+/// `O(log N)` binary search with zero allocations.
+#[inline]
+pub fn sort_sample_bank(bank: &mut SampleBank) {
+    if !bank.is_sorted_by_key(|(key, _)| *key) {
+        bank.sort_by_key(|(key, _)| *key);
+    }
+    bank.dedup_by_key(|(key, _)| *key);
+}
+
+/// Strict `O(log N)` binary-search lookup inside a sorted [`SampleBank`],
+/// returning `(slot_index, &Arc<SampleData>)`.
+#[inline]
+pub fn lookup_sample_in_bank(
+    bank: &[(u64, Arc<SampleData>)],
+    key: u64,
+) -> Option<(usize, &Arc<SampleData>)> {
+    debug_assert!(
+        bank.is_sorted_by_key(|(id, _)| *id),
+        "SampleBank must be sorted by key before binary-search lookup"
+    );
+    bank.binary_search_by_key(&key, |(id, _)| *id)
+        .ok()
+        .map(|idx| (idx, &bank[idx].1))
+}
 
 /// Supported audio device sample-rate range (`Hz`).
 pub const MIN_AUDIO_SAMPLE_RATE: u32 = 8_000;
@@ -495,6 +523,210 @@ pub struct EffectMeter {
     pub gr_hold_db: f32,
 }
 
+/// Live zero-alloc per-module and per-cable peak telemetry for one watched Eurorack
+/// Modular Rack zone (`(instrument_id, zone_id)`), published on [`AudioSnapshot`].
+///
+/// Audio modules and `InPort::In` cables report unclamped 32-bit float linear peaks
+/// (`> 1.0` indicates internal float headroom); CV/Env/LFO modules and non-audio
+/// modulation cables report normalized `0.0..=1.0` activity magnitudes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RackActivityTelemetry {
+    /// Watched instrument ID (`0` when inactive / no Patchbay target is watched).
+    pub instrument_id: u64,
+    /// Watched zone ID inside `instrument_id`.
+    pub zone_id: u16,
+    pub module_count: u8,
+    pub module_ids: [u16; MAX_MODULES_PER_ZONE],
+    pub module_peaks: [f32; MAX_MODULES_PER_ZONE],
+    pub cable_count: u8,
+    pub cable_ids: [u16; MAX_CABLES_PER_ZONE],
+    pub cable_peaks: [f32; MAX_CABLES_PER_ZONE],
+}
+
+impl Default for RackActivityTelemetry {
+    fn default() -> Self {
+        Self {
+            instrument_id: 0,
+            zone_id: 0,
+            module_count: 0,
+            module_ids: [0; MAX_MODULES_PER_ZONE],
+            module_peaks: [0.0; MAX_MODULES_PER_ZONE],
+            cable_count: 0,
+            cable_ids: [0; MAX_CABLES_PER_ZONE],
+            cable_peaks: [0.0; MAX_CABLES_PER_ZONE],
+        }
+    }
+}
+
+impl RackActivityTelemetry {
+    /// Create a zeroed telemetry snapshot bound to `(instrument_id, zone_id)`.
+    #[inline]
+    pub fn for_zone(instrument_id: u64, zone_id: u16) -> Self {
+        Self {
+            instrument_id,
+            zone_id,
+            ..Self::default()
+        }
+    }
+
+    #[inline]
+    pub const fn is_active(&self) -> bool {
+        self.instrument_id != 0
+    }
+
+    #[inline]
+    pub const fn is_for(&self, instrument_id: u64, zone_id: u16) -> bool {
+        self.instrument_id != 0 && self.instrument_id == instrument_id && self.zone_id == zone_id
+    }
+
+    /// Peak output magnitude for `module_id` (`0.0` if absent or non-finite).
+    #[inline]
+    pub fn module_peak(&self, module_id: u16) -> f32 {
+        let count = usize::from(self.module_count).min(MAX_MODULES_PER_ZONE);
+        for i in 0..count {
+            if self.module_ids[i] == module_id {
+                let peak = self.module_peaks[i];
+                return if peak.is_finite() { peak.max(0.0) } else { 0.0 };
+            }
+        }
+        0.0
+    }
+
+    /// Peak signal magnitude carried on `cable_id` (`0.0` if absent or non-finite).
+    #[inline]
+    pub fn cable_peak(&self, cable_id: u16) -> f32 {
+        let count = usize::from(self.cable_count).min(MAX_CABLES_PER_ZONE);
+        for i in 0..count {
+            if self.cable_ids[i] == cable_id {
+                let peak = self.cable_peaks[i];
+                return if peak.is_finite() { peak.max(0.0) } else { 0.0 };
+            }
+        }
+        0.0
+    }
+
+    /// Record or raise `module_id`'s peak magnitude in place (zero allocations).
+    #[inline]
+    pub fn merge_module_peak(&mut self, module_id: u16, peak: f32) {
+        let sanitized = if peak.is_finite() { peak.max(0.0) } else { 0.0 };
+        let count = usize::from(self.module_count).min(MAX_MODULES_PER_ZONE);
+        for i in 0..count {
+            if self.module_ids[i] == module_id {
+                if sanitized > self.module_peaks[i] {
+                    self.module_peaks[i] = sanitized;
+                }
+                return;
+            }
+        }
+        if count < MAX_MODULES_PER_ZONE {
+            self.module_ids[count] = module_id;
+            self.module_peaks[count] = sanitized;
+            self.module_count = (count + 1) as u8;
+        }
+    }
+
+    /// Record or raise `cable_id`'s peak magnitude in place (zero allocations).
+    #[inline]
+    pub fn merge_cable_peak(&mut self, cable_id: u16, peak: f32) {
+        let sanitized = if peak.is_finite() { peak.max(0.0) } else { 0.0 };
+        let count = usize::from(self.cable_count).min(MAX_CABLES_PER_ZONE);
+        for i in 0..count {
+            if self.cable_ids[i] == cable_id {
+                if sanitized > self.cable_peaks[i] {
+                    self.cable_peaks[i] = sanitized;
+                }
+                return;
+            }
+        }
+        if count < MAX_CABLES_PER_ZONE {
+            self.cable_ids[count] = cable_id;
+            self.cable_peaks[count] = sanitized;
+            self.cable_count = (count + 1) as u8;
+        }
+    }
+
+    /// Set `module_id`'s peak magnitude directly (overwriting any existing value).
+    #[inline]
+    pub fn set_module_peak(&mut self, module_id: u16, peak: f32) {
+        let sanitized = if peak.is_finite() { peak.max(0.0) } else { 0.0 };
+        let count = usize::from(self.module_count).min(MAX_MODULES_PER_ZONE);
+        for i in 0..count {
+            if self.module_ids[i] == module_id {
+                self.module_peaks[i] = sanitized;
+                return;
+            }
+        }
+        if count < MAX_MODULES_PER_ZONE {
+            self.module_ids[count] = module_id;
+            self.module_peaks[count] = sanitized;
+            self.module_count = (count + 1) as u8;
+        }
+    }
+
+    /// Set `cable_id`'s peak magnitude directly (overwriting any existing value).
+    #[inline]
+    pub fn set_cable_peak(&mut self, cable_id: u16, peak: f32) {
+        let sanitized = if peak.is_finite() { peak.max(0.0) } else { 0.0 };
+        let count = usize::from(self.cable_count).min(MAX_CABLES_PER_ZONE);
+        for i in 0..count {
+            if self.cable_ids[i] == cable_id {
+                self.cable_peaks[i] = sanitized;
+                return;
+            }
+        }
+        if count < MAX_CABLES_PER_ZONE {
+            self.cable_ids[count] = cable_id;
+            self.cable_peaks[count] = sanitized;
+            self.cable_count = (count + 1) as u8;
+        }
+    }
+
+    /// Apply uniform exponential decay across all tracked module and cable peaks,
+    /// snapping sub-floor tails strictly to `0.0`.
+    #[inline]
+    pub fn decay_all(&mut self, factor: f32, floor: f32) {
+        let f = if factor.is_finite() {
+            factor.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let mc = usize::from(self.module_count).min(MAX_MODULES_PER_ZONE);
+        for peak in &mut self.module_peaks[..mc] {
+            let next = *peak * f;
+            *peak = if next < floor || !next.is_finite() {
+                0.0
+            } else {
+                next
+            };
+        }
+        let cc = usize::from(self.cable_count).min(MAX_CABLES_PER_ZONE);
+        for peak in &mut self.cable_peaks[..cc] {
+            let next = *peak * f;
+            *peak = if next < floor || !next.is_finite() {
+                0.0
+            } else {
+                next
+            };
+        }
+    }
+
+    /// Merge all module and cable peaks from `other` (preserving max per ID) when
+    /// both track the same `(instrument_id, zone_id)`.
+    pub fn merge_from(&mut self, other: &Self) {
+        if !other.is_for(self.instrument_id, self.zone_id) {
+            return;
+        }
+        let mc = usize::from(other.module_count).min(MAX_MODULES_PER_ZONE);
+        for i in 0..mc {
+            self.merge_module_peak(other.module_ids[i], other.module_peaks[i]);
+        }
+        let cc = usize::from(other.cable_count).min(MAX_CABLES_PER_ZONE);
+        for i in 0..cc {
+            self.merge_cable_peak(other.cable_ids[i], other.cable_peaks[i]);
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct AudioSnapshot {
     pub playing: bool,
@@ -516,6 +748,8 @@ pub struct AudioSnapshot {
     /// Fixed-size zero-alloc live effect metering (e.g. dynamics gain reduction dB).
     pub effect_meters: [EffectMeter; MAX_EFFECT_DEVICES],
     pub effect_meter_count: usize,
+    /// Fixed-size zero-alloc live Eurorack Patchbay per-module and per-cable telemetry.
+    pub rack_activity: RackActivityTelemetry,
     pub pending: bool,
     /// The step the transport triggers next; live boundaries are computed from it.
     pub next_step: u64,
@@ -545,6 +779,7 @@ impl Default for AudioSnapshot {
             channel_meters: Vec::new(),
             effect_meters: [EffectMeter::default(); MAX_EFFECT_DEVICES],
             effect_meter_count: 0,
+            rack_activity: RackActivityTelemetry::default(),
             pending: false,
             next_step: 0,
             health: AudioHealth::default(),
@@ -625,6 +860,32 @@ impl AudioSnapshot {
             .position(|&id| id == track_id)
             .and_then(|index| self.track_waveforms.get(index))
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// Live peak magnitude for `module_id` in `(instrument_id, zone_id)` (`0.0` when unwatched/silent).
+    #[inline]
+    pub fn rack_module_peak(&self, instrument_id: u64, zone_id: u16, module_id: u16) -> f32 {
+        if self.rack_activity.is_for(instrument_id, zone_id) {
+            self.rack_activity.module_peak(module_id)
+        } else {
+            0.0
+        }
+    }
+
+    /// Live peak magnitude for `cable_id` in `(instrument_id, zone_id)` (`0.0` when unwatched/silent).
+    #[inline]
+    pub fn rack_cable_peak(&self, instrument_id: u64, zone_id: u16, cable_id: u16) -> f32 {
+        if self.rack_activity.is_for(instrument_id, zone_id) {
+            self.rack_activity.cable_peak(cable_id)
+        } else {
+            0.0
+        }
+    }
+
+    /// Install a [`RackActivityTelemetry`] snapshot on this [`AudioSnapshot`].
+    #[inline]
+    pub fn set_rack_activity(&mut self, telemetry: RackActivityTelemetry) {
+        self.rack_activity = telemetry;
     }
 }
 
@@ -822,5 +1083,77 @@ mod tests {
             .round_trip_latency_ms(health_48, 48_000, f32::NAN)
             .unwrap();
         assert!((ms_nan - (792.0 * 1000.0 / 48_000.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn rack_activity_telemetry_merges_decays_and_sanitizes_non_finite() {
+        let mut tel = RackActivityTelemetry::for_zone(7, 2);
+        assert!(tel.is_for(7, 2));
+        assert!(!tel.is_for(7, 3));
+        assert!(!tel.is_for(8, 2));
+
+        tel.merge_module_peak(1, 0.4);
+        tel.merge_module_peak(1, 0.9);
+        tel.merge_module_peak(1, 0.2); // lower value must not overwrite higher peak
+        tel.merge_module_peak(2, f32::NAN);
+        tel.merge_cable_peak(10, 0.65);
+        tel.merge_cable_peak(11, -3.0);
+
+        assert!((tel.module_peak(1) - 0.9).abs() < 1e-6);
+        assert_eq!(tel.module_peak(2), 0.0);
+        assert_eq!(tel.module_peak(99), 0.0);
+        assert!((tel.cable_peak(10) - 0.65).abs() < 1e-6);
+        assert_eq!(tel.cable_peak(11), 0.0);
+
+        let mut snap = AudioSnapshot::default();
+        snap.set_rack_activity(tel);
+        assert!((snap.rack_module_peak(7, 2, 1) - 0.9).abs() < 1e-6);
+        assert_eq!(snap.rack_module_peak(7, 1, 1), 0.0);
+        assert!((snap.rack_cable_peak(7, 2, 10) - 0.65).abs() < 1e-6);
+
+        tel.decay_all(0.5, 1e-4);
+        assert!((tel.module_peak(1) - 0.45).abs() < 1e-6);
+        assert!((tel.cable_peak(10) - 0.325).abs() < 1e-6);
+        tel.decay_all(1e-6, 1e-4);
+        assert_eq!(tel.module_peak(1), 0.0);
+        assert_eq!(tel.cable_peak(10), 0.0);
+    }
+
+    #[test]
+    fn sample_bank_sort_dedup_and_binary_search_lookup() {
+        let mk = |name: &str, frames: usize| {
+            Arc::new(SampleData {
+                path_label: format!("{name}.wav"),
+                resolved_path: std::path::PathBuf::from(format!("{name}.wav")),
+                name: name.into(),
+                sample_rate: 48_000,
+                channels: 1,
+                frames,
+                left: vec![0.25; frames].into_boxed_slice(),
+                right: None,
+                peaks: vec![(0.25, 0.25); 1].into_boxed_slice(),
+                meta: crate::sampler::SampleMetadata::default(),
+            })
+        };
+        let mut bank: SampleBank = vec![
+            (30, mk("thirty", 30)),
+            (10, mk("ten-first", 10)),
+            (20, mk("twenty", 20)),
+            (10, mk("ten-dup", 99)),
+        ];
+        sort_sample_bank(&mut bank);
+        assert_eq!(bank.len(), 3);
+        assert_eq!(bank[0].0, 10);
+        assert_eq!(
+            bank[0].1.frames, 10,
+            "stable sort + dedup preserves first entry"
+        );
+        assert_eq!(bank[1].0, 20);
+        assert_eq!(bank[2].0, 30);
+
+        let (idx, data) = lookup_sample_in_bank(&bank, 20).expect("present key");
+        assert_eq!(idx, 1);
+        assert_eq!(data.frames, 20);
+        assert!(lookup_sample_in_bank(&bank, 15).is_none());
     }
 }

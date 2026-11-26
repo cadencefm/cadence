@@ -1,18 +1,20 @@
 //! Headless Metal/wgpu GPU documentation screenshot generator (1440×860).
 //!
-//! Renders all 17 flagship documentation screenshots from the real MIT showcase
+//! Renders all 18 flagship documentation screenshots from the real MIT showcase
 //! projects (`examples/demo/project.json` — Afterglow,
 //! `examples/iron-circuit/project.json` — Iron Circuit, and
 //! `examples/fivefold-live/project.json` + `takes/set.take.jsonl` — Fivefold Live),
 //! backed by real repo-relative MIT factory samples, external `presets/` catalog,
 //! and live 48 kHz engine telemetry computed directly via
-//! `cadence_engine::audio::render_schedule_f32` (channel peaks, headroom flags,
-//! Compressor/Limiter gain reduction, and oscilloscope traces).
+//! `cadence_engine::audio::render_schedule_f32` and
+//! `cadence_engine::audio::render_rack_activity_snapshot` (channel peaks, headroom
+//! flags, Compressor/Limiter gain reduction, Patchbay module/cable activity, and
+//! oscilloscope traces).
 //!
 //! Usage:
-//! - Write all 17 PNGs to `docs/screenshots/`:
+//! - Write all 18 PNGs to `docs/screenshots/`:
 //!   `cargo run --no-default-features --features gui --example render-docs-screenshots`
-//! - Verify all 17 scenes render cleanly without modifying `docs/screenshots/`:
+//! - Verify all 18 scenes render cleanly without modifying `docs/screenshots/`:
 //!   `cargo run --no-default-features --features gui --example render-docs-screenshots -- --check`
 use cadence_app::view::{
     DeckView, DevicesTab, EffectVisualView, FrameView, GraphTarget, InstrumentVisualView,
@@ -39,7 +41,7 @@ use cadence_core::runtime::{
     ChannelMeter, InputMonitorMode, MidiMessage,
 };
 use cadence_core::sampler::{load_sample_file, SampleLibrary};
-use cadence_engine::audio::{render_schedule_f32, RenderReport};
+use cadence_engine::audio::{render_rack_activity_snapshot, render_schedule_f32, RenderReport};
 use cadence_gui::headless::{distinct_pixel_ratio, save_rgba8_png, HeadlessGpu};
 use cadence_gui::theme::Theme;
 use std::path::PathBuf;
@@ -273,6 +275,16 @@ fn snapshot_from_telemetry(
         track_waveforms,
         channel_meters: meters,
         next_step: step + 1,
+        health: AudioHealth {
+            status: AudioStreamStatus::Running,
+            cpu_load: 0.08,
+            peak_cpu_load: 0.14,
+            buffer_frames: 256,
+            channels: 2,
+            bit_depth: 32,
+            sample_format_is_float: true,
+            ..AudioHealth::default()
+        },
         ..AudioSnapshot::default()
     };
 
@@ -352,7 +364,7 @@ fn main() {
     let dark = Theme::cadence_dark();
     let light = Theme::studio_light();
     let neon = Theme::from_id(ThemeId::MidnightNeon);
-    let mut rendered: Vec<(&'static str, Vec<u8>)> = Vec::with_capacity(17);
+    let mut rendered: Vec<(&'static str, Vec<u8>)> = Vec::with_capacity(18);
 
     // -------------------------------------------------------------------------
     // 1. 01-arrange.png — Afterglow (Dark): Arrange + Bank + 32-bit Float Output (Drop 1)
@@ -1009,17 +1021,51 @@ fn main() {
             .validate()
             .expect("expanded Acid 303 Rack validates");
 
+        // Capture real 48 kHz per-module & per-cable Patchbay activity directly from
+        // the production ModularVoice engine on this exact expanded Acid 303 patch!
+        let acid_id = project
+            .instruments
+            .iter()
+            .find(|i| i.name == "Acid 303")
+            .expect("Acid 303 ID")
+            .id;
+        let acid_zone_id = project
+            .instruments
+            .iter()
+            .find(|i| i.id == acid_id)
+            .unwrap()
+            .rack
+            .zones[0]
+            .id;
+        let compiled_pb = project.compile().expect("compile expanded Iron Circuit");
+        let mut pb_lib = SampleLibrary::from_roots(&[], Some(&iron_path));
+        let pb_samples = load_project_samples(&compiled_pb, &mut pb_lib);
+        pb_samples
+            .ensure_ready()
+            .expect("MIT samples for expanded Iron Circuit");
+        let step = 404; // Bar 26 Overload
+        let rack_activity = render_rack_activity_snapshot(
+            &compiled_pb,
+            pb_samples.bank,
+            TELEMETRY_SR,
+            384,
+            step - 384 + 1,
+            acid_id,
+            acid_zone_id,
+        )
+        .expect("capture live Patchbay telemetry");
+
         let library = SampleLibrary::from_roots(&[], Some(&iron_path));
         let mut app = App::new_with_library(project, iron_path, library).unwrap();
-        let step = 404; // Bar 26 Overload
         app.observe_transport(step, step + 1, true, false);
         app.execute_command("instrument \"Acid 303\"").unwrap();
         app.rack_ui.tab = RackTab::Patchbay;
         app.rack_ui.patchbay_cable_id = Some(fb_cable_id);
         app.press_keys("zz").unwrap();
 
-        let snap =
+        let mut snap =
             snapshot_from_telemetry(&iron_telemetry, app.project(), step, 0.35, &iron_scopes);
+        snap.set_rack_activity(rack_activity);
         let fv = app.frame_view(&snap, AUDIO_STATUS);
         let iv = fv
             .decks
@@ -1047,6 +1093,11 @@ fn main() {
                 assert!(
                     rack.patchbay.columns.iter().all(|c| !c.nodes.is_empty()),
                     "All 4 Patchbay columns must be populated"
+                );
+                assert!(
+                    rack.patchbay.nodes.iter().any(|n| n.activity > 0.05)
+                        && rack.patchbay.cables.iter().any(|c| c.activity > 0.05),
+                    "Patchbay showcase must render live engine-captured module & cable activity"
                 );
             }
             other => panic!("expected Rack Patchbay visual, got {other:?}"),
@@ -1364,8 +1415,95 @@ fn main() {
         rendered.push(("17-settings-neon.png", px));
     }
 
-    // Confirm all 17 rendered screenshots are unique frames.
-    assert_eq!(rendered.len(), 17);
+    // -------------------------------------------------------------------------
+    // 18. 18-sample-deck.png — Afterglow (Dark): Sample / Waveform & Slicer Deck (`gw`)
+    // -------------------------------------------------------------------------
+    {
+        let demo_path = repo_root().join("examples/demo/project.json");
+        let mut project = cadence_app::load_project(&demo_path).expect("load Afterglow");
+        let master_or_lead_ch = project
+            .mixer
+            .channels
+            .iter()
+            .find(|c| c.name == "Chords" || c.name == "Lead")
+            .map_or(0, |c| c.id);
+        let inst_id = 999_001;
+        let mut rack = cadence_core::rack::RackPatch::default_sampler();
+        rack.kit_name = "Brass Pad".into();
+        if let Some(cadence_core::rack::ModuleKind::Sampler(smp)) = rack
+            .zones
+            .first_mut()
+            .and_then(|z| z.modules.first_mut())
+            .map(|m| &mut m.kind)
+        {
+            smp.path = Some("samples/brass-pad.wav".into());
+            smp.sample_start = 2_400;
+            smp.sample_end = 71_500;
+            smp.loop_mode = cadence_core::sampler::SampleLoopMode::Forward;
+            smp.loop_start = 16_800;
+            smp.loop_end = 56_400;
+            smp.loop_xfade_ms = 18.0;
+            smp.one_shot = false;
+            smp.slices = vec![
+                cadence_core::sampler::SampleSlice::new(2_400, Some("Attack".into())),
+                cadence_core::sampler::SampleSlice::new(16_800, Some("Swell".into())),
+                cadence_core::sampler::SampleSlice::new(38_400, Some("Sustain".into())),
+                cadence_core::sampler::SampleSlice::new(56_400, Some("Tail".into())),
+            ];
+        }
+        project
+            .instruments
+            .push(cadence_core::material::InstrumentInstance {
+                id: inst_id,
+                name: "Brass Pad".into(),
+                channel: master_or_lead_ch,
+                rack,
+            });
+        project.validate().expect("Afterglow + Brass Pad validates");
+
+        let library = SampleLibrary::from_roots(&[], Some(&demo_path));
+        let mut app = App::new_with_library(project, demo_path, library).unwrap();
+        assert!(app.ready(), "Brass Pad MIT sample must load cleanly");
+
+        let step = 404;
+        app.observe_transport(step, step + 1, true, false);
+        app.execute_command("instrument \"Brass Pad\"").unwrap();
+        // Open Sample / Waveform & Slicer Deck full-screen and focus slice 2 ('Swell').
+        app.press_keys("gwzz0ww").unwrap();
+
+        let snap = snapshot_from_telemetry(
+            &afterglow_telemetry,
+            app.project(),
+            step,
+            0.35,
+            &afterglow_scopes,
+        );
+        let fv = app.frame_view(&snap, AUDIO_STATUS);
+        let sv = fv
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Sample(s) => Some(s),
+                _ => None,
+            })
+            .expect("SampleDeckView for Brass Pad");
+        assert!(sv.loaded, "Sample deck must load MIT brass-pad.wav");
+        assert_eq!(
+            sv.slices.len(),
+            4,
+            "Sample deck showcase must show 4 slices"
+        );
+        assert_eq!(
+            sv.active_slice_idx,
+            Some(1),
+            "Slice 2 ('Swell') must be active"
+        );
+        let px = render_and_verify(&mut gpu, "18-sample-deck.png", &fv, &dark, write_pngs);
+        rendered.push(("18-sample-deck.png", px));
+    }
+
+    // Confirm all 18 rendered screenshots are unique frames.
+    assert_eq!(rendered.len(), 18);
     for (i, (name_a, px_a)) in rendered.iter().enumerate() {
         for (name_b, px_b) in &rendered[i + 1..] {
             assert_ne!(

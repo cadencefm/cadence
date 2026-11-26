@@ -2,11 +2,13 @@
 use super::*;
 use crate::mix_engine::{score_effect_specs, ActiveEffect, PreparedEffect};
 use cadence_core::mixer::{EffectKindTag, MAX_EFFECT_DEVICES};
-use cadence_core::rack::{CompiledZoneGraph, RackPatch, RackZone};
+use cadence_core::rack::{
+    CompiledZoneGraph, RackPatch, RackZone, MAX_CABLES_PER_ZONE, MAX_MODULES_PER_ZONE,
+};
 use cadence_core::runtime::{
     AudioErrorCode, AudioHealth, AudioInputMode, AudioInputStatus, AudioInputTelemetry,
-    AudioStreamStatus, CapturePhase, EffectMeter, InputMonitorMode, MAX_AUDIO_SAMPLE_RATE,
-    MIN_AUDIO_SAMPLE_RATE,
+    AudioStreamStatus, CapturePhase, EffectMeter, InputMonitorMode, RackActivityTelemetry,
+    MAX_AUDIO_SAMPLE_RATE, MIN_AUDIO_SAMPLE_RATE,
 };
 use std::ptr;
 use std::sync::atomic::{
@@ -350,6 +352,85 @@ impl SharedEffectMeter {
     }
 }
 
+pub(super) struct SharedRackActivity {
+    pub(super) instrument_id: AtomicU64,
+    pub(super) zone_id: AtomicU16,
+    pub(super) module_count: AtomicU8,
+    pub(super) cable_count: AtomicU8,
+    pub(super) module_ids: [AtomicU16; MAX_MODULES_PER_ZONE],
+    pub(super) module_peaks: [AtomicU32; MAX_MODULES_PER_ZONE],
+    pub(super) cable_ids: [AtomicU16; MAX_CABLES_PER_ZONE],
+    pub(super) cable_peaks: [AtomicU32; MAX_CABLES_PER_ZONE],
+}
+
+impl SharedRackActivity {
+    pub(super) fn new() -> Self {
+        Self {
+            instrument_id: AtomicU64::new(0),
+            zone_id: AtomicU16::new(0),
+            module_count: AtomicU8::new(0),
+            cable_count: AtomicU8::new(0),
+            module_ids: std::array::from_fn(|_| AtomicU16::new(0)),
+            module_peaks: std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())),
+            cable_ids: std::array::from_fn(|_| AtomicU16::new(0)),
+            cable_peaks: std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())),
+        }
+    }
+
+    pub(super) fn write(&self, telemetry: &RackActivityTelemetry) {
+        if !telemetry.is_active() {
+            if self.instrument_id.load(Ordering::Relaxed) != 0 {
+                self.clear();
+            }
+            return;
+        }
+        let mc = usize::from(telemetry.module_count).min(MAX_MODULES_PER_ZONE);
+        let cc = usize::from(telemetry.cable_count).min(MAX_CABLES_PER_ZONE);
+        self.instrument_id
+            .store(telemetry.instrument_id, Ordering::Relaxed);
+        self.zone_id.store(telemetry.zone_id, Ordering::Relaxed);
+        self.module_count.store(mc as u8, Ordering::Relaxed);
+        self.cable_count.store(cc as u8, Ordering::Relaxed);
+        for i in 0..mc {
+            self.module_ids[i].store(telemetry.module_ids[i], Ordering::Relaxed);
+            self.module_peaks[i].store(telemetry.module_peaks[i].to_bits(), Ordering::Relaxed);
+        }
+        for i in 0..cc {
+            self.cable_ids[i].store(telemetry.cable_ids[i], Ordering::Relaxed);
+            self.cable_peaks[i].store(telemetry.cable_peaks[i].to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    pub(super) fn clear(&self) {
+        self.instrument_id.store(0, Ordering::Relaxed);
+        self.zone_id.store(0, Ordering::Relaxed);
+        self.module_count.store(0, Ordering::Relaxed);
+        self.cable_count.store(0, Ordering::Relaxed);
+    }
+
+    pub(super) fn read(&self) -> RackActivityTelemetry {
+        let instrument_id = self.instrument_id.load(Ordering::Relaxed);
+        if instrument_id == 0 {
+            return RackActivityTelemetry::default();
+        }
+        let zone_id = self.zone_id.load(Ordering::Relaxed);
+        let mc = usize::from(self.module_count.load(Ordering::Relaxed)).min(MAX_MODULES_PER_ZONE);
+        let cc = usize::from(self.cable_count.load(Ordering::Relaxed)).min(MAX_CABLES_PER_ZONE);
+        let mut out = RackActivityTelemetry::for_zone(instrument_id, zone_id);
+        out.module_count = mc as u8;
+        out.cable_count = cc as u8;
+        for i in 0..mc {
+            out.module_ids[i] = self.module_ids[i].load(Ordering::Relaxed);
+            out.module_peaks[i] = f32::from_bits(self.module_peaks[i].load(Ordering::Relaxed));
+        }
+        for i in 0..cc {
+            out.cable_ids[i] = self.cable_ids[i].load(Ordering::Relaxed);
+            out.cable_peaks[i] = f32::from_bits(self.cable_peaks[i].load(Ordering::Relaxed));
+        }
+        out
+    }
+}
+
 /// Apple Silicon L1/L2 cache line size (also provides 2× isolation on 64-byte x86-64 lines).
 const CACHE_LINE_BYTES: usize = 128;
 
@@ -368,6 +449,8 @@ pub(super) struct Shared {
     pub(super) clear_all_meters: AtomicBool,
     pub(super) release_all_requested: AtomicBool,
     pub(super) tap_enabled: AtomicBool,
+    pub(super) rack_watch_inst_id: AtomicU64,
+    pub(super) rack_watch_zone_id: AtomicU16,
     pub(super) sample_format_is_float: AtomicBool,
     pub(super) channels: AtomicU16,
     pub(super) bit_depth: AtomicU16,
@@ -400,6 +483,7 @@ pub(super) struct Shared {
     pub(super) track_ids: [AtomicU64; MAX_INSTRUMENTS],
     pub(super) mixer_meters: Box<[SharedChannelMeter]>,
     pub(super) effect_meters: Box<[SharedEffectMeter]>,
+    pub(super) rack_activity: Box<SharedRackActivity>,
     pub(super) track_waveform: Box<[[AtomicU32; SCOPE_BUFFER_SAMPLES]]>,
     pub(super) note_owners: Box<[[AtomicU64; 128]]>,
     pub(super) note_owned: Box<[[AtomicBool; 128]]>,
@@ -529,6 +613,7 @@ impl Shared {
             .map(|_| SharedEffectMeter::new())
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let rack_activity = Box::new(SharedRackActivity::new());
         let track_waveform = (0..MAX_INSTRUMENTS)
             .map(|_| std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())))
             .collect::<Vec<_>>()
@@ -570,6 +655,8 @@ impl Shared {
             clear_all_meters: AtomicBool::new(false),
             release_all_requested: AtomicBool::new(false),
             tap_enabled: AtomicBool::new(false),
+            rack_watch_inst_id: AtomicU64::new(0),
+            rack_watch_zone_id: AtomicU16::new(0),
             sample_format_is_float: AtomicBool::new(false),
             channels: AtomicU16::new(0),
             bit_depth: AtomicU16::new(0),
@@ -598,6 +685,7 @@ impl Shared {
             track_ids: std::array::from_fn(|_| AtomicU64::new(0)),
             mixer_meters,
             effect_meters,
+            rack_activity,
             track_waveform,
             note_owners,
             note_owned,
@@ -882,6 +970,7 @@ impl Shared {
         self.peak.store(0.0_f32.to_bits(), Ordering::Relaxed);
         self.peak_left.store(0.0_f32.to_bits(), Ordering::Relaxed);
         self.peak_right.store(0.0_f32.to_bits(), Ordering::Relaxed);
+        self.rack_activity.clear();
         for sample in self.waveform.iter() {
             sample.store(0.0_f32.to_bits(), Ordering::Relaxed);
         }

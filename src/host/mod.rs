@@ -102,6 +102,7 @@ pub fn start_audio_with_config(
         request.clone(),
     ) {
         Ok(mut engine) => {
+            engine.set_rack_activity_watch(app.active_patchbay_target());
             // Softly open persisted audio input stream if configured (never fails startup if unplugged).
             if !silent && app.config.audio_input_device.is_some() {
                 let _ = engine.configure_input(app.config.audio_input_request());
@@ -109,12 +110,17 @@ pub fn start_audio_with_config(
             let warning = (!silent).then(|| engine.last_error()).flatten();
             Ok((engine, warning))
         }
-        Err(error) if !silent => Ok((
-            AudioRuntime::start_with_config(app.audio_project().clone(), bank, true, request)?,
-            Some(format!(
-                "Audio unavailable ({error}); silent synth active. WAV export still works."
-            )),
-        )),
+        Err(error) if !silent => {
+            let engine =
+                AudioRuntime::start_with_config(app.audio_project().clone(), bank, true, request)?;
+            engine.set_rack_activity_watch(app.active_patchbay_target());
+            Ok((
+                engine,
+                Some(format!(
+                    "Audio unavailable ({error}); silent synth active. WAV export still works."
+                )),
+            ))
+        }
         Err(error) => Err(error),
     }
 }
@@ -345,6 +351,7 @@ fn sync_audio_runtime(
             out.project_boundary,
         )?;
     }
+    engine.set_rack_activity_watch(app.active_patchbay_target());
     // Arm audio capture BEFORE dispatching TransportIntent::Play so step 0 is never missed
     // when starting transport from a stopped state.
     if let Some(cmd @ RecordingHostCommand::Arm { .. }) = &out.recording_command {

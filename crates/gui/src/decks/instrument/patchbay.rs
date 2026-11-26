@@ -2,11 +2,13 @@
 //! strictly to [`crate::decks::cable_graph`] (SPOT) plus footer summary & compact live scope.
 use super::{draw_compact_scope_strip, module_tag_accent};
 use crate::decks::cable_graph::{
-    draw_cable_graph, draw_cable_legend, CableColumn, CableEdge, CableGraph, CableNode,
+    audio_activity_norm, draw_cable_graph, draw_cable_legend, CableColumn, CableEdge, CableGraph,
+    CableNode,
 };
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
 use cadence_app::view::{PatchbayCableKind, PatchbayDeckView};
+use cadence_core::rack::ModuleKindTag;
 
 pub(super) fn draw_patchbay_tab(
     dl: &mut DisplayList,
@@ -57,12 +59,18 @@ pub(super) fn draw_patchbay_tab(
                 .nodes
                 .iter()
                 .map(|node| {
+                    let activity = match node.kind {
+                        ModuleKindTag::Env | ModuleKindTag::Lfo => node.activity.clamp(0.0, 1.0),
+                        _ => audio_activity_norm(node.activity),
+                    };
                     let mut cn = CableNode::new(
                         &node.name,
                         node.badge,
                         &node.detail,
                         module_tag_accent(node.kind, theme),
                     );
+                    cn.activity = activity;
+                    cn.hot = node.hot;
                     cn.selected = node.selected;
                     cn.in_path = node.in_path;
                     cn
@@ -76,6 +84,10 @@ pub(super) fn draw_patchbay_tab(
         .cables
         .iter()
         .map(|cable| {
+            let activity = match cable.kind {
+                PatchbayCableKind::Audio => audio_activity_norm(cable.activity),
+                _ => cable.activity.clamp(0.0, 1.0),
+            };
             CableEdge::new(
                 cable.from_col,
                 cable.from_row,
@@ -87,6 +99,7 @@ pub(super) fn draw_patchbay_tab(
             .with_label(Some(&cable.label))
             .with_dashed(cable.feedback)
             .with_selected(cable.selected)
+            .with_activity(activity)
             .with_ports(0.5, cable.to_port_y)
         })
         .collect();

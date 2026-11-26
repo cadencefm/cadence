@@ -20,11 +20,11 @@ pub use compile::{
     compile_zone_graph, CompiledCable, CompiledOp, CompiledZoneGraph, PATCHBAY_COLUMNS,
 };
 pub use modules::{
-    cable_amount_range, cable_amount_unit, cable_default_amount, denormalize_cable_amount,
-    format_cable_amount, normalize_cable_amount, nudge_cable_amount, parse_cable_amount,
-    DriveModule, EnvModule, FilterModule, LfoModule, LoFiModule, ModuleKind, ModuleKindTag,
-    NoiseModule, OutModule, ResonatorModule, SamplerModule, SamplerParams, VcaModule, VcoModule,
-    OUT_MAX_GAIN_DB, OUT_MIN_GAIN_DB,
+    cable_amount_range, cable_amount_unit, cable_default_amount, cable_signal_level,
+    denormalize_cable_amount, format_cable_amount, normalize_cable_amount, nudge_cable_amount,
+    parse_cable_amount, DriveModule, EnvModule, FilterModule, LfoModule, LoFiModule, ModuleKind,
+    ModuleKindTag, NoiseModule, OutModule, ResonatorModule, SamplerModule, SamplerParams,
+    VcaModule, VcoModule, OUT_MAX_GAIN_DB, OUT_MIN_GAIN_DB,
 };
 pub use params::{ModuleParam, RackParam, ZoneParam, LFO_DIVISIONS, LFO_DIVISION_LABELS};
 pub use types::{

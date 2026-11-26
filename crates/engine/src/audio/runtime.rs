@@ -12,9 +12,10 @@ use cadence_core::dsp::{hann_fade_out, sanitize_sample, stereo_mid_f32, AUDIO_SU
 use cadence_core::mixer::MAX_EFFECT_DEVICES;
 use cadence_core::rack::{compile_zone_graph, ModuleKind, RackPatch, RackZone, SampleLoopMode};
 use cadence_core::runtime::{
-    default_auto_buffer_frames, AudioErrorCode, AudioInputRequest, AudioInputStatus,
-    AudioInventory, AudioStreamRequest, CaptureArmSpec, CapturePhase, EffectMeter,
-    MAX_AUDIO_BUFFER_FRAMES, MAX_AUDIO_SAMPLE_RATE, MIN_AUDIO_BUFFER_FRAMES, MIN_AUDIO_SAMPLE_RATE,
+    default_auto_buffer_frames, sort_sample_bank, AudioErrorCode, AudioInputRequest,
+    AudioInputStatus, AudioInventory, AudioStreamRequest, CaptureArmSpec, CapturePhase,
+    EffectMeter, RackActivityTelemetry, MAX_AUDIO_BUFFER_FRAMES, MAX_AUDIO_SAMPLE_RATE,
+    MIN_AUDIO_BUFFER_FRAMES, MIN_AUDIO_SAMPLE_RATE,
 };
 #[cfg(feature = "audio")]
 use cadence_core::runtime::{AudioDeviceInfo, STANDARD_SAMPLE_RATES};
@@ -965,10 +966,13 @@ impl AudioRuntime {
     pub fn replace_project_with_assets(
         &self,
         project: ScoreWindow,
-        samples: Option<SampleBank>,
+        mut samples: Option<SampleBank>,
         project_boundary: bool,
     ) -> Result<()> {
         project.validate()?;
+        if let Some(bank) = samples.as_mut() {
+            sort_sample_bank(bank);
+        }
         if !self.shared.alive.load(Ordering::Acquire) {
             bail!("audio runtime is shut down");
         }
@@ -1160,6 +1164,24 @@ impl AudioRuntime {
         true
     }
 
+    /// Configure which Eurorack Modular Rack `(instrument_id, zone_id)` publishes live
+    /// per-module and per-cable Patchbay activity telemetry (`None` disables telemetry
+    /// collection with zero audio-thread overhead).
+    pub fn set_rack_activity_watch(&self, target: Option<(u64, u16)>) {
+        let (inst_id, zone_id) = target.unwrap_or((0, 0));
+        if self.shared.rack_watch_inst_id.load(Ordering::Relaxed) == inst_id
+            && self.shared.rack_watch_zone_id.load(Ordering::Relaxed) == zone_id
+        {
+            return;
+        }
+        self.shared
+            .rack_watch_zone_id
+            .store(zone_id, Ordering::Release);
+        self.shared
+            .rack_watch_inst_id
+            .store(inst_id, Ordering::Release);
+    }
+
     pub fn snapshot(&self) -> AudioSnapshot {
         self.shared.reclaim_all();
         let end = self.shared.wave_write.load(Ordering::Acquire);
@@ -1215,6 +1237,7 @@ impl AudioRuntime {
         let mut channel_meters = Vec::new();
         let mut effect_meters = [EffectMeter::default(); MAX_EFFECT_DEVICES];
         let mut effect_meter_count = 0usize;
+        let mut rack_activity = RackActivityTelemetry::default();
         for _ in 0..3 {
             let gen1 = self.shared.mixer_meter_generation.load(Ordering::Acquire);
             if !gen1.is_multiple_of(2) {
@@ -1237,12 +1260,14 @@ impl AudioRuntime {
                     }
                 }
             }
+            let ra = self.shared.rack_activity.read();
             fence(Ordering::Acquire);
             let gen2 = self.shared.mixer_meter_generation.load(Ordering::Relaxed);
             if gen1 == gen2 {
                 channel_meters = cm;
                 effect_meters = em;
                 effect_meter_count = em_count;
+                rack_activity = ra;
                 break;
             }
         }
@@ -1255,6 +1280,7 @@ impl AudioRuntime {
             channel_meters,
             effect_meters,
             effect_meter_count,
+            rack_activity,
             playing: self.shared.playing.load(Ordering::Acquire),
             absolute_step,
             step_fraction,

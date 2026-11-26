@@ -8,6 +8,7 @@ use cadence_core::dsp::{
     AUDIO_SUB_BLOCK_FRAMES,
 };
 use cadence_core::rack::FilterMode;
+use cadence_core::runtime::RackActivityTelemetry;
 use cadence_core::sampler::SampleData;
 use std::sync::Arc;
 
@@ -228,6 +229,7 @@ impl Voice {
         preview: Option<&Arc<SampleData>>,
         out_src: &mut [[f32; 2]],
         mut out_scope: Option<&mut [f32]>,
+        rack_activity: Option<&mut RackActivityTelemetry>,
     ) {
         let frames = out_src.len().min(AUDIO_SUB_BLOCK_FRAMES);
         if !self.active || frames == 0 {
@@ -235,9 +237,12 @@ impl Voice {
         }
 
         let mut raw_buf = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
-        let mod_frames = self
-            .modular
-            .render_block(bank, preview, &mut raw_buf[..frames]);
+        let mod_frames = self.modular.render_block_with_activity(
+            bank,
+            preview,
+            &mut raw_buf[..frames],
+            rack_activity,
+        );
 
         let settled = self.gain_scale.is_settled()
             && self.rack_pan_sm.is_settled()

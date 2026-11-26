@@ -1185,14 +1185,7 @@ impl App {
         self.doc
             .adopt(project, flags, compiled, base, path, is_new)?;
         if !self.assets.custom_presets {
-            self.assets.presets =
-                self.io
-                    .discover_presets(&[], Some(self.doc.save_path()), &self.config);
-            let groove_roots = self.filter_groove_search_roots();
-            let grooves = self.io.load_filter_grooves(&groove_roots);
-            self.assets.filter_grooves = grooves;
-            self.doc
-                .set_filter_grooves_bank(self.assets.filter_grooves.compiled_bank());
+            self.reload_presets();
         }
         let mut out = self.reset_session_for_document(true)?;
         if cancel_rec.recording_command.is_some() {
