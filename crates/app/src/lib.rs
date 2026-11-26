@@ -792,6 +792,11 @@ impl App {
     pub fn scope_instrument(&self) -> Option<Id> {
         self.detail_instrument()
             .filter(|_| self.deck_active())
+            .or_else(|| {
+                self.sample_deck_focused()
+                    .then(|| self.focused_sample_target().map(|(id, _, _)| id))
+                    .flatten()
+            })
             .or_else(|| self.live.audition.map(|a| a.instrument))
             .or(self.selected_instrument)
     }

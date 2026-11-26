@@ -629,3 +629,103 @@ fn sample_deck_live_recording_monitor_targets_active_zone_and_lands_back_in_samp
         "loaded Sample Deck returns cleanly to waveform editor once recording finishes"
     );
 }
+
+#[test]
+fn sample_deck_param_command_targets_focused_sampler_and_rack_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let wav_a = dir.path().join("samples/pad_a.wav");
+    let wav_b = dir.path().join("samples/pad_b.wav");
+    write_four_hit_break_wav(&wav_a, 48_000, false);
+    write_four_hit_break_wav(&wav_b, 48_000, false);
+
+    let save_path = dir.path().join("project.json");
+    let lib = SampleLibrary::from_roots_only(&[dir.path().join("samples")], Some(&save_path));
+    let mut app = App::new_with_library(Project::demo(), save_path, lib).unwrap();
+
+    // 1. Single-zone Sampler focused on Sample Deck (`gw`): bare `:param` sets both Sampler
+    //    module parameters AND Rack-level fallback parameters cleanly.
+    app.execute_command("sampler LeadSmp samples/pad_a.wav")
+        .unwrap();
+    app.press_keys("gw").unwrap();
+    assert!(app.sample_deck_focused());
+    let single_id = app
+        .project()
+        .instruments
+        .iter()
+        .find(|i| i.name == "LeadSmp")
+        .unwrap()
+        .id;
+    assert_eq!(app.scope_instrument(), Some(single_id));
+
+    app.execute_command("param sample_start 1200").unwrap();
+    app.execute_command("param sample_end 40000").unwrap();
+    app.execute_command("param loop_mode forward").unwrap();
+    app.execute_command("param loop_start 4800").unwrap();
+    app.execute_command("param loop_end 24000").unwrap();
+    app.execute_command("param loop_xfade 14ms").unwrap();
+    app.execute_command("param gain -3dB").unwrap();
+    app.execute_command("param rack.gain -4.5dB").unwrap();
+
+    let single = app.instrument(single_id).unwrap();
+    assert!((single.rack.zones[0].gain_db - (-3.0)).abs() < 0.05);
+    assert!((single.rack.gain_db - (-4.5)).abs() < 0.05);
+    let smp = match &single.rack.zones[0].modules[0].kind {
+        ModuleKind::Sampler(s) => s,
+        other => panic!("expected Sampler module, got {other:?}"),
+    };
+    assert_eq!(smp.sample_start, 1_200);
+    assert_eq!(smp.sample_end, 40_000);
+    assert_eq!(smp.loop_mode, SampleLoopMode::Forward);
+    assert_eq!(smp.loop_start, 4_800);
+    assert_eq!(smp.loop_end, 24_000);
+    assert!((smp.loop_xfade_ms - 14.0).abs() < 0.1);
+
+    // 2. Multi-zone Kit focused on Zone 2 in Sample Deck (`gw`): bare `:param sample_start`
+    //    unambiguously updates Zone 2's Sampler without modifying Zone 1.
+    app.execute_command("kit DualKit").unwrap();
+    app.execute_command("zone sample samples/pad_a.wav")
+        .unwrap();
+    app.execute_command("zone add Rim 38 sample samples/pad_b.wav")
+        .unwrap();
+    app.execute_command("zone select Rim").unwrap();
+    app.press_keys("gw").unwrap();
+    assert!(app.sample_deck_focused());
+
+    app.execute_command("param sample_start 2048").unwrap();
+    app.execute_command("param loop_mode ping_pong").unwrap();
+
+    let kit = app
+        .project()
+        .instruments
+        .iter()
+        .find(|i| i.name == "DualKit")
+        .unwrap();
+    let z1_smp = kit.rack.zones[0]
+        .modules
+        .iter()
+        .find_map(|m| match &m.kind {
+            ModuleKind::Sampler(s) => Some(s),
+            _ => None,
+        })
+        .expect("Zone 1 Sampler");
+    let z2_smp = kit
+        .rack
+        .zones
+        .iter()
+        .find(|z| z.name == "Rim")
+        .expect("Rim zone")
+        .modules
+        .iter()
+        .find_map(|m| match &m.kind {
+            ModuleKind::Sampler(s) => Some(s),
+            _ => None,
+        })
+        .expect("Rim zone Sampler");
+    assert_eq!(z1_smp.sample_start, 0, "Zone 1 must remain untouched");
+    assert_eq!(z1_smp.loop_mode, SampleLoopMode::Off);
+    assert_eq!(
+        z2_smp.sample_start, 2_048,
+        "Zone 2 Sampler must receive bare :param while focused in Sample Deck"
+    );
+    assert_eq!(z2_smp.loop_mode, SampleLoopMode::PingPong);
+}
