@@ -1138,12 +1138,40 @@ impl App {
                 value: native,
             });
         }
+        if self.sample_deck_focused() && cadence_core::rack::RackParam::parse(name).is_none() {
+            if let Some((inst_id, zone_id, mod_id)) = self.focused_sample_target() {
+                if let Some(param) = cadence_core::rack::ModuleParam::parse_for_kind(
+                    name,
+                    cadence_core::rack::ModuleKindTag::Sampler,
+                ) {
+                    let address = ParamAddress::from_instrument(
+                        inst_id,
+                        InstrumentParam::Module {
+                            zone: zone_id,
+                            module: mod_id,
+                            param,
+                        },
+                    );
+                    let native = self.parse_param_native(address, value)?;
+                    return self.apply(Action::SetParam {
+                        address,
+                        value: native,
+                    });
+                }
+            }
+        }
         let target_detail = if self.deck_active() {
             self.detail
+        } else if self.sample_deck_focused() {
+            self.focused_sample_target()
+                .map(|(inst_id, _, _)| Detail::Instrument(inst_id))
+                .context("Open the instrument, sample, effect or channel deck before entering its parameter")?
         } else if self.mixer_canvas_focused() {
             Detail::Channel(self.selected_channel)
         } else {
-            bail!("Open the instrument, effect or channel deck before entering its parameter");
+            bail!(
+                "Open the instrument, sample, effect or channel deck before entering its parameter"
+            );
         };
         match target_detail {
             Detail::Instrument(id) => {
