@@ -13,7 +13,7 @@ use cadence_core::rack::{
     module_sample_key, ModuleKind, ModuleParam, PitchTracking, RackPatch, RackZone, VoiceMode,
     VoiceSettings,
 };
-use cadence_core::runtime::RackActivityTelemetry;
+use cadence_core::runtime::{lookup_sample_in_bank, RackActivityTelemetry};
 use cadence_core::score::{ParamLock, ScoreEvent, ScoreWindow, MAX_INSTRUMENTS};
 use std::sync::Arc;
 
@@ -59,10 +59,7 @@ pub(super) struct ZoneTriggerCtx<'a> {
 impl ZoneTriggerCtx<'_> {
     #[inline]
     fn sample_frames(&self, key: u64) -> usize {
-        self.samples
-            .iter()
-            .find(|(id, _)| *id == key)
-            .map_or(0, |(_, s)| s.frames)
+        lookup_sample_in_bank(self.samples, key).map_or(0, |(_, s)| s.frames)
     }
 }
 

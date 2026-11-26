@@ -834,11 +834,14 @@ impl App {
             .resolve_path_with(locator, |p| self.io.is_file(p))
     }
     pub fn sample_bank(&self) -> SampleBank {
-        self.assets
+        let mut bank: SampleBank = self
+            .assets
             .samples
             .iter()
             .map(|(&id, s)| (id, Arc::clone(s)))
-            .collect()
+            .collect();
+        cadence_core::runtime::sort_sample_bank(&mut bank);
+        bank
     }
     pub fn sample_issues(&self) -> &[SampleIssue] {
         &self.assets.issues
@@ -1424,12 +1427,7 @@ impl App {
         self.settings_ui.config_dirty = false;
         self.settings_ui.persist_on_change = true;
         if !self.assets.custom_presets {
-            self.assets.presets =
-                self.io
-                    .discover_presets(&[], Some(self.doc.save_path()), &self.config);
-            let groove_roots = self.filter_groove_search_roots();
-            let grooves = self.io.load_filter_grooves(&groove_roots);
-            self.set_filter_grooves(grooves);
+            self.reload_presets();
         }
         self.follow
             .set_enabled(cfg.default_follow == FollowMode::Active);

@@ -15,7 +15,9 @@ use cadence_core::dsp::{
     TAIL_SILENCE_FLOOR_F32,
 };
 use cadence_core::mixer::{ChannelRef, MAX_EFFECT_DEVICES};
-use cadence_core::runtime::{AudioInputStatus, CapturePhase, RackActivityTelemetry};
+use cadence_core::runtime::{
+    sort_sample_bank, AudioInputStatus, CapturePhase, RackActivityTelemetry,
+};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
 use std::sync::atomic::{fence, Ordering};
 use std::sync::Arc;
@@ -98,11 +100,12 @@ impl Engine {
 
     pub(super) fn new_at_step(
         project: ScoreWindow,
-        samples: SampleBank,
+        mut samples: SampleBank,
         sample_rate: u32,
         start_step: u64,
         shared: Arc<Shared>,
     ) -> Self {
+        sort_sample_bank(&mut samples);
         let mixer = MixerEngine::new(&project, sample_rate);
         shared.publish_input_tracks(&project);
         shared.sample_rate.store(sample_rate, Ordering::Release);

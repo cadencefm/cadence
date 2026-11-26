@@ -6,7 +6,7 @@ use cadence_core::assets::ensure_sample_bank_ready;
 use cadence_core::dsp::{sanitize_sample, AUDIO_SUB_BLOCK_FRAMES};
 use cadence_core::mixer::{ChannelRef, EffectKind, MAX_MIXER_CHANNELS};
 use cadence_core::music::STEPS_PER_BAR;
-use cadence_core::runtime::{RackActivityTelemetry, SampleBank};
+use cadence_core::runtime::{sort_sample_bank, RackActivityTelemetry, SampleBank};
 use cadence_core::score::ScoreWindow;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -216,13 +216,14 @@ pub fn render_schedule_f32(
 /// captured at the end of the rendered window.
 pub fn render_rack_activity_snapshot(
     project: &ScoreWindow,
-    samples: SampleBank,
+    mut samples: SampleBank,
     sample_rate: u32,
     start_step: u64,
     steps: u64,
     instrument_id: u64,
     zone_id: u16,
 ) -> Result<RackActivityTelemetry> {
+    sort_sample_bank(&mut samples);
     let schedule = [(0u64, project)];
     let frames = validate_render_schedule(&schedule, start_step, steps, &samples, sample_rate)?;
     let shared = Shared::new_arc();
@@ -253,10 +254,11 @@ pub fn render_schedule_report(
     schedule: &[(u64, &ScoreWindow)],
     start_step: u64,
     steps: u64,
-    samples: SampleBank,
+    mut samples: SampleBank,
     path: impl AsRef<Path>,
     sample_rate: u32,
 ) -> Result<RenderReport> {
+    sort_sample_bank(&mut samples);
     let frames = validate_render_schedule(schedule, start_step, steps, &samples, sample_rate)?;
     write_stereo_wav_atomic(path.as_ref(), sample_rate, 16, frames, |writer| {
         render_schedule_validated(
@@ -438,10 +440,11 @@ fn render_schedule_inner(
     schedule: &[(u64, &ScoreWindow)],
     start_step: u64,
     steps: u64,
-    samples: SampleBank,
+    mut samples: SampleBank,
     sample_rate: u32,
     sink: impl FnMut([f32; 2], [i16; 2]) -> Result<()>,
 ) -> Result<RenderReport> {
+    sort_sample_bank(&mut samples);
     let frames = validate_render_schedule(schedule, start_step, steps, &samples, sample_rate)?;
     render_schedule_validated(
         schedule,

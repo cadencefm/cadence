@@ -2362,7 +2362,7 @@ fn engine_and_mixer_multi_sample_rate_stability_pdc_and_zero_rt_allocs() {
         assert!(peak > 0.05, "expected audible mix at {sr} Hz, got {peak}");
     }
 
-    // Verify SamplerNode cached_bank_idx seamlessly recovers if the SampleBank order changes mid-voice.
+    // Verify SamplerNode cached_bank_idx seamlessly recovers when a sorted SampleBank shifts slot indices mid-voice.
     let mut smp_zone = RackPatch::default_sampler().zones.remove(0);
     if let ModuleKind::Sampler(ref mut smp) = smp_zone.modules[0].kind {
         smp.path = Some("./test.wav".into());
@@ -2373,7 +2373,10 @@ fn engine_and_mixer_multi_sample_rate_stability_pdc_and_zero_rt_allocs() {
     let decoy = synthetic_sample(256, 48_000, 110.0);
     let smp_key = module_sample_key(2, 1, 1);
     let bank_a = vec![(111, Arc::clone(&decoy)), (smp_key, Arc::clone(&sample))];
-    let bank_b = vec![(smp_key, Arc::clone(&sample)), (111, Arc::clone(&decoy))];
+    let bank_b = vec![
+        (smp_key, Arc::clone(&sample)),
+        (u64::MAX, Arc::clone(&decoy)),
+    ];
     let mut voice = crate::modular_voice::ModularVoice::new_boxed(
         &crate::modular_voice::ZoneTriggerSpec {
             inst_id: 2,

@@ -12,10 +12,10 @@ use cadence_core::dsp::{hann_fade_out, sanitize_sample, stereo_mid_f32, AUDIO_SU
 use cadence_core::mixer::MAX_EFFECT_DEVICES;
 use cadence_core::rack::{compile_zone_graph, ModuleKind, RackPatch, RackZone, SampleLoopMode};
 use cadence_core::runtime::{
-    default_auto_buffer_frames, AudioErrorCode, AudioInputRequest, AudioInputStatus,
-    AudioInventory, AudioStreamRequest, CaptureArmSpec, CapturePhase, EffectMeter,
-    RackActivityTelemetry, MAX_AUDIO_BUFFER_FRAMES, MAX_AUDIO_SAMPLE_RATE, MIN_AUDIO_BUFFER_FRAMES,
-    MIN_AUDIO_SAMPLE_RATE,
+    default_auto_buffer_frames, sort_sample_bank, AudioErrorCode, AudioInputRequest,
+    AudioInputStatus, AudioInventory, AudioStreamRequest, CaptureArmSpec, CapturePhase,
+    EffectMeter, RackActivityTelemetry, MAX_AUDIO_BUFFER_FRAMES, MAX_AUDIO_SAMPLE_RATE,
+    MIN_AUDIO_BUFFER_FRAMES, MIN_AUDIO_SAMPLE_RATE,
 };
 #[cfg(feature = "audio")]
 use cadence_core::runtime::{AudioDeviceInfo, STANDARD_SAMPLE_RATES};
@@ -966,10 +966,13 @@ impl AudioRuntime {
     pub fn replace_project_with_assets(
         &self,
         project: ScoreWindow,
-        samples: Option<SampleBank>,
+        mut samples: Option<SampleBank>,
         project_boundary: bool,
     ) -> Result<()> {
         project.validate()?;
+        if let Some(bank) = samples.as_mut() {
+            sort_sample_bank(bank);
+        }
         if !self.shared.alive.load(Ordering::Acquire) {
             bail!("audio runtime is shut down");
         }

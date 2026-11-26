@@ -12,6 +12,33 @@ use std::sync::Arc;
 
 pub type SampleBank = Vec<(u64, Arc<SampleData>)>;
 
+/// Sort a [`SampleBank`] in ascending key order (deduplicating duplicate keys,
+/// preserving the first entry per key) so real-time audio lookups run in strict
+/// `O(log N)` binary search with zero allocations.
+#[inline]
+pub fn sort_sample_bank(bank: &mut SampleBank) {
+    if !bank.is_sorted_by_key(|(key, _)| *key) {
+        bank.sort_by_key(|(key, _)| *key);
+    }
+    bank.dedup_by_key(|(key, _)| *key);
+}
+
+/// Strict `O(log N)` binary-search lookup inside a sorted [`SampleBank`],
+/// returning `(slot_index, &Arc<SampleData>)`.
+#[inline]
+pub fn lookup_sample_in_bank(
+    bank: &[(u64, Arc<SampleData>)],
+    key: u64,
+) -> Option<(usize, &Arc<SampleData>)> {
+    debug_assert!(
+        bank.is_sorted_by_key(|(id, _)| *id),
+        "SampleBank must be sorted by key before binary-search lookup"
+    );
+    bank.binary_search_by_key(&key, |(id, _)| *id)
+        .ok()
+        .map(|idx| (idx, &bank[idx].1))
+}
+
 /// Supported audio device sample-rate range (`Hz`).
 pub const MIN_AUDIO_SAMPLE_RATE: u32 = 8_000;
 pub const MAX_AUDIO_SAMPLE_RATE: u32 = 384_000;
@@ -1090,5 +1117,43 @@ mod tests {
         tel.decay_all(1e-6, 1e-4);
         assert_eq!(tel.module_peak(1), 0.0);
         assert_eq!(tel.cable_peak(10), 0.0);
+    }
+
+    #[test]
+    fn sample_bank_sort_dedup_and_binary_search_lookup() {
+        let mk = |name: &str, frames: usize| {
+            Arc::new(SampleData {
+                path_label: format!("{name}.wav"),
+                resolved_path: std::path::PathBuf::from(format!("{name}.wav")),
+                name: name.into(),
+                sample_rate: 48_000,
+                channels: 1,
+                frames,
+                left: vec![0.25; frames].into_boxed_slice(),
+                right: None,
+                peaks: vec![(0.25, 0.25); 1].into_boxed_slice(),
+                meta: crate::sampler::SampleMetadata::default(),
+            })
+        };
+        let mut bank: SampleBank = vec![
+            (30, mk("thirty", 30)),
+            (10, mk("ten-first", 10)),
+            (20, mk("twenty", 20)),
+            (10, mk("ten-dup", 99)),
+        ];
+        sort_sample_bank(&mut bank);
+        assert_eq!(bank.len(), 3);
+        assert_eq!(bank[0].0, 10);
+        assert_eq!(
+            bank[0].1.frames, 10,
+            "stable sort + dedup preserves first entry"
+        );
+        assert_eq!(bank[1].0, 20);
+        assert_eq!(bank[2].0, 30);
+
+        let (idx, data) = lookup_sample_in_bank(&bank, 20).expect("present key");
+        assert_eq!(idx, 1);
+        assert_eq!(data.frames, 20);
+        assert!(lookup_sample_in_bank(&bank, 15).is_none());
     }
 }

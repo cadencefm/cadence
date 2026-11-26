@@ -22,7 +22,8 @@ mod tests;
 
 use crate::chrome::{draw_deck_frame, draw_deck_tab_bar, DeckFrameSpec, DeckTabBarSpec};
 use crate::decks::object::draw_control_list;
-use crate::display::{trim_label, DisplayList, Rect, TextAlign};
+pub(super) use crate::decks::vis::draw_card_panel;
+use crate::display::{DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
 use cadence_app::view::{
     InstrumentDeckView, InstrumentVisualView, RackDeckView, RackTab, UiModeKind,
@@ -140,28 +141,8 @@ pub(super) fn module_tag_accent(tag: ModuleKindTag, theme: &Theme) -> Color {
 }
 
 pub(super) fn split_main_and_scope(area: Rect) -> (Rect, Option<Rect>) {
-    if area.w >= 440.0 {
-        let scope_w = (area.w * 0.28).clamp(140.0, 250.0);
-        let (left, right) = area.split_right(scope_w);
-        (
-            Rect::new(left.x, left.y, (left.w - 6.0).max(0.0), left.h),
-            Some(right),
-        )
-    } else {
-        (area, None)
-    }
-}
-
-pub(super) fn draw_card_panel(dl: &mut DisplayList, rect: Rect, theme: &Theme) -> Rect {
-    dl.panel(
-        rect,
-        theme.surface.recessed,
-        theme.border.subtle,
-        theme.radii.pill,
-        1.0,
-        0.0,
-    );
-    rect.inset(7.0, 5.0)
+    let scope_w = (area.w * 0.28).clamp(140.0, 250.0);
+    crate::decks::vis::split_side_card(area, 440.0, scope_w)
 }
 
 pub(super) fn draw_simple_card_header(
@@ -172,40 +153,7 @@ pub(super) fn draw_simple_card_header(
     color: Color,
     theme: &Theme,
 ) {
-    if hdr.is_empty() {
-        return;
-    }
-    dl.push_clip(hdr);
-    let font = theme.font.small - 1.0;
-    let cw = theme.char_width(font);
-    let right_w = right
-        .filter(|s| !s.is_empty())
-        .map(|s| (s.chars().count() as f32 * cw + 6.0).min(hdr.w * 0.45))
-        .unwrap_or(0.0);
-    let title_w = (hdr.w - right_w - if right_w > 0.0 { 6.0 } else { 0.0 }).max(0.0);
-    let max_t = (title_w / cw).floor().max(1.0) as usize;
-    dl.text(
-        Rect::new(hdr.x, hdr.y, title_w, hdr.h),
-        trim_label(title, max_t),
-        font,
-        true,
-        color,
-        TextAlign::Left,
-    );
-    if let Some(rtxt) = right.filter(|s| !s.is_empty()) {
-        if right_w >= 28.0 {
-            let max_r = (right_w / cw).floor().max(2.0) as usize;
-            dl.text(
-                Rect::new(hdr.right() - right_w, hdr.y, right_w, hdr.h),
-                trim_label(rtxt, max_r),
-                font,
-                true,
-                theme.text.secondary,
-                TextAlign::Right,
-            );
-        }
-    }
-    dl.pop_clip();
+    crate::decks::vis::draw_card_header(dl, hdr, title, right, color, true, theme);
 }
 
 pub(super) fn draw_badge_header(
@@ -217,69 +165,16 @@ pub(super) fn draw_badge_header(
     title_color: Color,
     theme: &Theme,
 ) {
-    if hdr.is_empty() {
-        return;
-    }
-    dl.push_clip(hdr);
-    let bfont = theme.font.small - 1.5;
-    let bcw = theme.char_width(bfont);
-    let bh = (hdr.h - 2.0).clamp(12.0, 15.0);
-    let by = hdr.y + ((hdr.h - bh) * 0.5).max(0.0);
-
-    let mut x = hdr.x;
-    for &(text, col) in badges {
-        if text.is_empty() {
-            continue;
-        }
-        let bw = (text.chars().count() as f32 * bcw + 10.0).min((hdr.right() - x).max(0.0));
-        if bw < 20.0 || x + bw > hdr.right() - 28.0 {
-            break;
-        }
-        let br = Rect::new(x, by, bw, bh);
-        dl.panel(
-            br,
-            col.with_alpha(0.18),
-            col.with_alpha(0.80),
-            theme.radii.badge,
-            1.0,
-            0.0,
-        );
-        dl.text(br, text, bfont, true, col, TextAlign::Center);
-        x += bw + 5.0;
-    }
-
-    let font = theme.font.small - 1.0;
-    let cw = theme.char_width(font);
-    let rem = (hdr.right() - x).max(0.0);
-    let right_w = right_summary
-        .filter(|s| !s.is_empty() && rem >= 100.0)
-        .map(|s| (s.chars().count() as f32 * cw + 6.0).min(rem * 0.45))
-        .unwrap_or(0.0);
-    if let Some(rs) = right_summary.filter(|_| right_w >= 32.0) {
-        let max_r = (right_w / cw).floor().max(4.0) as usize;
-        dl.text(
-            Rect::new(hdr.right() - right_w, hdr.y, right_w, hdr.h),
-            trim_label(rs, max_r),
-            font,
-            false,
-            theme.text.secondary,
-            TextAlign::Right,
-        );
-    }
-
-    let title_w = (hdr.right() - right_w - x - if right_w > 0.0 { 6.0 } else { 0.0 }).max(0.0);
-    if title_w >= 24.0 {
-        let max_t = (title_w / cw).floor().max(1.0) as usize;
-        dl.text(
-            Rect::new(x, hdr.y, title_w, hdr.h),
-            trim_label(title, max_t),
-            font,
-            true,
-            title_color,
-            TextAlign::Left,
-        );
-    }
-    dl.pop_clip();
+    crate::decks::vis::draw_badge_header(
+        dl,
+        hdr,
+        badges,
+        title,
+        right_summary,
+        title_color,
+        false,
+        theme,
+    );
 }
 
 struct ScopePlotStyle<'a> {
