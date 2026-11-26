@@ -1249,6 +1249,8 @@ impl AudioRuntime {
 
         let (absolute_step, step_fraction) =
             unpack_step_position(self.shared.step_position.load(Ordering::Acquire));
+        let input = self.shared.read_input_telemetry();
+        let input_waveform = self.shared.read_input_waveform(input.status);
         AudioSnapshot {
             channel_meters,
             effect_meters,
@@ -1269,7 +1271,8 @@ impl AudioRuntime {
                 || self.shared.transport_pending.load(Ordering::Acquire) != 0,
             next_step: self.shared.next_step.load(Ordering::Acquire),
             health: self.shared.read_health(),
-            input: self.shared.read_input_telemetry(),
+            input,
+            input_waveform,
         }
     }
 

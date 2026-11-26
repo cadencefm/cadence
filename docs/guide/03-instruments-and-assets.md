@@ -176,6 +176,8 @@ Open any `Sampler` module on its own zoomable waveform deck (`gw` globally, **`W
 - **Transient, Grid & Manual Slicing:** Auto-slice percussive hits with **`d`** (tunable `SENSITIVITY` and `MIN GAP` via **`j`/`k`** + **`Alt+h`/`l`** / **`,`/`.`** / **`Enter`**), equal-grid slice with **`D`** (`2..32` divisions), drop a manual slice at cursor with **`s`**, rename the active slice label with **`r`**, nudge the active slice left/right with **`Alt+h`/`l`** or **`,`/`.`** (coalesced single undo), delete with **`x`**, clear all with **`X`**, and audition the active slice region with **`A`**.
 - **One-Step Slice → Rack Kit (`K` / `:slice kit`):** Converts your slices into a chromatic multi-zone Rack Kit starting at **C2 (MIDI 36)** with fixed pitch, choke group 1, preserved slice labels, and an optional musically timed sequential slice Pattern + Arrange Placement in one undoable transaction (choose **New Kit + Slice Pattern**, **New Kit Only**, or **Replace Current Rack**).
 - **Lossless RIFF WAV Metadata Read & Write (`W` / `:sample write-meta`):** Loading a WAV automatically imports standard RIFF `smpl`, `inst`, `cue `, and `LIST/adtl/labl` slice markers (compatible with FL Studio Edison/Slicex, Ableton, Reaper, etc.). Pressing **`W`** or running **`:sample write-meta`** losslessly rewrites those metadata chunks back into the source WAV file while keeping all audio frames and unknown chunks bit-for-bit intact.
+- **Offline WAV Operations (`e` menu, `T` Trim, `N` Normalize, or `:sample trim|normalize|reverse|fade-in|fade-out`):** Press **`e`** on the Sample deck for the 5-action Offline Edit menu (**Trim Crop → New WAV**, **Normalize Peak `-0.5 dBFS`**, **Reverse Audio & Slices**, **Fade In**, **Fade Out**), or hit **`T`** / **`N`** directly. Every operation writes a brand-new portable WAV under `samples/` (embedding updated/reversed RIFF metadata & slices) and switches the Sampler in one atomic undoable commit, so **`u` (Undo)** instantaneously restores your untouched original WAV, crop bounds, and slices.
+- **Live Hardware Input Recording Waveform Monitor (`ta` / `tA` / `ti`):** When the Sample deck is focused, pressing **`ta`** targets that Sampler zone directly and switches the waveform canvas into a live hardware recording monitor—showing live stereo L/R dBFS meters, `MON` / `CLIP!` / `! DIGITAL SILENCE` pills, a real-time input oscilloscope while **Armed** (or on an empty Sampler with a running audio input), and a growing crimson waveform envelope with a live inset input scope while **Recording**. Once finalized, the new 24-bit WAV lands directly back onto the Sample deck ready to trim, normalize, or slice.
 
 ```text
 :wave [INSTRUMENT]                       # Open Sample / Waveform deck
@@ -186,6 +188,11 @@ Open any `Sampler` module on its own zoomable waveform deck (`gw` globally, **`W
 :slice del <1-based-idx> | clear         # Delete one slice or clear all slices
 :slice kit [replace] [nopattern]         # Convert slices into a chromatic Rack Kit (+ Pattern)
 :sample write-meta                       # Losslessly write RIFF inst/smpl/cue/labl to WAV
+:sample trim                             # Export cropped region to new portable WAV (undoable)
+:sample normalize [DBFS]                 # Stereo-linked peak normalize (default -0.5 dBFS)
+:sample reverse                          # Reverse audio frames, crop, loop & labeled slices
+:sample fade-in [DUR]                    # Smooth Hann fade-in (e.g. 50ms, 0.2s, or cursor/default)
+:sample fade-out [DUR]                   # Smooth Hann fade-out (e.g. 100ms, 0.5s, or cursor/default)
 ```
 
 ### Bounce / Resample to Sampler or Rack Zone (`tb` / `:bounce`)

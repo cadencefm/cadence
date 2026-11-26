@@ -132,9 +132,24 @@ pub(crate) fn parse_zone_midi_token(token: &str) -> Option<u8> {
 }
 
 impl App {
-    /// Default bounce destination for the current focus: active zone when focused on a multi-zone
-    /// Rack or the Rack `Zones` tab, otherwise a brand-new Sampler Rack.
+    /// Default bounce/record destination for the current focus: active Sample deck zone when
+    /// focused on `DeckKind::Sample`, active Rack zone when focused on a multi-zone Rack or
+    /// the Rack `Zones` tab, otherwise a brand-new Sampler Rack.
     pub(crate) fn default_bounce_target(&self) -> Option<BounceTarget> {
+        if self.sample_deck_focused() {
+            if let Some((inst_id, zone_id, _)) = self.focused_sample_target() {
+                if let Some(inst) = self.instrument(inst_id) {
+                    if let Some(z_idx) = inst.rack.zones.iter().position(|z| z.id == zone_id) {
+                        return Some(BounceTarget::RackZone {
+                            instrument: inst_id,
+                            zone_index: Some(z_idx),
+                            midi: None,
+                            zone_name: None,
+                        });
+                    }
+                }
+            }
+        }
         if !self.deck_focused() {
             return None;
         }
@@ -840,15 +855,14 @@ impl App {
     /// audio recording) into a target `RackZone` or a brand-new `Sampler` Rack + optional
     /// trigger `Part` + optional arranged `Placement` in ONE atomic undoable commit.
     pub(crate) fn land_recorded_sample(&mut self, spec: SampleLandingSpec) -> Result<Outcome> {
+        let stay_on_sample_deck = self.sample_deck_focused();
         self.assets
             .library
             .set_project_dir_if_unset(self.doc.asset_base());
         self.assets.library.register_file(&spec.output_path);
 
         let sample = self
-            .assets
-            .library
-            .load(&spec.relative_path)
+            .load_library_sample(&spec.relative_path)
             .with_context(|| format!("Loading sample {}", spec.relative_path))?;
 
         if let BounceTarget::RackZone {
@@ -943,7 +957,14 @@ impl App {
                     && issue.instrument_name == format!("{inst_name} [{zlabel}]"))
             });
             self.rack_ui.zone_cursor = z_idx;
-            self.open_instrument(*inst_id)?;
+            if stay_on_sample_deck {
+                self.sample_ui.cursor_frame = 0;
+                self.sample_ui.zoom = 1.0;
+                self.sample_ui.view_start_frame.set(0);
+                self.open_sample_deck_for(*inst_id, z_id, mod_id)?;
+            } else {
+                self.open_instrument(*inst_id)?;
+            }
             self.status = spec.status_summary;
             out.changed = true;
             out.samples_changed = true;
@@ -1124,7 +1145,14 @@ impl App {
         if let Some(placement_id) = created_placement {
             self.selected_placement = Some(placement_id);
         }
-        self.open_instrument(inst_id)?;
+        if stay_on_sample_deck {
+            self.sample_ui.cursor_frame = 0;
+            self.sample_ui.zoom = 1.0;
+            self.sample_ui.view_start_frame.set(0);
+            self.open_sample_deck_for(inst_id, z_id, mod_id)?;
+        } else {
+            self.open_instrument(inst_id)?;
+        }
         self.status = spec.status_summary;
         out.changed = true;
         out.samples_changed = true;

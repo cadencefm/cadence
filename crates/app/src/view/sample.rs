@@ -5,12 +5,43 @@ use crate::sample_deck::{
 };
 use crate::SampleToolbarField;
 use cadence_core::dsp::{compute_waveform_peaks_window, slice_regions};
+use cadence_core::live::position_label;
 use cadence_core::material::Id;
 use cadence_core::rack::{ModuleKind, SampleLoopMode, MAX_ZONES};
+use cadence_core::runtime::{
+    AudioInputMode, AudioInputStatus, AudioSnapshot, CapturePhase, InputMonitorMode,
+};
 use std::path::Path;
 
 const WAVEFORM_DETAIL_BINS: usize = 512;
 const WAVEFORM_OVERVIEW_BINS: usize = 160;
+
+/// Live hardware input & active recording waveform monitor projection inside `DeckKind::Sample`.
+#[derive(Clone, Debug)]
+pub struct SampleRecordMonitorView {
+    pub phase: CapturePhase,
+    pub input_running: bool,
+    pub device_name: String,
+    pub target_label: String,
+    pub sample_rate: u32,
+    pub channels: u16,
+    pub input_mode: AudioInputMode,
+    pub monitor_mode: InputMonitorMode,
+    pub monitoring: bool,
+    pub peak_left: f32,
+    pub peak_right: f32,
+    pub hold_left: f32,
+    pub hold_right: f32,
+    pub clipped: bool,
+    pub digital_silence: bool,
+    pub captured_frames: u64,
+    pub dropped_frames: u64,
+    pub elapsed_secs: f64,
+    pub target_secs: Option<f64>,
+    pub punch_in_label: Option<String>,
+    pub live_scope: Vec<f32>,
+    pub recording_peaks: Vec<(f32, f32)>,
+}
 
 #[derive(Clone, Debug)]
 pub struct SampleSliceView {
@@ -61,14 +92,98 @@ pub struct SampleDeckView {
     pub min_gap_ms: f32,
     pub grid_divisions: usize,
     pub snap_zero: bool,
+    pub record_monitor: Option<SampleRecordMonitorView>,
 }
 
 impl App {
+    fn build_sample_record_monitor(
+        &self,
+        snapshot: &AudioSnapshot,
+        default_target_label: &str,
+        sample_loaded: bool,
+    ) -> Option<SampleRecordMonitorView> {
+        let inp = snapshot.input;
+        let phase = if self.recording.phase != CapturePhase::Idle {
+            self.recording.phase
+        } else {
+            inp.capture_phase
+        };
+        let input_running = inp.status == AudioInputStatus::Running;
+        if phase == CapturePhase::Idle && (sample_loaded || !input_running) {
+            return None;
+        }
+        let sample_rate = inp
+            .sample_rate
+            .max(self.recording.input_sample_rate)
+            .max(self.devices.inventory.active_input_sample_rate);
+        let captured_frames = self.recording.captured_frames.max(inp.captured_frames);
+        let dropped_frames = self.recording.dropped_frames.max(inp.dropped_frames);
+        let elapsed_secs = if sample_rate > 0 {
+            captured_frames as f64 / f64::from(sample_rate)
+        } else {
+            0.0
+        };
+        let (target_label, target_secs, punch_in_label) =
+            if let Some(req) = &self.recording.active_request {
+                let target_secs = req
+                    .punch_out_abs_step
+                    .filter(|&end| end > req.punch_in_abs_step)
+                    .map(|end| {
+                        (end - req.punch_in_abs_step) as f64 * self.doc.compiled().step_seconds()
+                    });
+                let punch =
+                    (phase == CapturePhase::Armed).then(|| position_label(req.punch_in_abs_step));
+                (req.instrument_name.clone(), target_secs, punch)
+            } else {
+                (default_target_label.to_string(), None, None)
+            };
+        let device_name = self
+            .devices
+            .inventory
+            .active_input
+            .clone()
+            .or_else(|| self.config.audio_input_device.clone())
+            .unwrap_or_else(|| "Audio Input".into());
+        Some(SampleRecordMonitorView {
+            phase,
+            input_running,
+            device_name,
+            target_label,
+            sample_rate,
+            channels: inp.channels.max(if input_running { 2 } else { 0 }),
+            input_mode: if input_running {
+                inp.mode
+            } else {
+                self.config.audio_input_mode
+            },
+            monitor_mode: if input_running {
+                inp.monitor_mode
+            } else {
+                self.config.audio_input_monitor
+            },
+            monitoring: inp.monitoring,
+            peak_left: inp.peak[0],
+            peak_right: inp.peak[1],
+            hold_left: inp.peak_hold[0],
+            hold_right: inp.peak_hold[1],
+            clipped: inp.clipped,
+            digital_silence: inp.digital_silence,
+            captured_frames,
+            dropped_frames,
+            elapsed_secs,
+            target_secs,
+            punch_in_label,
+            live_scope: snapshot.input_waveform.clone(),
+            recording_peaks: self.recording.live_peaks.clone(),
+        })
+    }
+
     pub(super) fn build_sample_deck_view(
         &self,
         instrument_id: Id,
         zone_id: u16,
         module_id: u16,
+        snapshot: &AudioSnapshot,
     ) -> SampleDeckView {
         let inst = self.instrument(instrument_id);
         let zone = inst.and_then(|i| i.rack.zone(zone_id));
@@ -94,6 +209,10 @@ impl App {
                 })
                 .map(|iss| iss.message.clone())
         });
+
+        let default_target_label = format!("{instrument_name} › {zone_name}");
+        let record_monitor =
+            self.build_sample_record_monitor(snapshot, &default_target_label, sample.is_some());
 
         let Some(smp) = smp else {
             return SampleDeckView {
@@ -134,6 +253,7 @@ impl App {
                 min_gap_ms: self.sample_ui.min_gap_ms,
                 grid_divisions: self.sample_ui.grid_divisions,
                 snap_zero: self.sample_ui.snap_zero,
+                record_monitor,
             };
         };
 
@@ -182,6 +302,7 @@ impl App {
                 min_gap_ms: self.sample_ui.min_gap_ms,
                 grid_divisions: self.sample_ui.grid_divisions,
                 snap_zero: self.sample_ui.snap_zero,
+                record_monitor,
             };
         };
 
@@ -307,6 +428,7 @@ impl App {
             min_gap_ms: self.sample_ui.min_gap_ms,
             grid_divisions: self.sample_ui.grid_divisions,
             snap_zero: self.sample_ui.snap_zero,
+            record_monitor,
         }
     }
 }

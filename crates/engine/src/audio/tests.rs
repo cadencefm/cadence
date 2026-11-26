@@ -3003,6 +3003,31 @@ fn input_routing_metering_clip_clear_and_capture_ring_overflow() {
             "sr={sr}: single non-zero sample must clear digital_silence immediately"
         );
     }
+
+    // 6. Live input oscilloscope ring publishes signed-max mono trace lock-free while running
+    //    and clears cleanly when the input stream resets.
+    shared.reset_input_stream_state();
+    assert!(shared
+        .read_input_waveform(AudioInputStatus::Inactive)
+        .is_empty());
+    state.clear();
+    let sine_stereo: Vec<f32> = (0..512)
+        .flat_map(|i| {
+            let v = (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.75;
+            [v, v]
+        })
+        .collect();
+    process_input_slice(&mut state, &shared, &sine_stereo, 2, 48_000);
+    let wave = shared.read_input_waveform(AudioInputStatus::Running);
+    assert_eq!(wave.len(), crate::audio::shared::WAVE_SAMPLES);
+    assert!(
+        wave.iter().any(|&s| s > 0.5) && wave.iter().any(|&s| s < -0.5),
+        "input_waveform must reflect live signed hardware input amplitude"
+    );
+    shared.reset_input_stream_state();
+    assert!(shared
+        .read_input_waveform(AudioInputStatus::Inactive)
+        .is_empty());
 }
 
 #[test]

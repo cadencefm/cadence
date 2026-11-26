@@ -108,6 +108,11 @@ pub(super) enum Purpose {
         zone: u16,
         module: u16,
     },
+    SampleEdit {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+    },
 }
 
 impl Purpose {
@@ -138,6 +143,7 @@ impl Purpose {
             | Self::AudioBufferSize { .. } => "Audio device settings unchanged",
             Self::RackAddZone { .. } | Self::RackZonePreset { .. } => "Zones unchanged",
             Self::SliceToKit { .. } => "Slice to Rack Kit cancelled",
+            Self::SampleEdit { .. } => "Sample edit cancelled",
             Self::Replace { .. } | Self::ReplacePart { .. } => "Nothing replaced",
         }
     }
@@ -1241,6 +1247,89 @@ impl App {
         Ok(Outcome::default())
     }
 
+    pub(crate) fn open_sample_edit_picker(
+        &mut self,
+        instrument: Id,
+        zone: u16,
+        module: u16,
+    ) -> Result<Outcome> {
+        let smp = self
+            .sampler_module_at(instrument, zone, module)
+            .context("Sampler module missing")?;
+        let sample = self
+            .loaded_sample_for(instrument, zone, module)
+            .context("Load a sample first (press B)")?;
+        let total = sample.frames;
+        let sr = sample.sample_rate.max(8_000);
+        let (crop_start, crop_end) = crate::sample_deck::effective_sampler_bounds(smp, total);
+        let has_crop = crop_start > 0 || crop_end < total;
+        let trim_desc = if has_crop {
+            let dur = crate::sample_deck::format_sample_time(crop_end - crop_start, sr);
+            format!("Crop ({dur}) → new WAV (u undoes)")
+        } else {
+            "Set crop bounds ([ / ]) first to trim".into()
+        };
+        let fi_frames = crate::sample_deck::compute_fade_frames_for_cursor(
+            crop_start,
+            crop_end,
+            self.sample_ui.cursor_frame,
+            sr,
+            None,
+            true,
+        );
+        let fo_frames = crate::sample_deck::compute_fade_frames_for_cursor(
+            crop_start,
+            crop_end,
+            self.sample_ui.cursor_frame,
+            sr,
+            None,
+            false,
+        );
+        let fi_dur = crate::sample_deck::format_sample_time(fi_frames, sr);
+        let fo_dur = crate::sample_deck::format_sample_time(fo_frames, sr);
+        let items = vec![
+            (0, "Trim Crop → New WAV  [T]".into(), trim_desc),
+            (
+                1,
+                format!(
+                    "Normalize Peak ({:.1} dBFS)  [N]",
+                    cadence_core::dsp::DEFAULT_NORMALIZE_TARGET_DBFS
+                ),
+                "Stereo-linked peak norm → new WAV".into(),
+            ),
+            (
+                2,
+                "Reverse Audio & Slices".into(),
+                "Reverse audio, bounds & slices → WAV".into(),
+            ),
+            (
+                3,
+                format!("Fade In ({fi_dur})"),
+                "Hann fade-in (cursor or default)".into(),
+            ),
+            (
+                4,
+                format!("Fade Out ({fo_dur})"),
+                "Hann fade-out (cursor or default)".into(),
+            ),
+        ];
+        self.open_picker(Picker {
+            purpose: Purpose::SampleEdit {
+                instrument,
+                zone,
+                module,
+            },
+            title: format!("OFFLINE SAMPLE EDIT · {} (new WAV · u undoes)", sample.name),
+            items,
+            current: Some(if has_crop { 0 } else { 1 }),
+            query: String::new(),
+            searching: false,
+            cursor: if has_crop { 0 } else { 1 },
+        });
+        self.status = "Offline Sample Edit · 1–5 / Enter apply · Esc cancel".into();
+        Ok(Outcome::default())
+    }
+
     pub(crate) fn open_midi_pad_mode_picker(&mut self) -> Result<Outcome> {
         use cadence_core::midi_map::MidiPadMode;
         let items: Vec<(Id, String, String)> = MidiPadMode::ALL
@@ -1798,7 +1887,8 @@ impl App {
                     | Purpose::AudioInput { .. }
                     | Purpose::AudioSampleRate { .. }
                     | Purpose::AudioBufferSize { .. }
-                    | Purpose::SliceToKit { .. } => {}
+                    | Purpose::SliceToKit { .. }
+                    | Purpose::SampleEdit { .. } => {}
                 }
             }
             _ => {}
@@ -2144,6 +2234,31 @@ impl App {
                 })?,
                 _ => Outcome::default(),
             },
+            Purpose::SampleEdit {
+                instrument,
+                zone,
+                module,
+            } => {
+                let edit = match chosen {
+                    0 => Some(SampleEditOp::Trim),
+                    1 => Some(SampleEditOp::Normalize {
+                        target_dbfs: cadence_core::dsp::DEFAULT_NORMALIZE_TARGET_DBFS,
+                    }),
+                    2 => Some(SampleEditOp::Reverse),
+                    3 => Some(SampleEditOp::FadeIn { duration_ms: None }),
+                    4 => Some(SampleEditOp::FadeOut { duration_ms: None }),
+                    _ => None,
+                };
+                match edit {
+                    Some(edit) => self.apply(Action::ProcessSample {
+                        instrument,
+                        zone,
+                        module,
+                        edit,
+                    })?,
+                    None => Outcome::default(),
+                }
+            }
         };
         out.merge(edit);
         Ok(out)

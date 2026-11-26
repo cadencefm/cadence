@@ -1,7 +1,10 @@
 //! Lock-free, zero-allocation CPAL audio input capture, live stereo metering,
 //! and drift-tolerant software input monitoring.
 use super::shared::*;
-use cadence_core::dsp::{one_pole_decay_ms, sanitize_sample, sanitize_sample_rate, PeakHold};
+use cadence_core::dsp::{
+    control_stride_mask, one_pole_decay_ms, sanitize_sample, sanitize_sample_rate, stereo_mid_f32,
+    PeakHold,
+};
 use cadence_core::runtime::{
     AudioInputMode, AudioInputStatus, CapturePhase, InputMonitorMode, MAX_AUDIO_SAMPLE_RATE,
     MIN_AUDIO_SAMPLE_RATE,
@@ -87,6 +90,9 @@ pub(super) struct InputMeterState {
     hold_decay_coeff: f32,
     hold_duration_frames: u32,
     sample_rate: u32,
+    wave_counter: u32,
+    wave_mask: u32,
+    wave_peak: f32,
 }
 
 impl InputMeterState {
@@ -99,6 +105,9 @@ impl InputMeterState {
             hold_decay_coeff: 0.999,
             hold_duration_frames: 72_000,
             sample_rate: 0,
+            wave_counter: 0,
+            wave_mask: 31,
+            wave_peak: 0.0,
         };
         s.configure(sample_rate);
         s
@@ -113,6 +122,7 @@ impl InputMeterState {
             self.decay_coeff = one_pole_decay_ms(220.0, sr_f) as f32;
             self.hold_decay_coeff = one_pole_decay_ms(450.0, sr_f) as f32;
             self.hold_duration_frames = (INPUT_HOLD_SECONDS * sr_f).round() as u32;
+            self.wave_mask = control_stride_mask(sr_f, WAVE_DOWNSAMPLE_TARGET_HZ);
         }
     }
 
@@ -236,6 +246,8 @@ pub(super) fn process_input_slice<T: InputSample>(
 
     let mut mon_write = shared.monitor_write.load(Ordering::Relaxed);
     let mon_read = shared.monitor_read.load(Ordering::Acquire);
+    let mut wave_write = shared.input_wave_write.load(Ordering::Relaxed) % WAVE_SAMPLES;
+    let mut wave_dirty = false;
     let mut any_nonzero = false;
 
     for frame_idx in 0..frames {
@@ -245,6 +257,18 @@ pub(super) fn process_input_slice<T: InputSample>(
             any_nonzero = true;
         }
         state.observe(stereo);
+
+        let mono_sample = stereo_mid_f32(stereo);
+        if mono_sample.abs() >= state.wave_peak.abs() {
+            state.wave_peak = mono_sample;
+        }
+        state.wave_counter = state.wave_counter.wrapping_add(1) & state.wave_mask;
+        if state.wave_counter == 0 {
+            shared.input_waveform[wave_write].store(state.wave_peak.to_bits(), Ordering::Relaxed);
+            wave_write = (wave_write + 1) % WAVE_SAMPLES;
+            wave_dirty = true;
+            state.wave_peak = 0.0;
+        }
 
         let should_capture = match phase {
             CapturePhase::Recording => true,
@@ -304,6 +328,9 @@ pub(super) fn process_input_slice<T: InputSample>(
     }
     if monitoring {
         shared.monitor_write.store(mon_write, Ordering::Release);
+    }
+    if wave_dirty {
+        shared.input_wave_write.store(wave_write, Ordering::Release);
     }
 
     shared.input_peak[0].store(state.peak[0].to_bits(), Ordering::Relaxed);

@@ -582,21 +582,33 @@ impl App {
                     ]
                 }
             }
-            Mode::Normal if self.sample_deck_focused() => vec![
-                ("h/l H/L", "scrub"),
-                ("w/b", "slice"),
-                ("=/-", "zoom"),
-                ("[/] {/}", "crop/loop"),
-                ("s/x/X", "split/del/clr"),
-                ("d/D", "auto/grid"),
-                ("Alt+h/l ,/.", "nudge"),
-                ("j/k", "ctrl"),
-                ("v/m", "snap/loop"),
-                ("A", "play"),
-                ("K", "kit"),
-                ("W", "write RIFF"),
-                ("B", "browse"),
-            ],
+            Mode::Normal if self.sample_deck_focused() => {
+                if self.recording.is_active() {
+                    vec![
+                        ("ta", "stop/disarm rec"),
+                        ("Space", "stop & save"),
+                        ("ti", "monitor"),
+                        ("tA", "rec dialog"),
+                        ("B", "browse"),
+                    ]
+                } else {
+                    vec![
+                        ("h/l H/L", "scrub"),
+                        ("w/b", "slice"),
+                        ("=/-", "zoom"),
+                        ("[/] {/}", "crop/loop"),
+                        ("s/x/X", "split/del/clr"),
+                        ("d/D", "auto/grid"),
+                        ("e", "edit WAV"),
+                        ("T/N", "trim/norm"),
+                        ("ta", "rec"),
+                        ("A", "play"),
+                        ("K", "kit"),
+                        ("W", "write RIFF"),
+                        ("B", "browse"),
+                    ]
+                }
+            }
             Mode::Normal if self.deck_focused() && matches!(self.detail, Detail::Instrument(_)) => {
                 match self.rack_ui.tab {
                     RackTab::Panel => vec![

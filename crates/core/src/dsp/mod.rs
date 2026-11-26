@@ -97,7 +97,9 @@ pub use saturate::{
 };
 pub use slice::{
     compute_waveform_peaks_window, default_zero_snap_radius, detect_grid_slices,
-    detect_transient_slices, slice_regions, snap_to_zero_crossing,
+    detect_transient_slices, fade_sample_buffers, normalize_sample_buffers, reverse_sample_buffers,
+    slice_regions, snap_to_zero_crossing, trim_sample_buffers, LivePeakRecorder,
+    DEFAULT_NORMALIZE_TARGET_DBFS, MAX_NORMALIZE_TARGET_DBFS, MIN_NORMALIZE_TARGET_DBFS,
 };
 
 /// Uniform zero-allocation stereo insert effect contract implemented by all

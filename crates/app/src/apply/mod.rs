@@ -396,6 +396,12 @@ impl App {
                 zone,
                 module,
             } => self.apply_write_sample_riff_metadata(instrument, zone, module),
+            Action::ProcessSample {
+                instrument,
+                zone,
+                module,
+                edit,
+            } => self.apply_process_sample(instrument, zone, module, edit),
             Action::Bounce {
                 scope,
                 name,

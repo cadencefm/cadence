@@ -1,6 +1,29 @@
 //! Typed actions: the one path every input takes into the session.
 use super::*;
 
+/// Offline destructive WAV operations executed on the Sample deck (always writing a new
+/// portable WAV under `samples/` and committing via Undo so the source file is never clobbered).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SampleEditOp {
+    /// Export the active crop range `[sample_start..sample_end)` to a new WAV with remapped loop & slices.
+    Trim,
+    /// Stereo-linked peak normalization to `target_dbfs` (`-24.0..=0.0`, default `-0.5 dBFS`).
+    Normalize { target_dbfs: f32 },
+    /// Reverse audio frames along with crop bounds, loop points, and labeled slice regions.
+    Reverse,
+    /// Smooth half-cosine (Hann) fade-in inside the active crop window.
+    FadeIn {
+        #[serde(default)]
+        duration_ms: Option<f32>,
+    },
+    /// Smooth half-cosine (Hann) fade-out inside the active crop window.
+    FadeOut {
+        #[serde(default)]
+        duration_ms: Option<f32>,
+    },
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
@@ -494,6 +517,14 @@ pub enum Action {
         instrument: Id,
         zone: u16,
         module: u16,
+    },
+    /// Process a Sampler module's audio offline (Trim, Normalize, Reverse, Fade In/Out),
+    /// writing a new portable WAV into `samples/` and switching the Sampler atomically on Undo.
+    ProcessSample {
+        instrument: Id,
+        zone: u16,
+        module: u16,
+        edit: SampleEditOp,
     },
     /// Resample / bounce a part, pattern, or bar range to a portable WAV + playable `Sampler`
     /// or directly into a Rack zone.

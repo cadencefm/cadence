@@ -97,6 +97,8 @@ pub struct RecordingState {
     pub dropped_frames: u64,
     pub input_sample_rate: u32,
     pub last_input_failed: bool,
+    /// Bounded live waveform peaks accumulated during an active recording for the Sample deck monitor.
+    pub live_peaks: Vec<(f32, f32)>,
 }
 
 impl RecordingState {
@@ -106,9 +108,15 @@ impl RecordingState {
 }
 
 impl App {
+    /// Publish bounded growing recording peaks from the off-RT host drainer (`HostRecorder`)
+    /// so `DeckKind::Sample` renders the captured waveform in real time while recording.
+    pub fn set_recording_preview_peaks(&mut self, peaks: Vec<(f32, f32)>) {
+        self.recording.live_peaks = peaks;
+    }
+
     /// Default recording destination matching `default_bounce_target()` 1:1:
-    /// active Rack zone when focused on a multi-zone Rack or the `Zones` tab,
-    /// otherwise a brand-new Sampler Rack.
+    /// active Sample deck target when focused on `DeckKind::Sample`, active Rack zone when
+    /// focused on a multi-zone Rack or the `Zones` tab, otherwise a brand-new Sampler Rack.
     pub(crate) fn default_record_target(&self) -> BounceTarget {
         self.default_bounce_target().unwrap_or_default()
     }
@@ -357,6 +365,7 @@ impl App {
         };
         self.recording.captured_frames = 0;
         self.recording.dropped_frames = 0;
+        self.recording.live_peaks.clear();
         self.recording.active_request = Some(request.clone());
 
         self.status = match mode {
@@ -416,6 +425,7 @@ impl App {
         self.recording.active_request = None;
         self.recording.captured_frames = 0;
         self.recording.dropped_frames = 0;
+        self.recording.live_peaks.clear();
         self.status = if was_active {
             "Audio recording cancelled".into()
         } else {
@@ -440,6 +450,7 @@ impl App {
             CapturePhase::Armed => {
                 self.recording.phase = CapturePhase::Idle;
                 self.recording.active_request = None;
+                self.recording.live_peaks.clear();
                 out.recording_command = Some(RecordingHostCommand::Cancel);
             }
             CapturePhase::Recording => {
@@ -458,6 +469,7 @@ impl App {
         self.recording.active_request = None;
         self.recording.captured_frames = 0;
         self.recording.dropped_frames = 0;
+        self.recording.live_peaks.clear();
 
         let req = &completed.request;
         let step_secs = self.doc.compiled().step_seconds().max(0.01);
@@ -533,6 +545,7 @@ impl App {
         self.recording.active_request = None;
         self.recording.captured_frames = 0;
         self.recording.dropped_frames = 0;
+        self.recording.live_peaks.clear();
         self.status = format!("Audio recording failed: {}", message.into());
     }
 

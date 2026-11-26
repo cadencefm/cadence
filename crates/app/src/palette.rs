@@ -67,6 +67,7 @@ enum PaletteAction {
     SampleGridSlice,
     SampleSliceToKit,
     SampleWriteRiffMeta,
+    SampleProcess(SampleEditOp),
     EditMiniNotation,
     GoDeck(layout::DeckKind),
     GoDevices(DevicesTab),
@@ -441,6 +442,53 @@ impl App {
             "sample riff cue labl smpl inst write save metadata wav",
             "Sample: W",
             PaletteAction::SampleWriteRiffMeta,
+        );
+        push(
+            &mut entries,
+            "SOUND",
+            "Trim Sample Crop to New WAV",
+            "Write cropped sample region into a new portable WAV in samples/ (undoable)",
+            "sample trim crop cut export wav offline edit",
+            "Sample: T",
+            PaletteAction::SampleProcess(SampleEditOp::Trim),
+        );
+        push(
+            &mut entries,
+            "SOUND",
+            "Normalize Sample Peak (-0.5 dBFS)",
+            "Stereo-linked peak normalization into a new portable WAV in samples/",
+            "sample normalize norm gain loud peak wav offline edit",
+            "Sample: N",
+            PaletteAction::SampleProcess(SampleEditOp::Normalize {
+                target_dbfs: cadence_core::dsp::DEFAULT_NORMALIZE_TARGET_DBFS,
+            }),
+        );
+        push(
+            &mut entries,
+            "SOUND",
+            "Reverse Sample Audio & Slices",
+            "Reverse audio frames, crop bounds, loop points, and slices into a new WAV",
+            "sample reverse rev backwards flip wav offline edit",
+            "Sample: e",
+            PaletteAction::SampleProcess(SampleEditOp::Reverse),
+        );
+        push(
+            &mut entries,
+            "SOUND",
+            "Fade In Sample",
+            "Apply raised-cosine (Hann) fade-in to active crop into a new portable WAV",
+            "sample fade in ramp attack smooth wav offline edit",
+            "Sample: e",
+            PaletteAction::SampleProcess(SampleEditOp::FadeIn { duration_ms: None }),
+        );
+        push(
+            &mut entries,
+            "SOUND",
+            "Fade Out Sample",
+            "Apply raised-cosine (Hann) fade-out to active crop into a new portable WAV",
+            "sample fade out tail decay smooth wav offline edit",
+            "Sample: e",
+            PaletteAction::SampleProcess(SampleEditOp::FadeOut { duration_ms: None }),
         );
         push(
             &mut entries,
@@ -1847,6 +1895,18 @@ impl App {
                 self.open_slice_to_kit_picker(inst, zone, module)
             }
             PaletteAction::SampleWriteRiffMeta => self.execute_sample_write_meta_command(),
+            PaletteAction::SampleProcess(edit) => {
+                let (inst, zone, module) = self
+                    .resolve_sample_deck_target()
+                    .context("No Sampler instrument in project")?;
+                self.open_sample_deck_for(inst, zone, module)?;
+                self.apply(Action::ProcessSample {
+                    instrument: inst,
+                    zone,
+                    module,
+                    edit,
+                })
+            }
             PaletteAction::EditMiniNotation => self.open_active_mini_editor(),
             PaletteAction::GoDeck(kind) => self.focus_docked_deck(kind),
             PaletteAction::GoDevices(tab) => {

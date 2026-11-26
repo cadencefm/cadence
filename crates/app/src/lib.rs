@@ -78,7 +78,7 @@ mod verbs;
 pub mod view;
 mod zones;
 
-pub use action::{Action, Request};
+pub use action::{Action, Request, SampleEditOp};
 pub use arrangement::{ArrangeView, EventInspectionView, EventSourceView};
 pub use bounce::{BounceRequest, BounceScope, BounceTarget};
 pub use browser::{BrowserEntryView, BrowserView};
