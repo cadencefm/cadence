@@ -14,15 +14,16 @@ use cadence_core::dsp::{
 };
 pub use cadence_core::rack::SamplerParams;
 use cadence_core::rack::{
-    denormalize_cable_amount, module_sample_key, CompiledCable, CompiledOp, CompiledZoneGraph,
-    DriveModule, EnvModule, FilterMode, FilterModule, InPort, LfoModule, LoFiModule, ModuleKind,
-    ModuleKindTag, ModuleParam, NoiseModule, OutModule, OutPort, PitchTracking, RackZone,
-    ResonatorModule, SampleLoopMode, TriggerMode, UpdatePolicy, VcaModule, VcoModule, VoiceMode,
-    VoiceSettings, MAX_CABLES_PER_ZONE, MAX_MODULES_PER_ZONE, MAX_RESONATORS_PER_ZONE,
+    cable_signal_level, denormalize_cable_amount, module_sample_key, CompiledCable, CompiledOp,
+    CompiledZoneGraph, DriveModule, EnvModule, FilterMode, FilterModule, InPort, LfoModule,
+    LoFiModule, ModuleKind, ModuleKindTag, ModuleParam, NoiseModule, OutModule, OutPort,
+    PitchTracking, RackZone, ResonatorModule, SampleLoopMode, TriggerMode, UpdatePolicy, VcaModule,
+    VcoModule, VoiceMode, VoiceSettings, MAX_CABLES_PER_ZONE, MAX_MODULES_PER_ZONE,
+    MAX_RESONATORS_PER_ZONE,
 };
 #[cfg(test)]
 use cadence_core::rack::{LfoShape, ResonatorMode, SamplerModule};
-use cadence_core::runtime::SampleBank;
+use cadence_core::runtime::{RackActivityTelemetry, SampleBank};
 use cadence_core::sampler::SampleData;
 use nodes::{ModuleNode, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks};
 use std::sync::Arc;
@@ -1018,6 +1019,19 @@ impl ModularVoice {
     /// `[f32; 2]` voice output). Zero allocations, zero locks, zero panics.
     #[inline]
     pub fn next_frame(&mut self, bank: &SampleBank, preview: Option<&Arc<SampleData>>) -> [f32; 2] {
+        let mut empty_mods = [0.0_f32; 0];
+        let mut empty_cables = [0.0_f32; 0];
+        self.next_frame_inner::<false>(bank, preview, &mut empty_mods, &mut empty_cables)
+    }
+
+    #[inline(always)]
+    fn next_frame_inner<const RECORD_ACTIVITY: bool>(
+        &mut self,
+        bank: &SampleBank,
+        preview: Option<&Arc<SampleData>>,
+        mod_peaks: &mut [f32],
+        cable_peaks: &mut [f32],
+    ) -> [f32; 2] {
         if !self.active || self.op_count == 0 {
             return [0.0; 2];
         }
@@ -1072,16 +1086,26 @@ impl ModularVoice {
         };
 
         for s in 0..op_count {
-            let inputs = gather_node_inputs(
+            let inputs = gather_node_inputs::<RECORD_ACTIVITY>(
                 self.ops[s],
                 &self.ops[..op_count],
                 &self.cables[..cable_count],
                 &self.cable_current[..cable_count],
                 &self.slots[..op_count],
                 &self.prev_slots[..op_count],
+                cable_peaks,
             );
             let out = self.nodes[s].process(&inputs, &mut pctx);
-            self.slots[s] = [flush_denormal_f64(out[0]), flush_denormal_f64(out[1])];
+            let flushed = [flush_denormal_f64(out[0]), flush_denormal_f64(out[1])];
+            self.slots[s] = flushed;
+            if RECORD_ACTIVITY {
+                if let Some(peak_slot) = mod_peaks.get_mut(s) {
+                    let mag = flushed[0].abs().max(flushed[1].abs()) as f32;
+                    if mag.is_finite() && mag > *peak_slot {
+                        *peak_slot = mag;
+                    }
+                }
+            }
         }
 
         self.prev_slots[..op_count].copy_from_slice(&self.slots[..op_count]);
@@ -1109,16 +1133,63 @@ impl ModularVoice {
         preview: Option<&Arc<SampleData>>,
         out: &mut [[f32; 2]],
     ) -> usize {
+        self.render_block_with_activity(bank, preview, out, None)
+    }
+
+    /// Execute up to `out.len()` consecutive frames, optionally merging per-module and
+    /// per-cable signal peaks into `activity` once per block with zero heap allocations.
+    pub fn render_block_with_activity(
+        &mut self,
+        bank: &SampleBank,
+        preview: Option<&Arc<SampleData>>,
+        out: &mut [[f32; 2]],
+        activity: Option<&mut RackActivityTelemetry>,
+    ) -> usize {
         if !self.active || self.op_count == 0 {
             return 0;
         }
         let mut written = 0usize;
-        for slot in out.iter_mut() {
-            if !self.active {
-                break;
+        match activity {
+            None => {
+                let mut empty_mods = [0.0_f32; 0];
+                let mut empty_cables = [0.0_f32; 0];
+                for slot in out.iter_mut() {
+                    if !self.active {
+                        break;
+                    }
+                    *slot = self.next_frame_inner::<false>(
+                        bank,
+                        preview,
+                        &mut empty_mods,
+                        &mut empty_cables,
+                    );
+                    written += 1;
+                }
             }
-            *slot = self.next_frame(bank, preview);
-            written += 1;
+            Some(telemetry) => {
+                let mut mod_peaks = [0.0_f32; MAX_MODULES_PER_ZONE];
+                let mut cable_peaks = [0.0_f32; MAX_CABLES_PER_ZONE];
+                for slot in out.iter_mut() {
+                    if !self.active {
+                        break;
+                    }
+                    *slot = self.next_frame_inner::<true>(
+                        bank,
+                        preview,
+                        &mut mod_peaks,
+                        &mut cable_peaks,
+                    );
+                    written += 1;
+                }
+                if written > 0 {
+                    for (op, &peak) in self.ops[..self.op_count].iter().zip(&mod_peaks) {
+                        telemetry.merge_module_peak(op.module_id, peak);
+                    }
+                    for (cable, &peak) in self.cables[..self.cable_count].iter().zip(&cable_peaks) {
+                        telemetry.merge_cable_peak(cable.cable_id, peak);
+                    }
+                }
+            }
         }
         written
     }
@@ -1288,14 +1359,15 @@ fn acid_filter_vel_amount_for_env(
 }
 
 /// Gather all incoming stereo audio, CV, pitch, FM, PWM, and trigger signals for one module slot.
-#[inline]
-fn gather_node_inputs(
+#[inline(always)]
+fn gather_node_inputs<const RECORD_ACTIVITY: bool>(
     op: CompiledOp,
     ops: &[CompiledOp],
     cables: &[CompiledCable],
     cable_current: &[f32],
     slots: &[[f64; 2]],
     prev_slots: &[[f64; 2]],
+    cable_peaks: &mut [f32],
 ) -> NodeInputs {
     let mut inputs = NodeInputs::default();
     let c_start = usize::from(op.in_cable_start).min(cables.len());
@@ -1315,7 +1387,17 @@ fn gather_node_inputs(
         } else {
             slots[from]
         };
-        let amt = f64::from(cable_current[ci]);
+        let amt_f32 = cable_current[ci];
+        if RECORD_ACTIVITY {
+            if let Some(peak_slot) = cable_peaks.get_mut(ci) {
+                let src_mag = raw_src[0].abs().max(raw_src[1].abs()) as f32;
+                let level = cable_signal_level(op.kind, c.to_port, src_mag, amt_f32);
+                if level > *peak_slot {
+                    *peak_slot = level;
+                }
+            }
+        }
+        let amt = f64::from(amt_f32);
         match c.to_port {
             InPort::In => {
                 inputs.in_audio[0] += raw_src[0] * amt;

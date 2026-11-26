@@ -28,6 +28,8 @@ fn base_rack_view(tab: RackTab, visual: ModuleVisualView) -> InstrumentDeckView 
                     badge: "VCO",
                     detail: "Saw · +0st".into(),
                     kind: ModuleKindTag::Vco,
+                    activity: 0.78,
+                    hot: false,
                     selected: true,
                     in_path: true,
                     incoming_ports: vec![InPort::PitchCv, InPort::FmIn],
@@ -48,6 +50,8 @@ fn base_rack_view(tab: RackTab, visual: ModuleVisualView) -> InstrumentDeckView 
                     badge: "FLT",
                     detail: "LP12 · 1.2kHz".into(),
                     kind: ModuleKindTag::Filter,
+                    activity: 0.62,
+                    hot: false,
                     selected: false,
                     in_path: true,
                     incoming_ports: vec![InPort::In, InPort::Cv],
@@ -64,6 +68,8 @@ fn base_rack_view(tab: RackTab, visual: ModuleVisualView) -> InstrumentDeckView 
                     badge: "OUT",
                     detail: "+0.0 dB · C".into(),
                     kind: ModuleKindTag::Out,
+                    activity: 0.55,
+                    hot: false,
                     selected: false,
                     in_path: true,
                     incoming_ports: vec![InPort::In],
@@ -85,6 +91,7 @@ fn base_rack_view(tab: RackTab, visual: ModuleVisualView) -> InstrumentDeckView 
                 to_port_y: 0.24,
                 kind: PatchbayCableKind::Audio,
                 amount: 1.0,
+                activity: 0.74,
                 label: "1.00".into(),
                 feedback: false,
                 selected: true,
@@ -102,6 +109,7 @@ fn base_rack_view(tab: RackTab, visual: ModuleVisualView) -> InstrumentDeckView 
                 to_port_y: 0.76,
                 kind: PatchbayCableKind::Fm,
                 amount: 0.35,
+                activity: 0.48,
                 label: "35% z-1".into(),
                 feedback: true,
                 selected: false,
@@ -813,5 +821,73 @@ fn zones_map_renders_warm_amber_root_column_and_adapts_piano_octave_stride() {
     assert!(
         !narrow_labels.contains(&"C2") && !narrow_labels.contains(&"C4"),
         "narrow full-range piano strip must skip odd octaves when oct_px < 28, got: {narrow_labels:?}"
+    );
+}
+
+#[test]
+fn patchbay_live_activity_emits_node_shimmer_and_cable_glow() {
+    let theme = Theme::cadence_dark();
+    let area = Rect::new(0.0, 0.0, 960.0, 520.0);
+
+    let active_view = base_rack_view(
+        RackTab::Patchbay,
+        ModuleVisualView::Out {
+            module_id: 3,
+            name: "Out".into(),
+            gain_db: 0.0,
+            pan: 0.0,
+            spread: 0.25,
+            voice_summary: "POLY".into(),
+            live_waveform: sample_wave(),
+        },
+    );
+    let mut silent_view = active_view.clone();
+    if let InstrumentVisualView::Rack(ref mut rack) = silent_view.visual {
+        for col in &mut rack.patchbay.columns {
+            for node in &mut col.nodes {
+                node.activity = 0.0;
+                node.hot = false;
+            }
+        }
+        for cable in &mut rack.patchbay.cables {
+            cable.activity = 0.0;
+        }
+    }
+
+    let mut dl_silent = DisplayList::new(area.w, area.h, 1.0);
+    draw_instrument(
+        &mut dl_silent,
+        area,
+        &silent_view,
+        true,
+        UiModeKind::Normal,
+        &theme,
+    );
+    assert_eq!(dl_silent.current_clip(), dl_silent.viewport);
+
+    let mut dl_active = DisplayList::new(area.w, area.h, 1.0);
+    draw_instrument(
+        &mut dl_active,
+        area,
+        &active_view,
+        true,
+        UiModeKind::Normal,
+        &theme,
+    );
+    assert_eq!(dl_active.current_clip(), dl_active.viewport);
+
+    // Active modules emit bottom shimmer quads (`theme.accent.playhead`) and active cables
+    // emit extra outer energy halo curve vertices compared to the silent baseline.
+    let active_quads = dl_active.base.quads.len();
+    let silent_quads = dl_silent.base.quads.len();
+    assert!(
+        active_quads >= silent_quads + 3,
+        "3 active Patchbay nodes must emit 3 shimmer quads (active={active_quads}, silent={silent_quads})"
+    );
+    let active_curves = dl_active.base.curve_vertices.len();
+    let silent_curves = dl_silent.base.curve_vertices.len();
+    assert!(
+        active_curves > silent_curves,
+        "live active highlighted cable must emit outer energy halo stroke (active={active_curves}, silent={silent_curves})"
     );
 }

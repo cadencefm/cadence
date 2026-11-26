@@ -1542,6 +1542,37 @@ pub const fn cable_default_amount(target_kind: ModuleKindTag, to_port: InPort) -
     }
 }
 
+/// Compute the live telemetry signal magnitude carried by a patch cable given its
+/// source module peak `src_mag` and live attenuverter `amount`.
+///
+/// - Audio cables (`InPort::In`) return unclamped linear audio peak `|src_mag| * |amount|`,
+///   matching 32-bit float headroom conventions.
+/// - Modulation/CV/Pitch/FM/Gate cables return a normalized `0.0..=1.0` activity magnitude
+///   that drops strictly to `0.0` at zero source or zero attenuverter depth and scales
+///   smoothly across the target port's musical operating range.
+#[inline]
+pub fn cable_signal_level(
+    target_kind: ModuleKindTag,
+    to_port: InPort,
+    src_mag: f32,
+    amount: f32,
+) -> f32 {
+    if !src_mag.is_finite() || !amount.is_finite() {
+        return 0.0;
+    }
+    let src = src_mag.abs();
+    let amt = amount.abs();
+    if src <= 1e-6 || amt <= 1e-6 {
+        return 0.0;
+    }
+    if to_port == InPort::In {
+        return src * amt;
+    }
+    let ref_depth = cable_default_amount(target_kind, to_port).abs().max(1e-4);
+    let depth_factor = (amt / ref_depth).min(1.0).sqrt();
+    (src * depth_factor).clamp(0.0, 1.0)
+}
+
 #[inline]
 pub fn normalize_cable_amount(target_kind: ModuleKindTag, to_port: InPort, amount: f32) -> f32 {
     let (lo, hi) = cable_amount_range(target_kind, to_port);

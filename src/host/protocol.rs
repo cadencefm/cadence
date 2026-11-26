@@ -823,6 +823,7 @@ fn default_headless_ear_path() -> PathBuf {
 }
 
 fn tick_live(app: &mut App, audio: &mut AudioRuntime) -> Result<()> {
+    audio.set_rack_activity_watch(app.active_patchbay_target());
     let mut hooks = HeadlessOutcomeHooks;
     match app.poll_browser_updates() {
         Ok(outcome) => apply_outcome_with_hooks(app, Some(audio), &outcome, &mut hooks)?,

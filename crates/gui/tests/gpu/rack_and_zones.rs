@@ -432,10 +432,31 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
             prev_px = px;
         }
 
-        // 3. Eurorack Patchbay with selected dashed `z-1` feedback cable (Dark & Light).
+        // 3. Eurorack Patchbay with live module/cable activity + selected dashed `z-1` feedback cable (Dark & Light).
         app.rack_ui.tab = RackTab::Patchbay;
         app.rack_ui.patchbay_cable_id = Some(13);
-        let fv_pb = app.frame_view(&snap, STATUS);
+        let mut pb_snap = snap.clone();
+        if let Some((inst_id, zone_id)) = app.active_patchbay_target() {
+            let mut tel = cadence_core::runtime::RackActivityTelemetry::for_zone(inst_id, zone_id);
+            for (i, peak) in [
+                0.88_f32, 0.72, 0.45, 0.92, 0.64, 0.78, 1.12, 0.56, 0.68, 0.74, 0.82,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                tel.set_module_peak((i + 1) as u16, peak);
+            }
+            for (i, peak) in [
+                0.84_f32, 0.66, 0.42, 0.75, 0.58, 0.88, 0.72, 0.61, 0.52, 0.79, 0.64, 0.70, 0.68,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                tel.set_cable_peak((i + 1) as u16, peak);
+            }
+            pb_snap.set_rack_activity(tel);
+        }
+        let fv_pb = app.frame_view(&pb_snap, STATUS);
         let dl_pb = build_display_list(&fv_pb, DEFAULT_W as f32, DEFAULT_H as f32, 1.0, &dark);
         assert!(
             dl_pb.base.texts.iter().any(|t| t.text.contains("z-1")),
@@ -456,6 +477,11 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
                 assert!(r.patchbay.has_feedback);
                 assert_eq!(r.patchbay.feedback_badge, "z-1");
                 assert!(r.patchbay.cables.iter().any(|c| c.feedback && c.selected));
+                assert!(
+                    r.patchbay.nodes.iter().any(|n| n.activity > 0.5)
+                        && r.patchbay.cables.iter().any(|c| c.activity > 0.5),
+                    "Patchbay view must surface live module and cable activity peaks"
+                );
             }
             other => panic!("expected Rack Patchbay, got {other:?}"),
         }

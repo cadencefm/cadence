@@ -301,6 +301,8 @@ impl HostBridge for EngineBridge<'_> {
     }
 
     fn poll_host(&mut self, app: &mut App) -> HostPollResult {
+        self.engine
+            .set_rack_activity_watch(app.active_patchbay_target());
         let mut redraw = false;
         let mut quit = false;
         if let Some(ctl) = &self.ctl {

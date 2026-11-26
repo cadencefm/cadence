@@ -1,6 +1,7 @@
 //! Eurorack Modular Rack controller: 3-tab Instrument Deck state (`Panel`, `Patchbay`, `Zones`),
 //! 2D Patchbay navigation, module/cable/pin workflows, and `:mod` / `:patch` / `:unpatch` / `:pin` / `:unpin` commands.
 use super::*;
+use crate::layout::{DeckKind, Target};
 use cadence_core::rack::{
     cable_default_amount, compile_zone_graph, format_cable_amount, parse_cable_amount, InPort,
     ModuleKindTag, PanelPin, PatchCable, RackModule, RackPatch, RackZone, MAX_CABLES_PER_ZONE,
@@ -121,6 +122,34 @@ impl App {
         } else {
             self.rack_ui.zone_cursor.min(rack.zones.len() - 1)
         }
+    }
+
+    /// Currently visible Eurorack Patchbay target `(instrument_id, zone_id)` when an
+    /// Instrument Deck is shown on its `Patchbay` tab, or `None` otherwise.
+    pub fn active_patchbay_target(&self) -> Option<(u64, u16)> {
+        if self.rack_ui.tab != RackTab::Patchbay {
+            return None;
+        }
+        let focused_inst = self
+            .layout
+            .focused()
+            .and_then(|d| match (d.kind, d.target) {
+                (DeckKind::Instrument, Target::Instrument(id)) => Some(id),
+                _ => None,
+            });
+        let inst_id = focused_inst.or_else(|| {
+            self.layout.visible().into_iter().find_map(|spot| {
+                self.layout
+                    .deck(spot)
+                    .and_then(|d| match (d.kind, d.target) {
+                        (DeckKind::Instrument, Target::Instrument(id)) => Some(id),
+                        _ => None,
+                    })
+            })
+        })?;
+        let inst = self.instrument(inst_id)?;
+        let zone = inst.rack.zones.get(self.active_zone_index(&inst.rack))?;
+        Some((inst_id, zone.id))
     }
 
     /// Active zone reference for `instrument_id`.
@@ -2829,5 +2858,62 @@ mod tests {
         app.press_keys("u").unwrap();
         assert!(app.instrument(lead_id).is_some());
         assert_eq!(app.doc.project().parts.len(), part_count_before);
+    }
+
+    #[test]
+    fn patchbay_view_projects_live_rack_activity_and_watch_target() {
+        let mut app = App::new_in_memory(Project::demo(), PathBuf::from("/tmp/patchbay.json"))
+            .expect("init app");
+        let inst_id = app.doc.project().instruments[0].id;
+        let zone = &app.doc.project().instruments[0].rack.zones[0];
+        let zone_id = zone.id;
+        let vco_id = zone.modules[0].id;
+        let cable_id = zone.cables[0].id;
+
+        // Not viewing Patchbay yet -> watch target is None.
+        assert_eq!(app.active_patchbay_target(), None);
+
+        app.open_instrument(inst_id).unwrap();
+        assert_eq!(app.rack_ui.tab, RackTab::Panel);
+        assert_eq!(app.active_patchbay_target(), None);
+
+        app.rack_ui.tab = RackTab::Patchbay;
+        assert_eq!(app.active_patchbay_target(), Some((inst_id, zone_id)));
+
+        let mut tel = cadence_core::runtime::RackActivityTelemetry::for_zone(inst_id, zone_id);
+        tel.set_module_peak(vco_id, 1.25);
+        tel.set_cable_peak(cable_id, 0.72);
+        let mut snap = AudioSnapshot::default();
+        snap.set_rack_activity(tel);
+
+        let fv = app.frame_view(&snap, "test");
+        let pb = fv
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Instrument(iv) => match &iv.visual {
+                    InstrumentVisualView::Rack(r) => Some(&r.patchbay),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("Patchbay deck view");
+        let node = pb
+            .nodes
+            .iter()
+            .find(|n| n.module_id == vco_id)
+            .expect("module node");
+        assert!((node.activity - 1.25).abs() < 1e-6);
+        assert!(node.hot, "audio module peak > 1.0 must flag hot headroom");
+        let cable = pb
+            .cables
+            .iter()
+            .find(|c| c.cable_id == cable_id)
+            .expect("cable view");
+        assert!((cable.activity - 0.72).abs() < 1e-6);
+
+        // Switching away to Panel disables watch target cleanly.
+        app.rack_ui.tab = RackTab::Panel;
+        assert_eq!(app.active_patchbay_target(), None);
     }
 }

@@ -6,7 +6,7 @@ use cadence_core::assets::ensure_sample_bank_ready;
 use cadence_core::dsp::{sanitize_sample, AUDIO_SUB_BLOCK_FRAMES};
 use cadence_core::mixer::{ChannelRef, EffectKind, MAX_MIXER_CHANNELS};
 use cadence_core::music::STEPS_PER_BAR;
-use cadence_core::runtime::SampleBank;
+use cadence_core::runtime::{RackActivityTelemetry, SampleBank};
 use cadence_core::score::ScoreWindow;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -209,6 +209,41 @@ pub fn render_schedule_f32(
         },
     )?;
     Ok((report, frames))
+}
+
+/// Render `steps` steps from `start_step` through the production engine while watching
+/// one Modular Rack `(instrument_id, zone_id)`, returning the live [`RackActivityTelemetry`]
+/// captured at the end of the rendered window.
+pub fn render_rack_activity_snapshot(
+    project: &ScoreWindow,
+    samples: SampleBank,
+    sample_rate: u32,
+    start_step: u64,
+    steps: u64,
+    instrument_id: u64,
+    zone_id: u16,
+) -> Result<RackActivityTelemetry> {
+    let schedule = [(0u64, project)];
+    let frames = validate_render_schedule(&schedule, start_step, steps, &samples, sample_rate)?;
+    let shared = Shared::new_arc();
+    shared.playing.store(true, Ordering::Release);
+    shared.rack_watch_zone_id.store(zone_id, Ordering::Release);
+    shared
+        .rack_watch_inst_id
+        .store(instrument_id, Ordering::Release);
+    let mut engine = Engine::new(project.clone(), samples, sample_rate, Arc::clone(&shared));
+    if start_step > 0 {
+        engine.seek_to_step(start_step);
+        engine.snap_controls_to_current_step();
+    }
+    let mut block = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
+    let mut index = 0u64;
+    while index < frames {
+        let chunk = (frames - index).min(AUDIO_SUB_BLOCK_FRAMES as u64) as usize;
+        engine.render_block(&mut block[..chunk]);
+        index += chunk as u64;
+    }
+    Ok(engine.rack_activity_snapshot())
 }
 
 /// Renders `steps` steps from `start_step`, adopting each scheduled score

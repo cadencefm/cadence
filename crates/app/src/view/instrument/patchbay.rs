@@ -10,6 +10,7 @@ use cadence_core::params::InstrumentParam;
 use cadence_core::rack::{
     compile_zone_graph, format_cable_amount, InPort, ModuleKindTag, RackZone, PATCHBAY_COLUMNS,
 };
+use cadence_core::runtime::AudioSnapshot;
 use std::collections::{HashMap, HashSet};
 
 fn port_y_for(target_tag: ModuleKindTag, port: InPort) -> f32 {
@@ -50,6 +51,7 @@ impl App {
         inst_id: Id,
         zone: &RackZone,
         live: &[f32],
+        snapshot: &AudioSnapshot,
         query_time: f64,
     ) -> PatchbayDeckView {
         let cols_ids = patchbay_columns(zone);
@@ -107,6 +109,8 @@ impl App {
                     continue;
                 };
                 let tag = module.kind.tag();
+                let activity = snapshot.rack_module_peak(inst_id, zone.id, mid);
+                let is_audio_module = !matches!(tag, ModuleKindTag::Env | ModuleKindTag::Lfo);
                 let node = PatchbayNodeView {
                     module_id: mid,
                     col: c,
@@ -115,6 +119,8 @@ impl App {
                     badge: tag.short_badge(),
                     detail: module_card_detail(module),
                     kind: tag,
+                    activity,
+                    hot: is_audio_module && activity > 1.0,
                     selected: selected_cable.is_none() && selected_module == Some(mid),
                     in_path: path_modules.contains(&mid),
                     incoming_ports: tag.in_ports().to_vec(),
@@ -166,6 +172,7 @@ impl App {
                 || (selected_cable.is_none()
                     && selected_module
                         .is_some_and(|mid| cable.from_module == mid || cable.to_module == mid));
+            let cable_activity = snapshot.rack_cable_peak(inst_id, zone.id, cable.id);
             cables.push(PatchbayCableView {
                 cable_id: cable.id,
                 from_module: cable.from_module,
@@ -178,6 +185,7 @@ impl App {
                 to_port_y: port_y_for(dst_tag, cable.to_port),
                 kind: PatchbayCableKind::from_port(cable.to_port),
                 amount: live_amount,
+                activity: cable_activity,
                 label,
                 feedback,
                 selected,

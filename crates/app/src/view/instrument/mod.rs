@@ -246,6 +246,11 @@ pub struct PatchbayNodeView {
     pub badge: &'static str,
     pub detail: String,
     pub kind: ModuleKindTag,
+    /// Live peak output level from `AudioSnapshot::rack_activity` (linear audio peak for
+    /// audio modules; `0.0..=1.0` magnitude for CV/Env/LFO modules).
+    pub activity: f32,
+    /// True when an audio module exceeds 0 dBFS (`> 1.0`) internal float headroom.
+    pub hot: bool,
     pub selected: bool,
     pub in_path: bool,
     pub incoming_ports: Vec<InPort>,
@@ -271,6 +276,9 @@ pub struct PatchbayCableView {
     pub to_port_y: f32,
     pub kind: PatchbayCableKind,
     pub amount: f32,
+    /// Live peak signal magnitude carried on this cable (`AudioSnapshot::rack_activity`).
+    /// Linear audio peak for `PatchbayCableKind::Audio`; `0.0..=1.0` for modulation cables.
+    pub activity: f32,
     /// Formatted attenuverter label; feedback edges use strictly ASCII `"z-1"` badge.
     pub label: String,
     pub feedback: bool,
@@ -561,7 +569,7 @@ impl App {
                     snapshot,
                     query_time,
                 );
-                let patchbay = self.build_patchbay_view(id, zone, live, query_time);
+                let patchbay = self.build_patchbay_view(id, zone, live, snapshot, query_time);
                 let summary =
                     zones::format_selected_zone_summary(zone, selected_zone, rack.zones.len());
                 (

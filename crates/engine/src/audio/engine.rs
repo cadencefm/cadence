@@ -10,9 +10,12 @@ use super::voice_pool::{
 use super::voices::Voice;
 use super::*;
 use crate::mix_engine::MixerEngine;
-use cadence_core::dsp::{control_stride_mask, stereo_mid_f32, AUDIO_SUB_BLOCK_FRAMES};
+use cadence_core::dsp::{
+    control_stride_mask, one_pole_decay_ms, stereo_mid_f32, AUDIO_SUB_BLOCK_FRAMES,
+    TAIL_SILENCE_FLOOR_F32,
+};
 use cadence_core::mixer::{ChannelRef, MAX_EFFECT_DEVICES};
-use cadence_core::runtime::{AudioInputStatus, CapturePhase};
+use cadence_core::runtime::{AudioInputStatus, CapturePhase, RackActivityTelemetry};
 use cadence_core::score::{ScoreWindow, MAX_INSTRUMENTS};
 use std::sync::atomic::{fence, Ordering};
 use std::sync::Arc;
@@ -23,6 +26,9 @@ const CONTROL_TARGET_HZ: f64 = 750.0;
 /// Target live mixer meter seqlock publication cadence (`187.5 Hz`:
 /// `256` frames @ 44.1/48 kHz, `512` @ 96 kHz, `1024` @ 192 kHz).
 const METER_PUBLISH_TARGET_HZ: f64 = 187.5;
+
+/// Ballistic decay time constant (`180 ms`) for watched Patchbay module/cable activity peaks.
+const RACK_ACTIVITY_DECAY_MS: f32 = 180.0;
 
 /// Construct a [`ZoneTriggerCtx`] borrowing only read-only fields of `Engine`
 /// so callers can simultaneously borrow `voice_pool`, `scheduler`, or `mixer` mutably.
@@ -63,6 +69,8 @@ pub(super) struct Engine {
     meter_mask: u32,
     audition_serial: u32,
     monitor_drain: InputMonitorDrain,
+    rack_activity: Box<RackActivityTelemetry>,
+    rack_activity_decay: f32,
 }
 
 /// Resolve the initial transport step when rebuilding [`Engine`] across an audio
@@ -137,6 +145,8 @@ impl Engine {
             meter_mask: control_stride_mask(sr, METER_PUBLISH_TARGET_HZ),
             audition_serial: 0,
             monitor_drain: InputMonitorDrain::new(),
+            rack_activity: Box::new(RackActivityTelemetry::default()),
+            rack_activity_decay: one_pole_decay_ms(RACK_ACTIVITY_DECAY_MS, sr) as f32,
         };
         if start_step > 0 {
             engine.scheduler.seek(start_step);
@@ -166,9 +176,20 @@ impl Engine {
         self.mixer.set_disable_sleep(disable);
     }
 
+    #[cfg(test)]
+    #[inline]
+    pub(super) fn voice_pool_release_all_for_test(&mut self) {
+        self.voice_pool.clear_all();
+    }
+
     #[inline]
     pub(super) fn play_step(&self) -> u64 {
         self.play_step
+    }
+
+    #[inline]
+    pub(super) fn rack_activity_snapshot(&self) -> RackActivityTelemetry {
+        *self.rack_activity
     }
 
     /// Stage a score update into the lock-free publication slot for the current generation.
@@ -286,6 +307,7 @@ impl Engine {
         for slot in &self.shared.effect_meters[fx_count..] {
             slot.clear();
         }
+        self.shared.rack_activity.write(&self.rack_activity);
         self.shared
             .mixer_meter_generation
             .fetch_add(1, Ordering::Release);
@@ -335,7 +357,18 @@ impl Engine {
         self.shared
             .peak_right
             .store(0.0_f32.to_bits(), Ordering::Relaxed);
+        self.clear_rack_activity_peaks();
         self.publish_mixer_meters();
+    }
+
+    #[inline]
+    fn clear_rack_activity_peaks(&mut self) {
+        if self.rack_activity.is_active() {
+            *self.rack_activity = RackActivityTelemetry::for_zone(
+                self.rack_activity.instrument_id,
+                self.rack_activity.zone_id,
+            );
+        }
     }
 
     fn hard_reset(&mut self, start_step: u64) {
@@ -387,6 +420,7 @@ impl Engine {
         let cutoff = self.shared.event_sequence.load(Ordering::Acquire);
         if self.shared.clear_all_meters.swap(false, Ordering::AcqRel) {
             self.mixer.clear_meters(None);
+            self.clear_rack_activity_peaks();
             self.publish_mixer_meters();
         }
         self.commit_pending();
@@ -754,8 +788,31 @@ impl Engine {
                 AuditionKind::Sample { sample, .. } => Some(sample),
                 _ => None,
             });
-        self.voice_pool
-            .render_block(&self.samples, preview_ref, n, &mut self.voice_block);
+        let watch_inst = self.shared.rack_watch_inst_id.load(Ordering::Acquire);
+        let watch_zone = self.shared.rack_watch_zone_id.load(Ordering::Acquire);
+        let rack_tel = if watch_inst != 0 {
+            if self.rack_activity.instrument_id != watch_inst
+                || self.rack_activity.zone_id != watch_zone
+            {
+                *self.rack_activity = RackActivityTelemetry::for_zone(watch_inst, watch_zone);
+            } else {
+                let decay = self.rack_activity_decay.powi(n as i32);
+                self.rack_activity.decay_all(decay, TAIL_SILENCE_FLOOR_F32);
+            }
+            Some(self.rack_activity.as_mut())
+        } else {
+            if self.rack_activity.is_active() {
+                *self.rack_activity = RackActivityTelemetry::default();
+            }
+            None
+        };
+        self.voice_pool.render_block(
+            &self.samples,
+            preview_ref,
+            n,
+            &mut self.voice_block,
+            rack_tel,
+        );
         let mut mon_buf = [[0.0_f32; 2]; AUDIO_SUB_BLOCK_FRAMES];
         let monitor_active =
             self.monitor_drain

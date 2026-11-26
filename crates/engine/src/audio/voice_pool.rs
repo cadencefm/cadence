@@ -13,6 +13,7 @@ use cadence_core::rack::{
     module_sample_key, ModuleKind, ModuleParam, PitchTracking, RackPatch, RackZone, VoiceMode,
     VoiceSettings,
 };
+use cadence_core::runtime::RackActivityTelemetry;
 use cadence_core::score::{ParamLock, ScoreEvent, ScoreWindow, MAX_INSTRUMENTS};
 use std::sync::Arc;
 
@@ -1233,7 +1234,7 @@ impl VoicePool {
         preview_ref: Option<&Arc<SampleData>>,
     ) -> VoiceFrameOut {
         let mut block = VoiceBlockOut::new_boxed();
-        self.render_block(samples, preview_ref, 1, &mut block);
+        self.render_block(samples, preview_ref, 1, &mut block, None);
         let mut sources = [[0.0_f32; 2]; MAX_INSTRUMENTS];
         let mut track_scope = [0.0_f32; MAX_INSTRUMENTS];
         for track in 0..MAX_INSTRUMENTS {
@@ -1255,6 +1256,7 @@ impl VoicePool {
         preview_ref: Option<&Arc<SampleData>>,
         frames: usize,
         out: &mut VoiceBlockOut,
+        mut rack_activity: Option<&mut RackActivityTelemetry>,
     ) {
         let n = frames.min(AUDIO_SUB_BLOCK_FRAMES);
         out.clear_frames();
@@ -1279,18 +1281,22 @@ impl VoicePool {
                     out.track_scope[track][..n].fill(0.0);
                     out.source_active_mask |= bit;
                 }
+                let voice_telemetry = rack_activity
+                    .as_deref_mut()
+                    .filter(|tel| tel.is_for(voice.track_id, voice.zone_id));
                 voice.render_block(
                     samples,
                     preview_ref,
                     &mut out.sources[track][..n],
                     Some(&mut out.track_scope[track][..n]),
+                    voice_telemetry,
                 );
             } else {
                 if !out.preview_active {
                     out.preview[..n].fill([0.0; 2]);
                     out.preview_active = true;
                 }
-                voice.render_block(samples, preview_ref, &mut out.preview[..n], None);
+                voice.render_block(samples, preview_ref, &mut out.preview[..n], None, None);
             }
             let retired_mono = if !voice.active {
                 (voice.track != PREVIEW_TRACK && voice.modular.is_mono()).then(|| {
