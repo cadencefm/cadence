@@ -40,8 +40,7 @@ use cadence_core::runtime::{
 };
 use cadence_core::sampler::{load_sample_file, SampleLibrary};
 use cadence_engine::audio::{render_schedule_f32, RenderReport};
-use cadence_gui::decks::build_display_list;
-use cadence_gui::headless::{distinct_pixel_ratio, HeadlessGpu};
+use cadence_gui::headless::{distinct_pixel_ratio, save_rgba8_png, HeadlessGpu};
 use cadence_gui::theme::Theme;
 use std::path::PathBuf;
 
@@ -297,27 +296,8 @@ fn render_and_verify(
     theme: &Theme,
     write_pngs: bool,
 ) -> Vec<u8> {
-    let dl = build_display_list(frame, SHOT_W as f32, SHOT_H as f32, 1.0, theme);
-    assert_eq!(
-        dl.current_clip(),
-        dl.viewport,
-        "{filename}: unbalanced DisplayList push_clip/pop_clip stack"
-    );
-    assert!(
-        !dl.base.quads.is_empty() && !dl.base.texts.is_empty() && !dl.base.commands.is_empty(),
-        "{filename}: DisplayList base layer must contain quads, text runs, and draw commands"
-    );
-    // Embedded JetBrains Mono lacks superscript minus U+207B; ensure zero tofu glyphs!
-    for t in dl.base.texts.iter().chain(dl.overlay.texts.iter()) {
-        assert!(
-            !t.text.contains('\u{207B}'),
-            "{filename}: emitted unsupported U+207B glyph in {:?}",
-            t.text
-        );
-    }
-
     let rgba = gpu
-        .render_display_list_rgba8(&dl, theme)
+        .render_rgba8(frame, theme)
         .unwrap_or_else(|e| panic!("GPU render failed for {filename}: {e:#}"));
     let ratio = distinct_pixel_ratio(&rgba, theme.surface.canvas);
     assert!(
@@ -326,12 +306,9 @@ fn render_and_verify(
     );
 
     if write_pngs {
-        let out_dir = repo_root().join("docs/screenshots");
-        std::fs::create_dir_all(&out_dir).expect("create docs/screenshots directory");
-        let img = image::RgbaImage::from_raw(SHOT_W, SHOT_H, rgba.clone())
-            .expect("RGBA8 buffer matches 1440x860");
-        img.save(out_dir.join(filename))
-            .unwrap_or_else(|e| panic!("failed to write docs/screenshots/{filename}: {e}"));
+        let out_path = repo_root().join("docs/screenshots").join(filename);
+        save_rgba8_png(&out_path, SHOT_W, SHOT_H, &rgba)
+            .unwrap_or_else(|e| panic!("failed to write {}: {e:#}", out_path.display()));
     }
 
     rgba

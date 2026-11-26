@@ -486,7 +486,6 @@ dependencies = [
  "cadence-gui",
  "clap",
  "hound",
- "image",
  "midir",
  "rfd",
  "serde",

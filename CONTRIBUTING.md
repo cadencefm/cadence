@@ -57,10 +57,10 @@ cargo test --profile release-fast --no-default-features --test audio_invariants
 Whenever modifying `crates/gui` rendering, shaders, themes, or deck layouts, run the headless `wgpu` test suite and visually inspect regenerated PNGs:
 
 ```sh
-cargo test -p cadence-gui --tests
+cargo test -p cadence-gui --test gpu
 ```
 
-Several GPU integration tests in `crates/gui/tests/` also support optional screenshot dump environment variables (for example, `CADENCE_DUMP_METERING_DIR=/tmp/cadence-gpu-check cargo test -p cadence-gui --test float_metering_gpu`) so you can inspect rendered Metal/Vulkan frames directly without launching an interactive window.
+Set `CADENCE_DUMP_GPU_DIR` to dump rendered Metal/Vulkan PNGs for visual inspection without launching an interactive window (for example, `CADENCE_DUMP_GPU_DIR=/tmp/cadence-gpu-check cargo test -p cadence-gui --test gpu`, or filter a single module such as `mixer_and_metering`).
 
 Keep [docs/verification.md](docs/verification.md) aligned with the automated test layers and gates rather than duplicating per-song numeric render logs across docs.
 

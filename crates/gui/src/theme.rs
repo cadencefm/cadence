@@ -484,3 +484,49 @@ impl Theme {
         font_size * self.font.mono_advance_ratio
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn color_distance(a: Color, b: Color) -> f32 {
+        let dr = (a.r as f32 - b.r as f32) / 255.0;
+        let dg = (a.g as f32 - b.g as f32) / 255.0;
+        let db = (a.b as f32 - b.b as f32) / 255.0;
+        (dr * dr + dg * dg + db * db).sqrt()
+    }
+
+    #[test]
+    fn theme_tokens_expose_distinct_focus_overlay_and_jam_accents() {
+        for (name, theme) in [
+            ("Cadence Dark", Theme::cadence_dark()),
+            ("Midnight Neon", Theme::midnight_neon()),
+            ("Studio Light", Theme::studio_light()),
+        ] {
+            let d_fe = color_distance(theme.accent.focus, theme.accent.edit);
+            let d_fj = color_distance(theme.accent.focus, theme.accent.jam);
+            let d_ej = color_distance(theme.accent.edit, theme.accent.jam);
+            assert!(
+                d_fe > 0.30,
+                "{name}: focus vs overlay-edit accent too close ({d_fe:.3})"
+            );
+            assert!(
+                d_fj > 0.30,
+                "{name}: focus vs jam accent too close ({d_fj:.3})"
+            );
+            assert!(
+                d_ej > 0.30,
+                "{name}: overlay-edit vs jam accent too close ({d_ej:.3})"
+            );
+            assert!(
+                theme.glow.jam_border > 0.0,
+                "{name}: jam_border glow must be positive"
+            );
+            let d_cp = color_distance(theme.accent.edit_cursor, theme.accent.playhead);
+            assert!(
+                d_cp > 0.30,
+                "{name}: edit_cursor vs playhead accent too close ({d_cp:.3})"
+            );
+        }
+    }
+}

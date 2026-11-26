@@ -446,3 +446,119 @@ pub fn draw_control_list(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn draw_control_list_two_col_never_starts_col2_with_orphaned_unheaded_row() {
+        let theme = Theme::cadence_dark();
+        let mut controls = Vec::new();
+        for i in 0..9 {
+            controls.push(ControlView {
+                label: format!("Param A{i}"),
+                display: format!("{i}%"),
+                normalized: Some(i as f32 / 8.0),
+                module: "OSC A",
+                selected: i == 0,
+                controlled: false,
+                driver_pills: Vec::new(),
+                pinned: false,
+                midi_badge: None,
+                midi_learning: false,
+            });
+        }
+        for i in 0..4 {
+            controls.push(ControlView {
+                label: format!("Param B{i}"),
+                display: format!("{i}%"),
+                normalized: Some(i as f32 / 3.0),
+                module: "FILTER",
+                selected: false,
+                controlled: false,
+                driver_pills: Vec::new(),
+                pinned: false,
+                midi_badge: None,
+                midi_learning: false,
+            });
+        }
+
+        let mut dl = DisplayList::new(960.0, 180.0, 1.0);
+        draw_control_list(
+            &mut dl,
+            Rect::new(0.0, 0.0, 960.0, 180.0),
+            &controls,
+            0,
+            &theme,
+        );
+        let texts: Vec<&str> = dl.base.texts.iter().map(|t| t.text.as_str()).collect();
+        assert!(
+            texts.iter().any(|t| t.contains("OSC A (CONT.)")),
+            "expected `OSC A (CONT.)` continuation header when a large group spans the 2-col midpoint, got: {texts:?}"
+        );
+
+        let mut small_ctrls = Vec::new();
+        for i in 0..4 {
+            small_ctrls.push(ControlView {
+                label: format!("O{i}"),
+                display: "0".into(),
+                normalized: Some(0.5),
+                module: "OSC A",
+                selected: i == 0,
+                controlled: false,
+                driver_pills: Vec::new(),
+                pinned: false,
+                midi_badge: None,
+                midi_learning: false,
+            });
+        }
+        for i in 0..3 {
+            small_ctrls.push(ControlView {
+                label: format!("E{i}"),
+                display: "0".into(),
+                normalized: Some(0.5),
+                module: "ENV",
+                selected: false,
+                controlled: false,
+                driver_pills: Vec::new(),
+                pinned: false,
+                midi_badge: None,
+                midi_learning: false,
+            });
+        }
+        for i in 0..2 {
+            small_ctrls.push(ControlView {
+                label: format!("L{i}"),
+                display: "0".into(),
+                normalized: Some(0.5),
+                module: "LFO",
+                selected: false,
+                controlled: false,
+                driver_pills: Vec::new(),
+                pinned: false,
+                midi_badge: None,
+                midi_learning: false,
+            });
+        }
+        let mut dl2 = DisplayList::new(960.0, 190.0, 1.0);
+        draw_control_list(
+            &mut dl2,
+            Rect::new(0.0, 0.0, 960.0, 190.0),
+            &small_ctrls,
+            0,
+            &theme,
+        );
+        let col2_top = dl2
+            .base
+            .texts
+            .iter()
+            .filter(|t| t.rect.x > 400.0)
+            .min_by(|a, b| a.rect.y.partial_cmp(&b.rect.y).unwrap())
+            .expect("column 2 texts");
+        assert_eq!(
+            col2_top.text, "ENV",
+            "small split group `ENV` must be pulled intact to row 0 of column 2"
+        );
+    }
+}
