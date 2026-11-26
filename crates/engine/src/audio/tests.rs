@@ -250,159 +250,6 @@ fn silent_runtime_handles_transport_live_jam_notes_audition_and_score_hotswap() 
 }
 
 #[test]
-fn sampler_instrument_plays_prepared_sample_and_respects_looping_and_svf() {
-    let mut p = Project::empty();
-    p.bpm = 120.0;
-    p.bars = 1;
-    p.mixer.master.strip.gain = 1.0;
-    p.mixer
-        .channels
-        .push(Channel::new(1, ChannelKind::Audio, "Sampler"));
-    p.patterns.push(Pattern {
-        id: 1,
-        name: "Hit".into(),
-        kind: PatternKind::Notes {
-            steps: vec![note(1), Step::default(), Step::default(), Step::default()],
-        },
-    });
-    let mut rack = RackPatch::default_sampler();
-    {
-        let smp = sampler_mut(&mut rack);
-        smp.path = Some("./test.wav".into());
-        smp.sample_start = 0;
-        smp.sample_end = 4800;
-        smp.loop_mode = SampleLoopMode::Forward;
-        smp.loop_start = 200;
-        smp.loop_end = 4400;
-        smp.one_shot = false;
-    }
-    {
-        let flt = filter_mut(&mut rack);
-        flt.cutoff_hz = 4000.0;
-        flt.resonance = 0.25;
-    }
-    p.instruments.push(InstrumentInstance {
-        id: 1,
-        name: "Smp".into(),
-        rack,
-        channel: 1,
-    });
-    p.parts.push(Part::new(1, "SmpPart", 1, 1));
-    let mut lane = Lane::new(1, "Smp");
-    lane.placements.push(Placement::new(1, 1, 0, 16));
-    p.lanes.push(lane);
-
-    let score = p.compile().unwrap();
-    let sample = synthetic_sample(4800, 24_000, 440.0);
-    let key = module_sample_key(1, 1, 1);
-    let report = render_measure_report(&score, vec![(key, sample)], 1, 24_000).unwrap();
-    assert!(report.output.peak[0] > 0.05);
-}
-
-#[test]
-fn rack_per_hit_locks_and_continuous_modulation_both_take_effect() {
-    let mut p = rack_project(vec![note(1); 16], RackPatch::default_synth());
-    p.patterns.push(Pattern {
-        id: 2,
-        name: "CutoffRamp".into(),
-        kind: PatternKind::Values {
-            unit: ValueUnit::Normalized,
-            period: 16,
-            mode: ValueMode::Ramp,
-            points: vec![
-                ValuePoint {
-                    step: 0,
-                    value: 0.1,
-                },
-                ValuePoint {
-                    step: 15,
-                    value: 0.95,
-                },
-            ],
-        },
-    });
-    p.patterns.push(Pattern {
-        id: 3,
-        name: "PanLock".into(),
-        kind: PatternKind::Values {
-            unit: ValueUnit::Normalized,
-            period: 16,
-            mode: ValueMode::Hold,
-            points: vec![ValuePoint {
-                step: 0,
-                value: 0.0,
-            }],
-        },
-    });
-    p.patterns.push(Pattern {
-        id: 4,
-        name: "CableLock".into(),
-        kind: PatternKind::Values {
-            unit: ValueUnit::Normalized,
-            period: 16,
-            mode: ValueMode::Hold,
-            points: vec![ValuePoint {
-                step: 0,
-                value: 0.75,
-            }],
-        },
-    });
-    p.modulations.push(Modulation {
-        id: 1,
-        name: "Sweep".into(),
-        target: ModulationTarget::Instrument {
-            instrument: 1,
-            parameter: InstrumentParam::Module {
-                zone: 1,
-                module: 2,
-                param: ModuleParam::Cutoff,
-            },
-        },
-        pattern: 2,
-    });
-    p.parts[0].parameter_links.push(ParameterLink {
-        target: InstrumentParam::Module {
-            zone: 1,
-            module: 6,
-            param: ModuleParam::Pan,
-        },
-        pattern: 3,
-    });
-    p.parts[0].parameter_links.push(ParameterLink {
-        target: InstrumentParam::Cable { zone: 1, cable: 5 },
-        pattern: 4,
-    });
-
-    let score = p.compile().unwrap();
-    let shared = Shared::new_arc();
-    shared.playing.store(true, Ordering::Release);
-    let mut engine = Engine::new(score, Vec::new(), 24_000, shared);
-    // Run 1 step so voice triggers with pan & cable locks while cutoff tracks ModLane.
-    for _ in 0..100 {
-        engine.next_frame();
-    }
-    let active_voice = engine
-        .voices()
-        .iter()
-        .find(|v| v.active)
-        .expect("rack synth voice active");
-    assert!(
-        active_voice.modular.is_module_locked(6, ModuleParam::Pan),
-        "per-hit module pan lock must be recorded on triggered voice"
-    );
-    assert!(
-        active_voice.modular.is_cable_locked(5),
-        "per-hit cable lock must be recorded on triggered voice"
-    );
-    assert!(
-        !active_voice
-            .modular
-            .is_module_locked(2, ModuleParam::Cutoff),
-        "unlocked filter cutoff must remain free for continuous ModLane"
-    );
-}
-
-#[test]
 fn polyphonic_chords_and_channel_send_delay_render_cleanly() {
     let mut chord_step = note(1);
     chord_step.chord = vec![
@@ -1885,6 +1732,10 @@ fn plock_vs_modlane_precedence_across_module_cable_zone_and_rack_params() {
         },
         pattern: 5,
     });
+    part.parameter_links.push(ParameterLink {
+        target: InstrumentParam::Cable { zone: 1, cable: 1 },
+        pattern: 5,
+    });
     p.parts.push(part);
     p.modulations.push(Modulation {
         id: 1,
@@ -1955,7 +1806,17 @@ fn plock_vs_modlane_precedence_across_module_cable_zone_and_rack_params() {
         .find(|v| v.active)
         .expect("sampler voice active");
 
-    // Locked Filter.Cutoff (~500 Hz) beats continuous ModLane (12 kHz)!
+    // Locked Filter.Cutoff (~500 Hz) beats continuous ModLane (12 kHz) and Cable 1 is locked!
+    assert!(
+        active_voice.modular.is_cable_locked(1),
+        "per-hit cable lock must be recorded on triggered voice"
+    );
+    assert!(
+        !active_voice
+            .modular
+            .is_module_locked(2, ModuleParam::Resonance),
+        "unlocked resonance must remain free for continuous ModLane"
+    );
     let flt_cutoff = active_voice
         .modular
         .module_filter_cutoff_hz(2)

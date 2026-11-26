@@ -442,11 +442,11 @@ fn stopped_transport_recording_preserves_active_loop_region_across_quantized_and
     engine.inject_input_frames(&chunk, 48_000);
     app.observe_snapshot(&engine.snapshot());
 
-    // 1. Set and activate loop on bars 2–3 ([16, 48)) via Arrange `[` / `]` + `\` while stopped,
+    // 1. Set and activate a 1-bar loop on bar 2 ([16, 32)) via Arrange `[` / `]` + `\` while stopped,
     //    then arm quantized recording (`t a`).
-    let loop_out = press_merged(&mut app, "gaL[L]\\");
+    let loop_out = press_merged(&mut app, "gaL[]\\");
     dispatch(&mut app, &mut engine, &mut hooks, loop_out);
-    assert_eq!(app.playing_loop(), Some((16, 48)));
+    assert_eq!(app.playing_loop(), Some((16, 32)));
     assert!(!app.playing());
 
     let arm_out = press_merged(&mut app, "ta");
@@ -455,10 +455,10 @@ fn stopped_transport_recording_preserves_active_loop_region_across_quantized_and
         other => panic!("expected RecordingHostCommand::Arm, got {other:?}"),
     };
     assert_eq!(req.punch_in_song_step, 16);
-    assert_eq!(req.punch_out_abs_step, Some(req.punch_in_abs_step + 32));
+    assert_eq!(req.punch_out_abs_step, Some(req.punch_in_abs_step + 16));
     assert_eq!(
         app.playing_loop(),
-        Some((16, 48)),
+        Some((16, 32)),
         "starting quantized recording from stopped transport must preserve active loop region"
     );
     dispatch(&mut app, &mut engine, &mut hooks, arm_out);
@@ -472,7 +472,7 @@ fn stopped_transport_recording_preserves_active_loop_region_across_quantized_and
     );
     assert_eq!(
         app.playing_loop(),
-        Some((16, 48)),
+        Some((16, 32)),
         "active loop region must remain intact after quantized loop recording finishes"
     );
     let landed_placement = app
@@ -484,13 +484,13 @@ fn stopped_transport_recording_preserves_active_loop_region_across_quantized_and
         .expect("landed loop recording placement");
     assert_eq!(landed_placement.start_step, 16);
 
-    // Stop transport cleanly before testing 1-bar count-in on bars 2–3.
+    // Stop transport cleanly before testing 1-bar count-in on bar 2.
     let stop_out = press_merged(&mut app, "<Space>");
     dispatch(&mut app, &mut engine, &mut hooks, stop_out);
     assert!(!app.playing());
-    assert_eq!(app.playing_loop(), Some((16, 48)));
+    assert_eq!(app.playing_loop(), Some((16, 32)));
 
-    // 2. Count-in recording on bars 2–3 leads in from bar 1 (step 0), preserves loop [16, 48),
+    // 2. Count-in recording on bar 2 leads in from bar 1 (step 0), preserves loop [16, 32),
     //    and punches in right at bar 2 (step 16).
     let ci_out = app.execute_command("rec countin LoopCountIn").unwrap();
     let ci_req = match &ci_out.recording_command {
@@ -500,9 +500,9 @@ fn stopped_transport_recording_preserves_active_loop_region_across_quantized_and
     assert_eq!(ci_req.punch_in_song_step, 16);
     assert_eq!(
         ci_req.punch_out_abs_step,
-        Some(ci_req.punch_in_abs_step + 32)
+        Some(ci_req.punch_in_abs_step + 16)
     );
-    assert_eq!(app.playing_loop(), Some((16, 48)));
+    assert_eq!(app.playing_loop(), Some((16, 32)));
     assert_eq!(
         app.song_step_heard(),
         0,

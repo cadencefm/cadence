@@ -1691,7 +1691,8 @@ mod tests {
     use cadence_core::runtime::AudioSnapshot;
     use cadence_core::sampler::SampleLoopMode;
 
-    /// Build a minimal valid 16-bit mono PCM WAV with embedded RIFF `smpl` and `inst` chunks.
+    /// Build a minimal valid 16-bit mono PCM WAV with embedded RIFF `smpl` and `inst` chunks
+    /// via the authoritative `cadence_core::sampler::write_wav_with_metadata` SPOT codec.
     fn write_synthetic_wav_with_riff_meta(
         path: &Path,
         frames: usize,
@@ -1701,64 +1702,23 @@ mod tests {
         loop_start: u32,
         loop_end: u32,
     ) {
-        let mut chunks: Vec<u8> = Vec::new();
-        // `fmt ` chunk (16 bytes: PCM, mono, 48000 Hz, 16-bit)
-        chunks.extend_from_slice(b"fmt ");
-        chunks.extend_from_slice(&16u32.to_le_bytes());
-        chunks.extend_from_slice(&1u16.to_le_bytes()); // PCM
-        chunks.extend_from_slice(&1u16.to_le_bytes()); // mono
-        chunks.extend_from_slice(&48_000u32.to_le_bytes());
-        chunks.extend_from_slice(&(48_000u32 * 2).to_le_bytes());
-        chunks.extend_from_slice(&2u16.to_le_bytes());
-        chunks.extend_from_slice(&16u16.to_le_bytes());
-
-        // `data` chunk (sine burst)
-        let data_bytes = (frames * 2) as u32;
-        chunks.extend_from_slice(b"data");
-        chunks.extend_from_slice(&data_bytes.to_le_bytes());
-        for i in 0..frames {
-            let s = ((i as f32 * 0.05).sin() * 12_000.0) as i16;
-            chunks.extend_from_slice(&s.to_le_bytes());
-        }
-
-        // `smpl` chunk: 36-byte header + 1 x 24-byte loop = 60 bytes
-        chunks.extend_from_slice(b"smpl");
-        chunks.extend_from_slice(&60u32.to_le_bytes());
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // manufacturer
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // product
-        chunks.extend_from_slice(&(1_000_000_000u32 / 48_000).to_le_bytes()); // sample period
-        chunks.extend_from_slice(&u32::from(root_midi).to_le_bytes()); // unity note
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // pitch fraction
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // smpte format
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // smpte offset
-        chunks.extend_from_slice(&1u32.to_le_bytes()); // num loops
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // sampler data
-                                                       // Loop 0: forward loop
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // cue id
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // type = forward
-        chunks.extend_from_slice(&loop_start.to_le_bytes());
-        chunks.extend_from_slice(&loop_end.to_le_bytes());
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // fraction
-        chunks.extend_from_slice(&0u32.to_le_bytes()); // play count
-
-        // `inst` chunk: 7 bytes + 1 pad byte (even chunk size)
-        chunks.extend_from_slice(b"inst");
-        chunks.extend_from_slice(&7u32.to_le_bytes());
-        chunks.push(root_midi); // unshifted note
-        chunks.push(0); // fine tune
-        chunks.push(0); // gain
-        chunks.push(low_midi);
-        chunks.push(high_midi);
-        chunks.push(1); // low vel
-        chunks.push(127); // high vel
-        chunks.push(0); // RIFF word alignment pad
-
-        let mut wav = Vec::with_capacity(12 + chunks.len());
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&((4 + chunks.len()) as u32).to_le_bytes());
-        wav.extend_from_slice(b"WAVE");
-        wav.extend_from_slice(&chunks);
-        std::fs::write(path, wav).unwrap();
+        let samples: Vec<f32> = (0..frames)
+            .map(|i| (i as f32 * 0.05).sin() * 0.36)
+            .collect();
+        let meta = cadence_core::sampler::SampleMetadata {
+            root_midi,
+            has_root: true,
+            low_midi: Some(low_midi),
+            high_midi: Some(high_midi),
+            low_vel: Some(1),
+            high_vel: Some(127),
+            loop_mode: SampleLoopMode::Forward,
+            loop_start: loop_start as usize,
+            loop_end: loop_end as usize,
+            ..Default::default()
+        };
+        cadence_core::sampler::write_wav_with_metadata(path, &samples, None, 48_000, &meta)
+            .unwrap();
     }
 
     fn instrument_rack_view(app: &App) -> crate::view::RackDeckView {
@@ -2075,8 +2035,7 @@ mod tests {
         assert_eq!(zone.high_midi, 52);
         assert_eq!(s.loop_mode, SampleLoopMode::Forward);
         assert_eq!(s.loop_start, 100);
-        // RIFF `smpl` dwEnd is inclusive (400 -> exclusive frame 401).
-        assert_eq!(s.loop_end, 401);
+        assert_eq!(s.loop_end, 400);
         assert!(app
             .assets
             .samples

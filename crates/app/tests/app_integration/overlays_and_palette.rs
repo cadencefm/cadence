@@ -13,7 +13,7 @@
 //!    `"preset"`, `"reverb"`, `"arm take"`, dynamic section/pattern/instrument entries), top-slot
 //!    command passthrough for `--key-script` & power users, and Jam mode clean return.
 
-mod common;
+use crate::common;
 
 use cadence_app::view::OverlayView;
 use cadence_app::{

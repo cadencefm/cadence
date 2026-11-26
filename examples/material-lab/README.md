@@ -24,7 +24,7 @@ cargo run --release --locked -- --project examples/material-lab/project.json --s
   --render signal-garden.wav --render-report signal-garden.report.json
 ```
 
-[build.keys.jsonl](build.keys.jsonl) is the authoritative authoring source: every command runs through Cadence's controller, its inline `expect` assertions verify the graph and placement-local ending, and `tests/material_sessions.rs` verifies that replaying `build.keys.jsonl` reproduces the checked-in [project.json](project.json) identically.
+[build.keys.jsonl](build.keys.jsonl) is the authoritative authoring source: every command runs through Cadence's controller, its inline `expect` assertions verify the graph and placement-local ending, and `tests/integration/cli.rs` verifies that replaying `build.keys.jsonl` reproduces the checked-in [project.json](project.json) identically.
 
 ## What to try
 

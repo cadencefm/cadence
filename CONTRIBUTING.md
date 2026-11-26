@@ -66,5 +66,5 @@ Keep [docs/verification.md](docs/verification.md) aligned with the automated tes
 
 ## Examples, Presets & Docs
 
-- **Reproducible showcases & kits:** Showcase tracks are generated reproducibly through Rust score builders (`examples/*/build.rs`, e.g. `cargo run --release --example build-demo -- --analyze`) or real controller key scripts (`*.keys.jsonl`) verified in integration tests (`tests/material_sessions.rs`). Drumkit sample packs and `v1` Rack kit presets can be baked reproducibly via `cadence --render-kit`.
+- **Reproducible showcases & kits:** Showcase tracks are generated reproducibly through Rust score builders (`examples/*/build.rs`, e.g. `cargo run --release --example build-demo -- --analyze`) or real controller key scripts (`*.keys.jsonl`) verified in integration tests (`tests/integration/cli.rs`). Drumkit sample packs and `v1` Rack kit presets can be baked reproducibly via `cadence --render-kit`.
 - **Writing docs & `cadence.fm`:** Write for a musician or contributor who has never seen an earlier version. Describe what Cadence does today; keep architecture and specs synchronized across [ARCHITECTURE.md](ARCHITECTURE.md), [docs/guide/README.md](docs/guide/README.md), and [docs/spec/](docs/spec/decks-and-interaction.md). Documentation in `docs/` is published as the static site at `cadence.fm` via `book.toml` (`mdbook build`).

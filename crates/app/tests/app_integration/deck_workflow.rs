@@ -7,10 +7,9 @@ use cadence_core::{
 };
 
 fn app() -> App {
-    let lib = cadence_core::sampler::SampleLibrary::from_roots_only(&[], None);
-    let mut app = App::new_with_library(Project::empty(), "unused.json".into(), lib).unwrap();
+    let mut app = App::new_in_memory(Project::empty(), "unused.json".into()).unwrap();
     app.execute_command("part new One init 0 2 4 6 7").unwrap();
-    app.execute_command("part new Two pulse_lead 0 1 2 3 4 5 6")
+    app.execute_command("part new Two synth 0 1 2 3 4 5 6")
         .unwrap();
     app.execute_command("open \"One motif\"").unwrap();
     app

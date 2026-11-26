@@ -2,12 +2,12 @@
 //! document replacement, quit rules, and strict file/take validation.
 use cadence_app::keys::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use cadence_app::{load_project, Action, App};
+use cadence_core::runtime::MidiMessage;
 use cadence_core::{
     material::{PatternKind, Project},
     sampler::SampleLibrary,
     take::Take,
 };
-use cadence_engine::midi::MidiMessage;
 use std::fs;
 
 fn hermetic_app(project: Project, path: std::path::PathBuf) -> App {

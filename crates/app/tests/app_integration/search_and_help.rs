@@ -1,6 +1,6 @@
 //! End-to-end tests for universal `/` search semantics across overlays,
 //! Help overlay formatting/scroll/search behavior, and live hints accuracy.
-mod common;
+use crate::common;
 
 use cadence_app::view::{FrameView, OverlayView, HELP_ENTRIES};
 use cadence_app::{App, KeyCode, KeyEvent, KeyModifiers};

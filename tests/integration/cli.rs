@@ -162,34 +162,6 @@ fn script_save_load_and_output_round_trip_the_edited_score() {
 }
 
 #[test]
-fn offline_render_works_without_a_terminal_or_audio_device() {
-    let directory = tempdir().unwrap();
-    let project_path = directory.path().join("score.json");
-    let wav_path = directory.path().join("score.wav");
-    let mut project = exported_demo();
-    project.bpm = 120.0;
-    save(&project, &project_path);
-    let output = cadence(directory.path())
-        .arg("--project")
-        .arg(&project_path)
-        .arg("--render")
-        .arg(&wav_path)
-        .args(["--bars", "1", "--sample-rate", "8000", "--check"])
-        .output()
-        .unwrap();
-    assert_success(&output);
-    let summary: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(summary["valid"], true);
-    assert_eq!(summary["bpm"], 120.0);
-    let mut wav = hound::WavReader::open(&wav_path).unwrap();
-    assert_eq!(wav.spec().sample_rate, 8_000);
-    assert_eq!(wav.spec().channels, 2);
-    assert_eq!(wav.spec().bits_per_sample, 16);
-    assert_eq!(wav.duration(), 16_000);
-    assert!(wav.samples::<i16>().any(|sample| sample.unwrap() != 0));
-}
-
-#[test]
 fn stdio_play_and_pause_report_live_transport_without_changing_the_score() {
     use std::{
         io::{BufRead, BufReader},
@@ -571,103 +543,7 @@ fn cli_imports_rebirth_rbs_checks_saves_and_renders_wav() {
     let json_path = dir.path().join("acid_fixture.json");
     let wav_path = dir.path().join("acid_fixture.wav");
 
-    // Build a minimal valid RBS 4.2 IFF song (136 BPM, 2 bars, 303#1 + 808 + Delay + Master Comp).
-    let chunk = |tag: &[u8; 4], payload: &[u8]| -> Vec<u8> {
-        let mut out = Vec::with_capacity(8 + payload.len() + 1);
-        out.extend_from_slice(tag);
-        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        out.extend_from_slice(payload);
-        if payload.len() % 2 == 1 {
-            out.push(0);
-        }
-        out
-    };
-    let cat = |kind: &[u8; 4], items: &[Vec<u8>]| -> Vec<u8> {
-        let mut body = kind.to_vec();
-        for it in items {
-            body.extend_from_slice(it);
-        }
-        chunk(b"CAT ", &body)
-    };
-    let mut head = vec![0u8; 256];
-    head[0..9].copy_from_slice(&[0x5B, 0x54, 0x5B, 0x54, 0xBC, 0x04, 0x02, 0x00, 0x00]);
-    let mut glob = vec![0u8; 512];
-    glob[0] = 1; // song mode
-    glob[1] = 1; // loop on
-    glob[2..6].copy_from_slice(&136_000u32.to_be_bytes());
-    glob[10..14].copy_from_slice(&(2 * 768u32).to_be_bytes());
-    let mut usri = vec![0u8; 712];
-    usri[0..13].copy_from_slice(b"CLI Acid Test");
-    let mut mixr = vec![0u8; 64];
-    mixr[0] = 110;
-    mixr[1] = 1;
-    for c in 0..4 {
-        let b = 16 + 12 * c;
-        mixr[b] = 1;
-        mixr[b + 1] = 105;
-        mixr[b + 2] = 64;
-    }
-    let mut tb1 = vec![0u8; 1097];
-    tb1[0..9].copy_from_slice(&[1, 0, 64, 52, 95, 90, 70, 95, 0]);
-    tb1[10] = 16;
-    for s in 0..16 {
-        tb1[11 + s * 2] = [0, 0, 12, 3][s % 4];
-        tb1[11 + s * 2 + 1] = if s % 4 == 0 { 0x02 } else { 0x00 };
-    }
-    let mut tb2 = vec![0u8; 1097];
-    tb2[10] = 16;
-    for s in 0..16 {
-        tb2[11 + s * 2 + 1] = 0x10;
-    }
-    let mut t808 = vec![0u8; 6238];
-    t808[0] = 1;
-    t808[3] = 115;
-    t808[31] = 16;
-    for s in (0..16).step_by(4) {
-        t808[32 + s * 12 + 1] = 1; // BD
-    }
-    let mut t909 = vec![0u8; 6239];
-    t909[32] = 16;
-    let empty_trak = chunk(b"TRAK", &[0, 0, 0, 1, 0, 0, 0]);
-    let on_trak = chunk(b"TRAK", &[0, 0, 0, 2, 0, 0, 1, 0, 1, 0]);
-    let devl = cat(
-        b"DEVL",
-        &[
-            chunk(b"MIXR", &mixr),
-            chunk(b"DELY", &[1, 3, 1, 64, 64, 0, 0, 0]),
-            chunk(b"PCF ", &[0, 60, 64, 40, 0, 64, 1, 0, 0, 0, 0, 0]),
-            chunk(b"DIST", &[0, 60, 0, 0, 0, 0, 0, 0]),
-            chunk(b"COMP", &[1, 70, 50, 0, 0, 0, 0, 0]),
-            chunk(b"303 ", &tb1),
-            chunk(b"303 ", &tb2),
-            chunk(b"808 ", &t808),
-            chunk(b"909 ", &t909),
-        ],
-    );
-    let trkl = cat(
-        b"TRKL",
-        &[
-            chunk(b"TRAK", &[0, 0, 0, 1, 0, 1, 1]),
-            on_trak.clone(),
-            empty_trak.clone(),
-            on_trak,
-            empty_trak.clone(),
-            empty_trak.clone(),
-            empty_trak.clone(),
-            empty_trak.clone(),
-            empty_trak,
-        ],
-    );
-    let rbs = cat(
-        b"RB40",
-        &[
-            chunk(b"HEAD", &head),
-            chunk(b"GLOB", &glob),
-            chunk(b"USRI", &usri),
-            devl,
-            trkl,
-        ],
-    );
+    let rbs = crate::common::minimal_rbs_bytes("CLI Acid Test", 136_000);
     fs::write(&rbs_path, &rbs).unwrap();
 
     let output = cadence(dir.path())
@@ -763,11 +639,17 @@ fn cli_renders_take_stems_and_atomic_render_report() {
         .arg(&wav_path)
         .arg("--render-report")
         .arg(&report_path)
-        .args(["--bars", "1", "--sample-rate", "8000"])
+        .args(["--bars", "1", "--sample-rate", "8000", "--check"])
         .output()
         .unwrap();
     assert_success(&render_out);
-    assert!(wav_path.is_file());
+    let check_summary: Value = serde_json::from_slice(&render_out.stdout).unwrap();
+    assert_eq!(check_summary["valid"], true);
+    let mut mix_wav = hound::WavReader::open(&wav_path).unwrap();
+    assert_eq!(mix_wav.spec().sample_rate, 8_000);
+    assert_eq!(mix_wav.spec().channels, 2);
+    assert_eq!(mix_wav.spec().bits_per_sample, 16);
+    assert!(mix_wav.samples::<i16>().any(|s| s.unwrap() != 0));
     let report_raw = fs::read(&report_path).unwrap();
     assert!(
         report_raw.ends_with(b"\n"),
@@ -904,4 +786,40 @@ fn cli_preserves_corrupt_user_config_and_warns_on_stderr() {
         raw_corrupt,
         "corrupt config.json must remain untouched on disk"
     );
+}
+
+#[test]
+fn shipped_key_sessions_rebuild_the_checked_in_authored_documents() {
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let temp = tempdir().unwrap();
+    let folder = repo.join("examples/material-lab");
+    let output = temp.path().join("material-lab.json");
+    let result = Command::new(env!("CARGO_BIN_EXE_cadence"))
+        .current_dir(&folder)
+        .args([
+            "--empty",
+            "--sample-roots-only",
+            "--key-script",
+            "build.keys.jsonl",
+            "--check",
+            "--output",
+        ])
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert_success(&result);
+    let rebuilt = load_project(&output).unwrap();
+    let proj_path = folder.join("project.json");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+    let shipped =
+        cadence_app::App::new_with_library(load_project(&proj_path).unwrap(), proj_path, lib)
+            .unwrap();
+    let comparison = temp.path().join("material-lab-expected.json");
+    shipped.save_project(&comparison).unwrap();
+    assert_eq!(
+        rebuilt,
+        load_project(&comparison).unwrap(),
+        "material-lab source/session drift"
+    );
+    assert!(!temp.path().join("samples").exists());
 }

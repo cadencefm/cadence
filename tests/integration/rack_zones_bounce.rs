@@ -1,6 +1,6 @@
 //! End-to-end integration tests for the Interactive Rack Zone Editor
 //! and Resampling / Bounce-to-Sampler (`:zone`, `:bounce`, `execute_bounce_request`).
-mod common;
+use crate::common;
 
 use cadence::host::execute_bounce_request;
 use cadence_app::{Action, App, BounceScope, ControlTarget, Detail, RackTab, ZoneControl};
