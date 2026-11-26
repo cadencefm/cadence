@@ -81,7 +81,7 @@ fn app_with_temp_sampler(wav_name: &str, with_cues: bool) -> (tempfile::TempDir,
     let wav_path = dir.path().join("samples").join(wav_name);
     write_four_hit_break_wav(&wav_path, 44_100, with_cues);
 
-    let lib = SampleLibrary::discover(&[dir.path().join("samples")], Some(&save_path));
+    let lib = SampleLibrary::from_roots_only(&[dir.path().join("samples")], Some(&save_path));
     let mut app = App::new_with_library(Project::demo(), save_path, lib).unwrap();
     app.execute_command(&format!("sampler Break samples/{wav_name}"))
         .unwrap();

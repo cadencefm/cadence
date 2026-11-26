@@ -1,4 +1,4 @@
-//! Headless Metal/wgpu GPU documentation screenshot harness (1440×860).
+//! Headless Metal/wgpu GPU documentation screenshot generator (1440×860).
 //!
 //! Renders all 17 flagship documentation screenshots from the real MIT showcase
 //! projects (`examples/demo/project.json` — Afterglow,
@@ -9,11 +9,11 @@
 //! `cadence_engine::audio::render_schedule_f32` (channel peaks, headroom flags,
 //! Compressor/Limiter gain reduction, and oscilloscope traces).
 //!
-//! - In normal `cargo test --workspace`, verifies all 17 scenes render non-blank,
-//!   visually distinct frames with balanced `DisplayList` clip stacks and zero
-//!   missing glyphs without writing anything to `docs/screenshots/`.
-//! - With `CADENCE_WRITE_DOCS_SCREENSHOTS=1`, writes all 17 PNGs directly to
-//!   `docs/screenshots/`.
+//! Usage:
+//! - Write all 17 PNGs to `docs/screenshots/`:
+//!   `cargo run --no-default-features --features gui --example render-docs-screenshots`
+//! - Verify all 17 scenes render cleanly without modifying `docs/screenshots/`:
+//!   `cargo run --no-default-features --features gui --example render-docs-screenshots -- --check`
 use cadence_app::view::{
     DeckView, DevicesTab, EffectVisualView, FrameView, GraphTarget, InstrumentVisualView,
     ModuleVisualView, OverlayView, PatternContentView, RackTab, UiModeKind,
@@ -288,13 +288,14 @@ fn snapshot_from_telemetry(
 }
 
 /// Build and validate a balanced `DisplayList`, render on `HeadlessGpu`, assert
-/// non-blank output, and optionally write `docs/screenshots/<filename>` when
-/// `CADENCE_WRITE_DOCS_SCREENSHOTS=1`.
+/// non-blank output, and write `docs/screenshots/<filename>` unless running in
+/// `--check` mode.
 fn render_and_verify(
     gpu: &mut HeadlessGpu,
     filename: &str,
     frame: &FrameView,
     theme: &Theme,
+    write_pngs: bool,
 ) -> Vec<u8> {
     let dl = build_display_list(frame, SHOT_W as f32, SHOT_H as f32, 1.0, theme);
     assert_eq!(
@@ -316,7 +317,7 @@ fn render_and_verify(
     }
 
     let rgba = gpu
-        .render_rgba8(frame, theme)
+        .render_display_list_rgba8(&dl, theme)
         .unwrap_or_else(|e| panic!("GPU render failed for {filename}: {e:#}"));
     let ratio = distinct_pixel_ratio(&rgba, theme.surface.canvas);
     assert!(
@@ -324,11 +325,7 @@ fn render_and_verify(
         "{filename}: rendered too few non-canvas pixels ({ratio:.3})"
     );
 
-    if std::env::var("CADENCE_WRITE_DOCS_SCREENSHOTS")
-        .ok()
-        .as_deref()
-        == Some("1")
-    {
+    if write_pngs {
         let out_dir = repo_root().join("docs/screenshots");
         std::fs::create_dir_all(&out_dir).expect("create docs/screenshots directory");
         let img = image::RgbaImage::from_raw(SHOT_W, SHOT_H, rgba.clone())
@@ -340,10 +337,15 @@ fn render_and_verify(
     rgba
 }
 
-#[test]
-fn gpu_renders_all_flagship_docs_screenshots() {
+fn main() {
+    let check_only = std::env::args().any(|arg| arg == "--check")
+        || std::env::var("CADENCE_WRITE_DOCS_SCREENSHOTS")
+            .ok()
+            .as_deref()
+            == Some("0");
+    let write_pngs = !check_only;
     let Ok(mut gpu) = HeadlessGpu::new(SHOT_W, SHOT_H) else {
-        // Skip gracefully only on GPU-less headless CI containers.
+        eprintln!("No headless GPU adapter available; skipping screenshot render.");
         return;
     };
 
@@ -404,7 +406,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             &d.view,
             DeckView::Output(o) if matches!(o.master_gr_tag, Some("CMP" | "LIM")) && !o.waveform.is_empty()
         )));
-        let px = render_and_verify(&mut gpu, "01-arrange.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "01-arrange.png", &fv, &dark, write_pngs);
         rendered.push(("01-arrange.png", px));
     }
 
@@ -451,7 +453,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
         assert!(found, "Rhythm channel node must appear in Signal Graph");
 
         let fv = app.frame_view(&snap, AUDIO_STATUS);
-        let px = render_and_verify(&mut gpu, "02-signal-graph.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "02-signal-graph.png", &fv, &dark, write_pngs);
         rendered.push(("02-signal-graph.png", px));
     }
 
@@ -586,7 +588,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
                 && mv.channels.iter().filter(|c| c.gr_tag.is_some()).count() >= 3,
             "Mixer must show active dynamics GR micro-meters across Drums, Music, and Master"
         );
-        let px = render_and_verify(&mut gpu, "03-mixer.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "03-mixer.png", &fv, &dark, write_pngs);
         rendered.push(("03-mixer.png", px));
     }
 
@@ -637,7 +639,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             }
             other => panic!("expected Rack visual, got {other:?}"),
         }
-        let px = render_and_verify(&mut gpu, "04-rack-zones.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "04-rack-zones.png", &fv, &dark, write_pngs);
         rendered.push(("04-rack-zones.png", px));
     }
 
@@ -699,7 +701,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             },
             other => panic!("expected Rack visual, got {other:?}"),
         }
-        let px = render_and_verify(&mut gpu, "05-rack-panel.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "05-rack-panel.png", &fv, &dark, write_pngs);
         rendered.push(("05-rack-panel.png", px));
     }
 
@@ -751,7 +753,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             }
             other => panic!("expected Filter visual, got {other:?}"),
         }
-        let px = render_and_verify(&mut gpu, "06-fx-filter-pcf.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "06-fx-filter-pcf.png", &fv, &dark, write_pngs);
         rendered.push(("06-fx-filter-pcf.png", px));
     }
 
@@ -785,7 +787,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
                 >= 5,
             "At least 5 Iron Circuit macros must display live automated sweeps"
         );
-        let px = render_and_verify(&mut gpu, "07-macros-deck.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "07-macros-deck.png", &fv, &dark, write_pngs);
         rendered.push(("07-macros-deck.png", px));
     }
 
@@ -820,7 +822,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             matches!(pv.content, PatternContentView::Notes { .. }),
             "Bell Mini must project evaluated fractional sub-step notes"
         );
-        let px = render_and_verify(&mut gpu, "08-pattern-mini.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "08-pattern-mini.png", &fv, &dark, write_pngs);
         rendered.push(("08-pattern-mini.png", px));
     }
 
@@ -880,7 +882,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             fv.lane_layer.is_some(),
             "Floating Lane-Layer card must be visible"
         );
-        let px = render_and_verify(&mut gpu, "09-jam-perform.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "09-jam-perform.png", &fv, &dark, write_pngs);
         rendered.push(("09-jam-perform.png", px));
     }
 
@@ -930,7 +932,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             .decks
             .iter()
             .any(|d| matches!(d.view, DeckView::Output(_))));
-        let px = render_and_verify(&mut gpu, "10-studio-light.png", &fv, &light);
+        let px = render_and_verify(&mut gpu, "10-studio-light.png", &fv, &light, write_pngs);
         rendered.push(("10-studio-light.png", px));
     }
 
@@ -1072,7 +1074,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             }
             other => panic!("expected Rack Patchbay visual, got {other:?}"),
         }
-        let px = render_and_verify(&mut gpu, "11-rack-patchbay.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "11-rack-patchbay.png", &fv, &dark, write_pngs);
         rendered.push(("11-rack-patchbay.png", px));
     }
 
@@ -1190,7 +1192,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             })
             .expect("Devices Audio view");
         assert_eq!(dv.active_tab, DevicesTab::Audio);
-        let px = render_and_verify(&mut gpu, "12-devices-audio.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "12-devices-audio.png", &fv, &dark, write_pngs);
         rendered.push(("12-devices-audio.png", px));
     }
 
@@ -1266,7 +1268,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             .expect("Devices MIDI view");
         assert_eq!(dv.active_tab, DevicesTab::Midi);
         assert_eq!(dv.device_rows.len(), 5);
-        let px = render_and_verify(&mut gpu, "13-devices-midi.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "13-devices-midi.png", &fv, &dark, write_pngs);
         rendered.push(("13-devices-midi.png", px));
     }
 
@@ -1286,7 +1288,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             snapshot_from_telemetry(&iron_telemetry, app.project(), step, 0.35, &iron_scopes);
         let fv = app.frame_view(&snap, AUDIO_STATUS);
         assert!(matches!(fv.overlay, Some(OverlayView::PresetBrowser(_))));
-        let px = render_and_verify(&mut gpu, "14-preset-browser.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "14-preset-browser.png", &fv, &dark, write_pngs);
         rendered.push(("14-preset-browser.png", px));
     }
 
@@ -1321,7 +1323,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             fv.decks.iter().any(|d| matches!(d.view, DeckView::Take(_))),
             "Take Deck must be visible"
         );
-        let px = render_and_verify(&mut gpu, "15-take-deck.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "15-take-deck.png", &fv, &dark, write_pngs);
         rendered.push(("15-take-deck.png", px));
     }
 
@@ -1346,7 +1348,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
         );
         let fv = app.frame_view(&snap, AUDIO_STATUS);
         assert!(matches!(fv.overlay, Some(OverlayView::Palette(_))));
-        let px = render_and_verify(&mut gpu, "16-action-palette.png", &fv, &dark);
+        let px = render_and_verify(&mut gpu, "16-action-palette.png", &fv, &dark, write_pngs);
         rendered.push(("16-action-palette.png", px));
     }
 
@@ -1381,7 +1383,7 @@ fn gpu_renders_all_flagship_docs_screenshots() {
             }
             other => panic!("expected Settings overlay, got {other:?}"),
         }
-        let px = render_and_verify(&mut gpu, "17-settings-neon.png", &fv, &neon);
+        let px = render_and_verify(&mut gpu, "17-settings-neon.png", &fv, &neon, write_pngs);
         rendered.push(("17-settings-neon.png", px));
     }
 

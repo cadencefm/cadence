@@ -28,7 +28,7 @@ fn gpu_instrument_bold_alignment_and_no_coding_ligatures() {
         return;
     };
     let theme = Theme::cadence_dark();
-    let mut app = App::new(Project::demo(), PathBuf::from("font_help_gpu.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("font_help_gpu.json")).unwrap();
     let snap = common::build_snapshot(app.project(), 24);
     let status = "Metal · 48 kHz";
 
@@ -177,7 +177,7 @@ fn gpu_help_overlay_multiline_wrap_across_tabs_resolutions_and_themes() {
     };
     let dark = Theme::cadence_dark();
     let light = Theme::studio_light();
-    let mut app = App::new(Project::demo(), PathBuf::from("help_gpu.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("help_gpu.json")).unwrap();
     let snap = common::build_snapshot(app.project(), 24);
     let status = "Metal · 48 kHz";
 

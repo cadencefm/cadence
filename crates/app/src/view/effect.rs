@@ -1348,7 +1348,7 @@ mod tests {
             },
         });
 
-        let mut app = App::new(project, "demo.json".into()).unwrap();
+        let mut app = App::new_in_memory(project, "demo.json".into()).unwrap();
         let mut snap = AudioSnapshot {
             playing: true,
             absolute_step: 8,
@@ -1821,7 +1821,7 @@ mod tests {
             )],
         });
 
-        let mut app = App::new(project, "fx-live.json".into()).unwrap();
+        let mut app = App::new_in_memory(project, "fx-live.json".into()).unwrap();
         app.open_effect(fx_id).unwrap();
 
         let snap = AudioSnapshot {

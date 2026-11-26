@@ -1094,7 +1094,7 @@ fn global_ctrl_decks_ctrl_shift_modals_jam_and_bank_isolation() {
 
 #[test]
 fn open_instrument_resets_rack_cursors_graph_add_picker_and_zero_colon_leaks() {
-    let mut app = App::new(Project::demo(), "cross_stream.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "cross_stream.json".into()).unwrap();
     assert!(app.project().instruments.len() >= 2);
     let inst0 = app.project().instruments[0].id;
     let inst1 = app.project().instruments[1].id;

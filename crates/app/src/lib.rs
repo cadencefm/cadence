@@ -599,6 +599,17 @@ impl App {
         Self::with_host_io(project, flags, save_path, library, Arc::new(CoreHostIo))
     }
 
+    /// Construct a pure in-memory session backed by [`MemoryHostIo`] with zero OS filesystem reads.
+    pub fn new_in_memory(project: Project, save_path: PathBuf) -> Result<Self> {
+        let root = save_path
+            .parent()
+            .filter(|p| p.is_absolute() && !p.as_os_str().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/virtual"));
+        let io = Arc::new(crate::host_io::MemoryHostIo::new(root));
+        Self::new_with_host_io(project, save_path, io)
+    }
+
     /// Construct a pure session backed by an injected [`HostIo`] and empty sample roots
     /// (zero OS filesystem reads when paired with [`MemoryHostIo`]).
     pub fn new_with_host_io(

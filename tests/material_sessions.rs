@@ -8,8 +8,18 @@ use std::{fs, path::PathBuf, process::Command};
 
 #[test]
 fn modal_keys_and_typed_actions_build_the_same_retained_project() {
-    let mut keys = App::new(Project::empty(), "unused.json".into()).unwrap();
-    let mut api = App::new(Project::empty(), "unused.json".into()).unwrap();
+    let mut keys = App::new_with_library(
+        Project::empty(),
+        "unused.json".into(),
+        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
+    )
+    .unwrap();
+    let mut api = App::new_with_library(
+        Project::empty(),
+        "unused.json".into(),
+        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
+    )
+    .unwrap();
     keys.press_keys(":bars 8<Enter>:part new Lead pulse_lead 0 4 2 6 7<Enter>:pattern degrees Harmony 64 hold 0:0 24:-2 32:2 56:-1<Enter>:derive Moving add \"Lead motif\" Harmony<Enter>:part Lead pattern Moving<Enter>").unwrap();
     for action in [
         Action::Edit {
@@ -121,11 +131,10 @@ fn shipped_key_sessions_rebuild_the_checked_in_authored_documents() {
             String::from_utf8_lossy(&result.stderr)
         );
         let rebuilt = load_project(&output).unwrap();
-        let shipped = App::new(
-            load_project(&folder.join("project.json")).unwrap(),
-            folder.join("project.json"),
-        )
-        .unwrap();
+        let proj_path = folder.join("project.json");
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+        let shipped =
+            App::new_with_library(load_project(&proj_path).unwrap(), proj_path, lib).unwrap();
         let comparison = temp.path().join(format!("{name}-expected.json"));
         shipped.save_project(&comparison).unwrap();
         assert_eq!(

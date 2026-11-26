@@ -351,7 +351,8 @@ fn zone_params_commands_macros_mods_plocks_midi_pruning_and_audio_diffs() {
 
     let project = build_hybrid_kit_project(sample_rel);
     let save_path = dir.path().join("project.json");
-    let mut app = App::new(project, save_path).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&save_path));
+    let mut app = App::new_with_library(project, save_path, lib).unwrap();
     assert!(app.ready(), "synthetic zone sample must load cleanly");
 
     // 1. Global dotted `:param` works from anywhere (both zone name & z-id forms).
@@ -881,7 +882,9 @@ fn rack_zone_inspector_panel_pages_and_undo_coalescing() {
 fn group_to_group_routing_ui_cycler_cycle_rejection_graph_and_stems() {
     let dir = tempfile::tempdir().unwrap();
     let p = Project::demo();
-    let mut app = App::new(p, dir.path().join("project.json")).unwrap();
+    let proj_path = dir.path().join("project.json");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+    let mut app = App::new_with_library(p, proj_path, lib).unwrap();
 
     // Create two Group buses: SubBus and MasterBus.
     app.execute_command("channel group SubBus").unwrap();
@@ -1015,7 +1018,7 @@ fn group_to_group_routing_ui_cycler_cycle_rejection_graph_and_stems() {
 
 #[test]
 fn modulation_target_send_compilation_views_param_and_midi_cc() {
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     let src_ch = app.project().mixer.channels[0].id;
     let ret_ch = app
         .project()
@@ -1195,7 +1198,7 @@ fn modulation_target_send_compilation_views_param_and_midi_cc() {
 
 #[test]
 fn unified_param_ops_aliases_pan_sends_effect_by_name_and_gate_ceiling() {
-    let mut app = App::new(Project::demo(), "param_ops.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "param_ops.json".into()).unwrap();
     let ch_name = app.project().mixer.channels[0].name.clone();
     let ch_id = app.project().mixer.channels[0].id;
 

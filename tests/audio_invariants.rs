@@ -1056,4 +1056,46 @@ fn rack_zone_velocity_split_gain_and_choke_invariants() {
         "velocity boundary 0.5 must trigger ONLY HighR (no LowL double-trigger): peak={:?}",
         rep.output.peak
     );
+
+    // Choke invariant: a second zone in choke_group Some(1) on MIDI 62 (degree 2 in C major)
+    // triggered at step 1 must immediately choke the sustaining HighR voice on right channel.
+    let mut z_choker = tone_zone(3, "ChokerL", 0.0, 1.0, 0.0, Some(1), -1.0);
+    z_choker.low_midi = 62;
+    z_choker.high_midi = 62;
+    z_choker.root_midi = 62;
+    if let ModuleKind::Env(env) = &mut z_choker.modules[2].kind {
+        env.decay_ms = 5.0;
+        env.sustain = 0.0;
+        env.release_ms = 5.0;
+    }
+    p.instruments[0].rack.zones.push(z_choker);
+    let long_hit = Step {
+        active: true,
+        degree: 1,
+        velocity: 0.8,
+        gate: 3.5,
+        ..Step::default()
+    };
+    let choke_hit = Step {
+        active: true,
+        degree: 2,
+        velocity: 0.8,
+        gate: 0.25,
+        ..Step::default()
+    };
+    p.patterns[0].kind = PatternKind::Notes {
+        steps: vec![long_hit, choke_hit, Step::default(), Step::default()],
+    };
+    let choke_score = p.compile().unwrap();
+    let (_, pcm) = render_schedule_pcm(&[(0, &choke_score)], 0, 4, Vec::new(), sr).unwrap();
+    // By step 3 (last quarter of the 4-step render), HighR (right channel) must be choked silent.
+    let tail_start = (pcm.len() * 3) / 4;
+    let right_tail_peak = pcm[tail_start..]
+        .iter()
+        .map(|s| (s[1] as f32 / i16::MAX as f32).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        right_tail_peak < 0.02,
+        "ChokerL in choke_group 1 must silence sustaining HighR by step 3, got right_tail_peak={right_tail_peak:.4}"
+    );
 }

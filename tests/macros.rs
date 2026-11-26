@@ -21,7 +21,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 fn app_demo() -> App {
-    App::new(Project::demo(), PathBuf::from("macros.json")).unwrap()
+    App::new_in_memory(Project::demo(), PathBuf::from("macros.json")).unwrap()
 }
 
 fn channel_rms_lr(pcm: &[[i16; 2]], start_frame: usize, end_frame: usize) -> (f32, f32) {
@@ -649,7 +649,12 @@ fn signal_graph_projects_macro_nodes_and_fanout_edges_and_navigates_to_macros_de
 
 #[test]
 fn macro_works_with_sampler_and_multizone_kit_racks_too() {
-    let mut app = app_demo();
+    let mut app = App::new_with_library(
+        Project::demo(),
+        PathBuf::from("macros.json"),
+        cadence_core::sampler::SampleLibrary::from_roots(&[], None),
+    )
+    .unwrap();
     app.execute_command("kit Drums808 tr808").unwrap();
     let kit_id = app
         .project()

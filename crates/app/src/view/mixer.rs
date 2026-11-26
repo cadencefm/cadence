@@ -500,7 +500,7 @@ mod tests {
             },
         });
 
-        let mut app = App::new(project, "demo.json".into()).unwrap();
+        let mut app = App::new_in_memory(project, "demo.json".into()).unwrap();
         app.press_keys("gm").unwrap();
 
         let snap_mid = AudioSnapshot {
@@ -592,7 +592,7 @@ mod tests {
             )],
         });
 
-        let mut app = App::new(project, "headroom.json".into()).unwrap();
+        let mut app = App::new_in_memory(project, "headroom.json".into()).unwrap();
         app.press_keys("gm").unwrap();
         let snap = AudioSnapshot {
             playing: true,
@@ -685,7 +685,7 @@ mod tests {
                 .push(cadence_core::mixer::EffectDevice::eq(dev_id));
         }
 
-        let mut app = App::new(project, "scroll.json".into()).unwrap();
+        let mut app = App::new_in_memory(project, "scroll.json".into()).unwrap();
         app.press_keys("gm").unwrap();
         app.view_state.mixer_page_size = 5;
         app.view_state.mixer_detail_rows = 3;

@@ -7,7 +7,12 @@ use cadence_core::{
 use cadence_engine::audio::render_schedule_report;
 
 fn app() -> App {
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_with_library(
+        Project::demo(),
+        "unused.json".into(),
+        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
+    )
+    .unwrap();
     app.execute_command("lane Drums add Kick restart").unwrap();
     app
 }
@@ -446,7 +451,9 @@ fn fivefold_live_rebuilds_its_parts_and_its_performance_lands_on_the_planned_bar
     let shipped = cadence_app::load_project(&folder.join("project.json")).unwrap();
     // Replay the performance headlessly, writing its take to a scratch path.
     let take_path = temp.path().join("set.take.jsonl");
-    let mut app = App::new(shipped, folder.join("project.json")).unwrap();
+    let proj_path = folder.join("project.json");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+    let mut app = App::new_with_library(shipped, proj_path, lib).unwrap();
     let script = std::fs::read_to_string(folder.join("perform.keys.jsonl")).unwrap();
     for line in script.lines().filter(|l| !l.trim().is_empty()) {
         let step: serde_json::Value = serde_json::from_str(line).unwrap();

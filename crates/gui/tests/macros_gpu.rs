@@ -26,7 +26,7 @@ fn maybe_save_png(name: &str, width: u32, height: u32, rgba: &[u8]) {
 }
 
 fn setup_macro_showcase_app() -> App {
-    let mut app = App::new(Project::demo(), PathBuf::from("macros_gpu.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("macros_gpu.json")).unwrap();
     app.config.midi_pickup = false;
     app.execute_command("midi profile minilab3_daw").unwrap();
 

@@ -9,7 +9,7 @@ use cadence_core::{
 };
 
 fn app() -> App {
-    App::new(Project::empty(), "unused.json".into()).unwrap()
+    App::new_in_memory(Project::empty(), "unused.json".into()).unwrap()
 }
 fn values(app: &App, name: &str) -> Vec<ValuePoint> {
     let PatternKind::Values { points, .. } = &app

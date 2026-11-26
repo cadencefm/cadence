@@ -14,11 +14,11 @@ use cadence_core::runtime::AudioSnapshot;
 use std::collections::HashSet;
 
 fn demo_app() -> App {
-    App::new(Project::demo(), "demo.json".into()).unwrap()
+    App::new_in_memory(Project::demo(), "demo.json".into()).unwrap()
 }
 
 fn empty_app() -> App {
-    App::new(Project::empty(), "empty.json".into()).unwrap()
+    App::new_in_memory(Project::empty(), "empty.json".into()).unwrap()
 }
 
 fn pattern_view(app: &mut App) -> PatternDeckView {
@@ -1598,7 +1598,7 @@ fn synthetic_macro_and_mod_sends_are_focusable_learnable_and_materialize() {
         },
     });
 
-    let mut app = App::new(project, "synthetic-sends.json".into()).unwrap();
+    let mut app = App::new_in_memory(project, "synthetic-sends.json".into()).unwrap();
     app.apply(Action::SelectChannel { channel: ch0_ref })
         .unwrap();
     app.press_keys("gm").unwrap();
@@ -1674,7 +1674,7 @@ fn synthetic_macro_and_mod_sends_are_focusable_learnable_and_materialize() {
 fn filter_env_source_picker_includes_long_patterns_and_gs_jumps_to_pattern() {
     use cadence_core::mixer::{EffectKind, FilterPatch};
 
-    let mut app = App::new(Project::empty(), "filter-picker.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::empty(), "filter-picker.json".into()).unwrap();
     app.execute_command("pattern degrees HarmDeg 16 hold 0:0 8:2")
         .unwrap();
     app.execute_command("pattern values LongSweep 128 ramp 0:0.1 64:0.9")

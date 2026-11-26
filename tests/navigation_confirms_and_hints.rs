@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn demo_app() -> App {
-    App::new(Project::demo(), PathBuf::from("ux-demo.json")).unwrap()
+    App::new_in_memory(Project::demo(), PathBuf::from("ux-demo.json")).unwrap()
 }
 
 fn memory_app(project: Project) -> (App, Arc<MemoryHostIo>) {
@@ -447,6 +447,12 @@ fn space_play_pause_placement_value_input_and_groove_browser_save() {
     assert_eq!(app.placement(pl_id).unwrap().1.length_steps, 24);
 
     // 3. GrooveBrowser `s` restores preview and opens Save Filter Groove ValueInput!
+    let mut app = App::new_with_library(
+        Project::demo(),
+        PathBuf::from("ux-demo.json"),
+        cadence_core::sampler::SampleLibrary::from_roots(&[], None),
+    )
+    .unwrap();
     app.execute_command("fx add filter master").unwrap();
     let filter_id = app.project().mixer.master.inserts.last().unwrap().id;
     app.execute_command(&format!("fx {filter_id}")).unwrap();

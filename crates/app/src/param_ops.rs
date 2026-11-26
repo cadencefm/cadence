@@ -892,7 +892,7 @@ mod tests {
 
     #[test]
     fn parse_param_native_delegates_pan_uniformly_across_rack_zone_module_and_channel() {
-        let app = App::new(Project::demo(), "pan-ops.json".into()).unwrap();
+        let app = App::new_in_memory(Project::demo(), "pan-ops.json".into()).unwrap();
         let inst = &app.doc.project().instruments[0];
         let inst_id = inst.id;
         let zone0 = &inst.rack.zones[0];
@@ -937,7 +937,7 @@ mod tests {
 
     #[test]
     fn effect_param_units_hint_matches_delay_sixteenth_steps_and_unmaterialized_sends() {
-        let mut app = App::new(Project::demo(), "units-hint.json".into()).unwrap();
+        let mut app = App::new_in_memory(Project::demo(), "units-hint.json".into()).unwrap();
         app.execute_command("fx add delay master").unwrap();
         let delay_id = app.doc.project().mixer.master.inserts.last().unwrap().id;
         let delay_time = ParamAddress::Effect {

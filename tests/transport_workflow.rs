@@ -3,7 +3,7 @@ use cadence_app::{Action, App, Request};
 use cadence_core::{live::Change, material::Project, music::EndRule, runtime::TransportIntent};
 
 fn app() -> App {
-    let mut app = App::new(Project::empty(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::empty(), "unused.json".into()).unwrap();
     app.execute_command("part new Lead init 0 2 4 6 7").unwrap();
     app.arrange_ui.step = 64;
     app.cursor = 3;
@@ -71,7 +71,9 @@ fn stop_key_command_and_api_restore_song_start_without_editing_music() {
 #[test]
 fn two_press_home_pauses_at_loop_start_first_then_returns_to_song_start() {
     let dir = tempfile::tempdir().unwrap();
-    let mut a = App::new(Project::demo(), dir.path().join("demo.json")).unwrap();
+    let save_path = dir.path().join("demo.json");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&save_path));
+    let mut a = App::new_with_library(Project::demo(), save_path, lib).unwrap();
     a.set_session_takes_dir(dir.path().join("takes"));
     a.execute_command("lane Lead add Intro").unwrap();
     a.execute_command("loop Motion").unwrap(); // bars 5..16 (steps 64..256)
@@ -123,7 +125,7 @@ fn two_press_home_pauses_at_loop_start_first_then_returns_to_song_start() {
 
 #[test]
 fn restart_preserves_active_loop_overrides_and_solo_audition_parked_context() {
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     a.execute_command("lane Lead add Intro").unwrap();
     a.execute_command("loop Motion").unwrap();
     a.apply(Action::Play { playing: true }).unwrap();
@@ -279,7 +281,7 @@ fn monitor_keys_commands_and_api_are_session_preferences() {
 
 #[test]
 fn backslash_and_loop_command_share_the_exact_same_timeline_path() {
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     a.press_keys("ga4l[3l]").unwrap();
     assert_eq!(a.loop_region(), Some((64, 128)), "bars 5 to 8");
     a.press_keys("\\").unwrap();
@@ -319,13 +321,13 @@ fn backslash_and_loop_command_share_the_exact_same_timeline_path() {
     a.press_keys("u").unwrap();
     assert_eq!(a.end_rule(), EndRule::Stop);
     // A new, empty song keeps playing past its end.
-    let fresh = App::new(Project::empty(), "unused.json".into()).unwrap();
+    let fresh = App::new_in_memory(Project::empty(), "unused.json".into()).unwrap();
     assert_eq!(fresh.end_rule(), EndRule::Continue);
 }
 
 #[test]
 fn end_rule_stop_auto_pauses_and_space_restarts_from_song_start() {
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     a.execute_command("end stop").unwrap();
     let window = a.audio_project().live_window.unwrap();
     assert_eq!(window.stop_at, Some(256));
@@ -347,7 +349,7 @@ fn section_keys_always_use_timeline_segments_and_backspace_cancels() {
         // The demo has Seed (bars 1–4) and Motion (5–16); add a Coda (bars 13–16).
         a.execute_command("section Coda 13 4").unwrap();
     };
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     sections(&mut a);
     assert!(a.uses_sections());
     a.apply(Action::Play { playing: true }).unwrap();
@@ -370,7 +372,7 @@ fn section_keys_always_use_timeline_segments_and_backspace_cancels() {
     assert_eq!(seg.song, 192);
 
     // Outside any section -> next launch boundary immediately on 1st press
-    let mut b = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut b = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     b.execute_command("bars 20").unwrap(); // bars 17..20 (steps 256..320) have no section
     b.apply(Action::CueSong {
         step: 260,
@@ -385,7 +387,7 @@ fn section_keys_always_use_timeline_segments_and_backspace_cancels() {
 
 #[test]
 fn a_section_key_while_overriding_remaps_the_arrangement_on_its_boundary() {
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     a.execute_command("lane Lead add Intro").unwrap();
     a.apply(Action::Play { playing: true }).unwrap();
     a.observe_transport(20, 21, true, false);
@@ -406,7 +408,7 @@ fn a_section_key_while_overriding_remaps_the_arrangement_on_its_boundary() {
 
 #[test]
 fn steps_still_to_come_map_through_a_pending_section_change() {
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     a.execute_command("lane Lead add Intro").unwrap();
     let end = a
         .project()

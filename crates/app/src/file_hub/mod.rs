@@ -634,7 +634,8 @@ mod tests {
     fn file_hub_tabs_stems_export_and_native_dialog_handoff_work() {
         let dir = tempfile::tempdir().unwrap();
         let proj_path = dir.path().join("demo.json");
-        let mut app = App::new(Project::demo(), proj_path.clone()).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+        let mut app = App::new_with_library(Project::demo(), proj_path.clone(), lib).unwrap();
 
         // 1. `gf` opens File Hub on Quick Open tab; `F` emits native OpenProject dialog request!
         app.press_keys("gf").unwrap();
@@ -694,7 +695,8 @@ mod tests {
             "presets/ subdir should not pre-exist before saving"
         );
 
-        let mut app = App::new(Project::demo(), proj_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+        let mut app = App::new_with_library(Project::demo(), proj_path, lib).unwrap();
         let inst = app
             .project()
             .instruments
@@ -757,7 +759,8 @@ mod tests {
         std::fs::write(&corrupt_midi, b"{ not valid midi json").unwrap();
         std::fs::write(&corrupt_generic, b"{ not valid json").unwrap();
 
-        let mut app = App::new(Project::demo(), proj_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+        let mut app = App::new_with_library(Project::demo(), proj_path, lib).unwrap();
         // Make document dirty so any accidental fallthrough to `load_or_confirm_project`
         // would close FileHub and open `Mode::Confirm(ConfirmAction::Open(_))`.
         app.execute_command("bpm 133").unwrap();
@@ -832,7 +835,8 @@ mod tests {
         std::fs::write(&ambig_midi, &profile_bytes).unwrap();
         std::fs::write(&corrupt_midi, b"{ corrupt midi profile").unwrap();
 
-        let mut app = App::new(Project::demo(), proj_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+        let mut app = App::new_with_library(Project::demo(), proj_path, lib).unwrap();
 
         // 1. Valid `.midi.json` via FileHub Browse tab closes FileHub and installs custom profile.
         app.open_file_hub(FileHubTab::Browse);

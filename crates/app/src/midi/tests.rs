@@ -5,7 +5,7 @@ use cadence_core::runtime::MidiMessage;
 
 #[test]
 fn midi_learn_soft_pickup_and_unlearn_work_end_to_end() {
-    let mut app = App::new(Project::demo(), PathBuf::from("test.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("test.json")).unwrap();
     let inst_id = app.project().instruments[0].id;
     app.open_instrument(inst_id).unwrap();
     // Focus Cutoff or first parameter on the Instrument Rack deck.
@@ -83,7 +83,7 @@ fn midi_learn_soft_pickup_and_unlearn_work_end_to_end() {
 
 #[test]
 fn minilab3_daw_profile_macros_transport_pads_and_mmc_emit_feedback() {
-    let mut app = App::new(Project::demo(), PathBuf::from("test.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("test.json")).unwrap();
     let out = app.execute_command("midi profile minilab3_daw").unwrap();
     assert_eq!(
         app.active_midi_feedback_protocol(),
@@ -152,7 +152,7 @@ fn minilab3_daw_profile_macros_transport_pads_and_mmc_emit_feedback() {
 
 #[test]
 fn live_midi_note_recording_step_entry_and_polyphonic_chord_stacking() {
-    let mut app = App::new(Project::demo(), PathBuf::from("test.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("test.json")).unwrap();
     // Find a literal Notes pattern and select it.
     let note_pat_id = app
         .project()
@@ -207,7 +207,7 @@ fn midi_cc_channel_gain_uses_headroom_taper_live_and_level_scale_when_recording(
     use cadence_core::midi_map::{MidiMapping, MidiSource, MidiValueMode};
     use cadence_core::mixer::{ChannelParam, ChannelRef};
 
-    let mut app = App::new(Project::demo(), PathBuf::from("test.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("test.json")).unwrap();
     let ch_id = app.project().mixer.channels[0].id;
     let ch_ref = ChannelRef::Channel(ch_id);
     app.config.midi_pickup = false;

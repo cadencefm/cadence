@@ -212,7 +212,7 @@ fn silent_runtime_handles_transport_live_jam_notes_audition_and_score_hotswap() 
     let mut rack = RackPatch::default_synth();
     rack.zones[0].voice.voice_mode = VoiceMode::Poly;
     let score = rack_project(vec![note(1); 16], rack).compile().unwrap();
-    let rt = AudioRuntime::start(score.clone(), true).unwrap();
+    let rt = AudioRuntime::start_with_samples(score.clone(), Vec::new(), true).unwrap();
 
     // Live Jam NoteOn produces audio even while transport is stopped!
     let inst_id = score.instruments[0].id;
@@ -1655,7 +1655,7 @@ fn render_report_records_float_channel_headroom_and_compressor_limiter_gr_stats(
 #[test]
 fn silent_runtime_audio_tap_ring_captures_live_stereo_and_stops_cleanly() {
     let fx = crate::test_fixtures::kitchen_sink_fixture(48_000);
-    let rt = AudioRuntime::start(fx.score, true).unwrap();
+    let rt = AudioRuntime::start_with_samples(fx.score, Vec::new(), true).unwrap();
     assert_eq!(rt.sample_rate(), 48_000);
 
     let tap = rt.tap_handle();
@@ -2555,7 +2555,14 @@ fn event_ring_and_scheduler_backpressure_and_live_note_off_release_all_fallback(
     use crate::audio::shared::MAILBOXES;
     use std::sync::atomic::AtomicU64;
 
-    let score = rack_project(vec![note(1); 16], RackPatch::default_synth())
+    let mut fast_release_synth = RackPatch::default_synth();
+    for m in &mut fast_release_synth.zones[0].modules {
+        if let ModuleKind::Env(env) = &mut m.kind {
+            env.attack_ms = 0.5;
+            env.release_ms = 5.0;
+        }
+    }
+    let score = rack_project(vec![note(1); 16], fast_release_synth)
         .compile()
         .unwrap();
     let inst_id = score.instruments[0].id;
@@ -2575,13 +2582,14 @@ fn event_ring_and_scheduler_backpressure_and_live_note_off_release_all_fallback(
 
     // 2. When mailboxes are saturated, `live_note_off_instrument` triggers `release_all_requested`
     // fallback so a live Jam voice can NEVER stay permanently stuck.
-    let rt = AudioRuntime::start(score.clone(), true).unwrap();
+    let rt = AudioRuntime::start_with_samples(score.clone(), Vec::new(), true).unwrap();
     assert!(rt.live_note_on_instrument(inst_id, 64, 0.85, true, None));
     wait_until(|| rt.snapshot().peak > 0.02);
     // Saturate live event mailboxes faster than one silent block (~5.3 ms) and send NoteOff.
+    // Using held live notes ensures `release_all_requested` releases every saturated voice immediately.
     let mut overflowed = false;
     for _ in 0..(MAILBOXES * 3) {
-        if !rt.audition_instrument(inst_id, 60, 0.5) {
+        if !rt.live_note_on_instrument(inst_id, 60, 0.5, true, None) {
             overflowed = true;
             break;
         }
@@ -2633,7 +2641,11 @@ fn audio_tap_handle_overflow_tracks_dropped_frames_and_recovers() {
     tap.start();
 
     let extra_dropped = 512usize;
-    for _ in 0..(AUDIO_TAP_CAPACITY + extra_dropped) {
+    // Pre-advance the tap write cursor near capacity so we exercise real `next_frame`
+    // publishing across the overflow boundary without synthesizing 262k redundant frames.
+    let prefill = AUDIO_TAP_CAPACITY - 16;
+    shared.tap_write.store(prefill as u64, Ordering::Release);
+    for _ in 0..(16 + extra_dropped) {
         let _ = engine.next_frame();
     }
 
@@ -2852,10 +2864,11 @@ fn buffer_size_clamping_device_matching_inventory_panic_silence_and_change_summa
         !snap.playing && snap.peak < 1e-4
     });
 
-    // Requesting a non-existent explicit output device returns Err without killing the existing runtime.
+    // Requesting an invalid stream configuration returns Err without killing the existing runtime
+    // (validated pre-HAL so unit tests stay deterministic and never stall on OS audio drivers).
     let bad_req = AudioStreamRequest {
-        output_device: Some("__Cadence_NonExistent_Device_9999__".into()),
-        sample_rate: None,
+        output_device: None,
+        sample_rate: Some(1),
         buffer_frames: None,
     };
     assert!(rt.reconfigure_device(score, Vec::new(), bad_req).is_err());
@@ -4369,7 +4382,7 @@ fn runtime_replace_project_coalesces_rapid_effect_adds_kind_swaps_and_boundary_r
 
     let base_proj = rack_project(vec![note(1); 16], RackPatch::default_synth());
     let base_score = base_proj.compile().unwrap();
-    let rt = AudioRuntime::start(base_score, true).unwrap();
+    let rt = AudioRuntime::start_with_samples(base_score, Vec::new(), true).unwrap();
     let sr = rt.sample_rate();
     assert_eq!(rt.snapshot().health.pdc_latency_frames, 0);
     assert!(rt.transport(TransportIntent::Play { playing: true }));

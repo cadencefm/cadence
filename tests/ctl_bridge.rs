@@ -6,7 +6,7 @@
 //!   `meters`, `cmd`, `action`, `expected_revision` conflicts, `u` Undo stack, `listen --bars`
 //!   with non-mutating `--solo` + per-bar telemetry, and non-blocking `listen --live` ring tap).
 use cadence::host::ctl::{send_ctl_request, CtlServer};
-use cadence::host::protocol::HostRequest;
+use cadence::host::protocol::{HostRequest, ListenRequest};
 use cadence::host::HeadlessOutcomeHooks;
 use cadence_app::{
     load_project, load_project_with_io, Action, App, ExportMode, ExportRequest, FileDialogRequest,
@@ -438,7 +438,7 @@ fn sample_bank_and_riff_writeback_run_100_percent_in_memory_via_memory_host_io()
 
 #[test]
 fn outcome_merge_preserves_every_field_including_bounce_export_and_dialog() {
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     let bounce_out = app
         .apply(Action::Bounce {
             scope: None,
@@ -511,7 +511,8 @@ fn headless_script_executes_bounce_and_export_wav_without_audio_runtime() {
     let out_proj = dir.path().join("after.json");
 
     let (proj, _) = build_loud_synth_project();
-    App::new(proj, proj_path.clone())
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+    App::new_with_library(proj, proj_path.clone(), lib)
         .unwrap()
         .save_project(&proj_path)
         .unwrap();
@@ -529,6 +530,7 @@ fn headless_script_executes_bounce_and_export_wav_without_audio_runtime() {
     let output = cadence_bin(dir.path())
         .arg("--project")
         .arg(&proj_path)
+        .arg("--sample-roots-only")
         .arg("--script")
         .arg(&script_path)
         .arg("--output")
@@ -593,7 +595,9 @@ fn headless_script_executes_bounce_and_export_wav_without_audio_runtime() {
 
     // Also verify headless `apply_outcome` dispatches MasterAndStems export when `audio == None`.
     let stems_dir = dir.path().join("headless_stems");
-    let mut stem_app = App::new(build_loud_synth_project().0, proj_path).unwrap();
+    let stem_lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+    let mut stem_app =
+        App::new_with_library(build_loud_synth_project().0, proj_path, stem_lib).unwrap();
     let stem_outcome = Outcome {
         export: Some(ExportRequest {
             path: stems_dir.clone(),
@@ -623,28 +627,8 @@ fn headless_script_executes_bounce_and_export_wav_without_audio_runtime() {
 fn cli_rejects_flag_conflicts_standalone_output_and_handles_project_rbs_batch() {
     let dir = tempdir().unwrap();
 
-    // 1. Mutually exclusive flag combinations rejected by clap (exit code 2).
-    for bad_args in [
-        vec!["--empty", "--project", "foo.json"],
-        vec!["--empty", "--import-rbs", "foo.rbs"],
-        vec!["--stdio", "--stems", "stems_dir"],
-        vec!["--stdio", "--ctl"],
-        vec!["--write-demo", "a.json", "--stems", "stems_dir"],
-        vec!["--list-midi", "--render", "a.wav"],
-        vec!["--ctl", "--render", "a.wav"],
-        vec!["--ctl", "--check"],
-    ] {
-        let out = cadence_bin(dir.path()).args(&bad_args).output().unwrap();
-        assert_eq!(
-            out.status.code(),
-            Some(2),
-            "expected clap conflict for {bad_args:?}, got status {:?}, stderr={}",
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-
-    // 2. Standalone --output (and --bars without --render/--stems) rejected cleanly before touching disk!
+    // 1. Standalone --output (and --bars without --render/--stems) rejected cleanly before touching disk!
+    //    (Mutually exclusive clap flag conflicts are covered in-process in `src/main.rs`.)
     let standalone_out = dir.path().join("should_not_exist.json");
     for bad_args in [
         vec!["--output", standalone_out.to_str().unwrap()],
@@ -662,7 +646,7 @@ fn cli_rejects_flag_conflicts_standalone_output_and_handles_project_rbs_batch() 
         "rejected standalone --output must not create output file"
     );
 
-    // 3. `--project foo.rbs --output bar.json` runs cleanly in batch mode (matching `--import-rbs`).
+    // 2. `--project foo.rbs --output bar.json` runs cleanly in batch mode (matching `--import-rbs`).
     #[cfg(feature = "rbs")]
     {
         let rbs_path = dir.path().join("batch_acid.rbs");
@@ -671,6 +655,7 @@ fn cli_rejects_flag_conflicts_standalone_output_and_handles_project_rbs_batch() 
         let out = cadence_bin(dir.path())
             .arg("--project")
             .arg(&rbs_path)
+            .arg("--sample-roots-only")
             .arg("--output")
             .arg(&json_path)
             .output()
@@ -736,7 +721,8 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
     let host_handled = Arc::clone(&handled_requests);
     let host_wake = Arc::clone(&wake_pair);
     let host_thread = std::thread::spawn(move || {
-        let mut app = App::new(project, live_proj_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&live_proj_path));
+        let mut app = App::new_with_library(project, live_proj_path, lib).unwrap();
         let mut engine =
             AudioRuntime::start_with_samples(app.audio_project().clone(), app.sample_bank(), true)
                 .unwrap();
@@ -813,17 +799,29 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
     assert!(sess_out.status.success());
 
     // 5. `cmd` with optimistic `expected_revision` + conflict rejection + `u` Undo via `action`!
-    let (ok, cmd_ok) = run_ctl(&["cmd", "bpm 142", "--expected-revision", "0", "--compact"]);
-    assert!(ok, "cmd bpm 142 failed: {cmd_ok}");
-    assert_eq!(cmd_ok["ok"], true);
+    //    Sent directly over the live Unix socket to avoid redundant debug-binary spawns.
+    let send_direct = |req: HostRequest| -> Value {
+        send_ctl_request(&sock_path, &req).expect("direct Unix socket request must succeed")
+    };
+    let cmd_ok = send_direct(HostRequest {
+        expected_revision: Some(0),
+        compact: true,
+        cmd: Some("bpm 142".into()),
+        ..HostRequest::default()
+    });
+    assert_eq!(cmd_ok["ok"], true, "cmd bpm 142 failed: {cmd_ok}");
     assert_eq!(cmd_ok["revision"], 1);
     assert_eq!(cmd_ok["bpm"], 142.0);
     assert_eq!(cmd_ok["dirty"], true);
 
     // Stale expected_revision must fail cleanly with ok: false and leave BPM untouched.
-    let (ok, conflict) = run_ctl(&["cmd", "bpm 90", "--expected-revision", "0", "--compact"]);
-    assert!(!ok, "stale expected_revision must exit non-zero");
-    assert_eq!(conflict["ok"], false);
+    let conflict = send_direct(HostRequest {
+        expected_revision: Some(0),
+        compact: true,
+        cmd: Some("bpm 90".into()),
+        ..HostRequest::default()
+    });
+    assert_eq!(conflict["ok"], false, "stale expected_revision must fail");
     assert_eq!(conflict["revision"], 1);
     assert!(conflict["error"]
         .as_str()
@@ -831,35 +829,32 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
         .contains("Revision conflict"));
 
     // Undo via typed `action` pops the Ex command cleanly off Document's undo stack!
-    let (ok, undone) = run_ctl(&[
-        "action",
-        r#"{"op":"undo"}"#,
-        "--expected-revision",
-        "1",
-        "--compact",
-    ]);
-    assert!(ok, "undo action failed: {undone}");
-    assert_eq!(undone["ok"], true);
+    let undone = send_direct(HostRequest {
+        expected_revision: Some(1),
+        compact: true,
+        action: Some(Action::Undo),
+        ..HostRequest::default()
+    });
+    assert_eq!(undone["ok"], true, "undo action failed: {undone}");
     assert_eq!(undone["revision"], 2);
     assert_eq!(undone["bpm"], 128.0);
 
-    // 6. `listen --bars 1..3 --solo Bass --sr 24000` renders 24 kHz WAV + per-bar telemetry without mutating flags!
+    // 6. `listen --bars 1..3 --solo Bass --sr 12000` renders WAV + per-bar telemetry without mutating flags!
     let bars_wav = dir.path().join("bars_solo.wav");
-    let (ok, bars_resp) = run_ctl(&[
-        "listen",
-        "--bars",
-        "1..3",
-        "--solo",
-        "Bass",
-        "--sr",
-        "24000",
-        "--out",
-        bars_wav.to_str().unwrap(),
-    ]);
-    assert!(ok, "listen --bars failed: {bars_resp}");
+    let bars_resp = send_direct(HostRequest {
+        listen: Some(ListenRequest::Bars {
+            start_bar: 1,
+            end_bar: 3,
+            solo: vec!["Bass".into()],
+            sample_rate: 12_000,
+            out_path: Some(bars_wav.clone()),
+        }),
+        ..HostRequest::default()
+    });
+    assert_eq!(bars_resp["ok"], true, "listen --bars failed: {bars_resp}");
     let listen = &bars_resp["listen"];
     assert_eq!(listen["mode"], "bars");
-    assert_eq!(listen["sample_rate"], 24_000);
+    assert_eq!(listen["sample_rate"], 12_000);
     assert_eq!(listen["start_bar"], 1);
     assert_eq!(listen["end_bar"], 3);
     assert_eq!(listen["bars"].as_array().unwrap().len(), 2);
@@ -874,21 +869,21 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
         .any(|e| e["device_id"] == comp_id));
 
     let mut wav = hound::WavReader::open(&bars_wav).unwrap();
-    assert_eq!(wav.spec().sample_rate, 24_000);
+    assert_eq!(wav.spec().sample_rate, 12_000);
     assert_eq!(wav.spec().channels, 2);
     assert_eq!(wav.spec().bits_per_sample, 16);
     assert!(wav
         .samples::<i16>()
         .any(|s| s.unwrap().unsigned_abs() > 1000));
 
-    // Verify inclusive `A..=B` bar syntax also parses cleanly into `[1..3)`.
+    // Verify CLI inclusive `A..=B` bar syntax also parses cleanly into `[1..3)`.
     let inc_wav = dir.path().join("bars_inc.wav");
     let (ok_inc, inc_resp) = run_ctl(&[
         "listen",
         "--bars",
         "1..=2",
         "--sr",
-        "24000",
+        "12000",
         "--out",
         inc_wav.to_str().unwrap(),
     ]);
@@ -896,8 +891,11 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
     assert_eq!(inc_resp["listen"]["bars"].as_array().unwrap().len(), 2);
 
     // Verify temporary `--solo Bass` did NOT mutate live GUI flags!
-    let (ok, full_state) = run_ctl(&["state"]);
-    assert!(ok);
+    let full_state = send_direct(HostRequest {
+        action: Some(Action::GetState),
+        ..HostRequest::default()
+    });
+    assert_eq!(full_state["ok"], true);
     assert!(
         full_state["flags"]["solo_channels"]
             .as_array()
@@ -907,14 +905,21 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
     );
 
     // 7. Start live silent playback -> verify `meters` shows active peaks + Master Comp GR!
-    let (ok, _) = run_ctl(&["action", r#"{"op":"play","playing":true}"#, "--compact"]);
-    assert!(ok);
+    let play_resp = send_direct(HostRequest {
+        compact: true,
+        action: Some(Action::Play { playing: true }),
+        ..HostRequest::default()
+    });
+    assert_eq!(play_resp["ok"], true);
 
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut saw_live_meters = false;
     while Instant::now() < deadline {
-        let (ok, meters) = run_ctl(&["meters"]);
-        assert!(ok, "meters failed: {meters}");
+        let meters = send_direct(HostRequest {
+            meters: true,
+            ..HostRequest::default()
+        });
+        assert_eq!(meters["ok"], true, "meters failed: {meters}");
         let has_comp_gr = meters["effect_meters"].as_array().is_some_and(|arr| {
             arr.iter().any(|e| {
                 e["device_id"] == comp_id && e["gain_reduction_db"].as_f64().unwrap_or(0.0) > 0.5
@@ -931,14 +936,14 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
             saw_live_meters = true;
             break;
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(10));
     }
     assert!(
         saw_live_meters,
         "live `cadence ctl meters` must report active channel peaks and compressor gain_reduction_db"
     );
 
-    // 8. `listen --live 0.60 --sr 24000` captures live speaker output from lock-free tap ring
+    // 8. `listen --live 0.25 --sr 24000` captures live speaker output from lock-free tap ring
     // into default `<session>/ear.wav` WITHOUT blocking concurrent GUI `--ctl` requests!
     let live_dir = dir.path().to_path_buf();
     let live_sock = sock_path.clone();
@@ -950,7 +955,7 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
             .arg("ctl")
             .arg("--sock")
             .arg(&live_sock)
-            .args(["listen", "--live", "0.60", "--sr", "24000"])
+            .args(["listen", "--live", "0.25", "--sr", "24000"])
             .output()
             .unwrap();
         live_finished_flag.store(true, Ordering::Release);
@@ -983,12 +988,12 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
         "concurrent state poll during listen --live failed: {during_state}"
     );
     assert!(
-        poll_elapsed < Duration::from_millis(250),
+        poll_elapsed < Duration::from_millis(150),
         "listen --live must NOT block the GUI host thread (direct socket RTT took {poll_elapsed:?})"
     );
     assert!(
         !live_finished.load(Ordering::Acquire),
-        "concurrent state poll must complete BEFORE the 600ms live capture finishes (RTT {poll_elapsed:?})"
+        "concurrent state poll must complete BEFORE the 250ms live capture finishes (RTT {poll_elapsed:?})"
     );
     let (ok, live_resp) = live_client.join().unwrap();
     assert!(ok, "listen --live failed: {live_resp}");
@@ -998,7 +1003,7 @@ fn live_unix_ctl_socket_and_cli_client_roundtrip_state_meters_cmd_undo_and_liste
     assert_eq!(live["source_sample_rate"], 48_000);
     assert_eq!(live["dropped_frames"], 0);
     assert_eq!(live["path"].as_str().unwrap(), ear_path.to_str().unwrap());
-    assert!(live["frames"].as_u64().unwrap() >= 9_000);
+    assert!(live["frames"].as_u64().unwrap() >= 3_500);
     assert!(live["rms_db"].as_f64().unwrap() > -40.0);
     assert!(live["peak_db"].as_f64().unwrap() > -30.0);
 

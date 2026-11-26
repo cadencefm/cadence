@@ -6,7 +6,7 @@ use cadence_core::mixer::ChannelRef;
 use cadence_core::runtime::{AudioSnapshot, ChannelMeter};
 
 fn demo_app() -> App {
-    App::new(Project::demo(), "demo.json".into()).unwrap()
+    App::new_in_memory(Project::demo(), "demo.json".into()).unwrap()
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn palette_quit_tutorial_resume_and_window_state_persistence() {
     assert!(dirty_app.confirm_prompt().is_some());
 
     // 2. Tutorial returns cleanly to Mode::Tutorial and advances step after running a lesson.
-    let mut tut = App::new(Project::empty(), "tutorial_test.json".into()).unwrap();
+    let mut tut = App::new_in_memory(Project::empty(), "tutorial_test.json".into()).unwrap();
     tut.execute_command("tutorial").unwrap();
     assert!(tut.show_tutorial());
     assert_eq!(tut.help_ui.tutorial_step, 0);
@@ -624,7 +624,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         rack: rack.clone(),
     })
     .unwrap();
-    let mut app = App::new(proj, "rack-vis.json".into()).unwrap();
+    let mut app = App::new_in_memory(proj, "rack-vis.json".into()).unwrap();
     app.open_instrument(inst_id).unwrap();
     let snap = AudioSnapshot {
         sample_rate: 48_000,
@@ -769,7 +769,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
             rack: r,
         })
         .unwrap();
-        let mut a = App::new(p, "fm.json".into()).unwrap();
+        let mut a = App::new_in_memory(p, "fm.json".into()).unwrap();
         a.open_instrument(inst_id).unwrap();
         a.focus_rack_module_panel(inst_id, 1);
         match a
@@ -824,7 +824,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         rack: r_ph,
     })
     .unwrap();
-    let mut a_ph = App::new(p_ph, "ph.json".into()).unwrap();
+    let mut a_ph = App::new_in_memory(p_ph, "ph.json".into()).unwrap();
     a_ph.open_instrument(inst_id).unwrap();
     match get_visual(&mut a_ph, 1) {
         ModuleVisualView::Vco { curve, .. } => {
@@ -869,7 +869,7 @@ fn float_metering_projects_chrome_mixer_gr_and_output_views() {
         kind: EffectKind::Limiter(LimiterPatch::default()),
     });
 
-    let mut app = App::new(project, "demo.json".into()).unwrap();
+    let mut app = App::new_in_memory(project, "demo.json".into()).unwrap();
     app.press_keys("gm").unwrap();
 
     let mut snap = AudioSnapshot {
@@ -994,7 +994,7 @@ fn macro_bindings_project_live_curves_across_rack_effect_mixer_and_loop_wrap() {
     });
 
     // Baseline static Rack Filter view before any Macro bindings.
-    let mut base_app = App::new(project.clone(), "demo.json".into()).unwrap();
+    let mut base_app = App::new_in_memory(project.clone(), "demo.json".into()).unwrap();
     base_app.open_instrument(synth_id).unwrap();
     base_app.focus_rack_module_panel(synth_id, filter_mod_id);
     let base_snap = AudioSnapshot {
@@ -1093,7 +1093,7 @@ fn macro_bindings_project_live_curves_across_rack_effect_mixer_and_loop_wrap() {
         ],
     });
 
-    let mut app = App::new(project.clone(), "demo.json".into()).unwrap();
+    let mut app = App::new_in_memory(project.clone(), "demo.json".into()).unwrap();
     app.open_instrument(synth_id).unwrap();
     app.focus_rack_module_panel(synth_id, filter_mod_id);
     let fv_inst = app.frame_view(&base_snap, "silent");
@@ -1210,7 +1210,7 @@ fn macro_bindings_project_live_curves_across_rack_effect_mixer_and_loop_wrap() {
         target: ModulationTarget::Macro { index: 0 },
     });
 
-    let mut loop_app = App::new(project, "demo.json".into()).unwrap();
+    let mut loop_app = App::new_in_memory(project, "demo.json".into()).unwrap();
     loop_app.press_keys("ga[]\\<Space>").unwrap(); // loop steps 0..16 and start playing!
     assert_eq!(loop_app.playing_loop(), Some((0, 16)));
     loop_app.open_instrument(synth_id).unwrap();
@@ -1454,7 +1454,7 @@ fn direct_modulation_overrides_macro_and_last_write_wins_matching_compiler() {
     });
     push_mod("M3 Auto", pat_hi, ModulationTarget::Macro { index: 2 });
 
-    let mut app = App::new(project, "demo.json".into()).unwrap();
+    let mut app = App::new_in_memory(project, "demo.json".into()).unwrap();
     let snap = AudioSnapshot {
         playing: true,
         absolute_step: 2,
@@ -1581,7 +1581,7 @@ fn delay_and_drive_modes_have_full_app_symmetry_across_controls_commands_macros_
     });
     project.validate().unwrap();
 
-    let mut app = App::new(project, "modes-sym.json".into()).unwrap();
+    let mut app = App::new_in_memory(project, "modes-sym.json".into()).unwrap();
     let snap = AudioSnapshot::default();
 
     // 1. Delay Effect deck: interactive Mode row, :param mode / :param delay_mode, MIDI Learn.
@@ -1691,7 +1691,7 @@ fn arrange_and_pattern_zoom_are_monotonic_across_short_and_long_horizons_and_foc
     for song_bars in [4usize, 12] {
         let mut proj = Project::empty();
         proj.bars = song_bars;
-        let mut app = App::new(proj, "short-zoom.json".into()).unwrap();
+        let mut app = App::new_in_memory(proj, "short-zoom.json".into()).unwrap();
         assert_eq!(app.arrange_visible_bars(), song_bars);
         assert!((app.arrange_effective_zoom() - 1.0).abs() < 1e-6);
 
@@ -1746,7 +1746,7 @@ fn arrange_and_pattern_zoom_are_monotonic_across_short_and_long_horizons_and_foc
     ] {
         let mut proj = Project::empty();
         proj.bars = song_bars;
-        let mut app = App::new(proj, "long-zoom.json".into()).unwrap();
+        let mut app = App::new_in_memory(proj, "long-zoom.json".into()).unwrap();
         assert_eq!(app.arrange_visible_bars(), 16);
         assert_eq!(app.arrange_page_steps(), 16 * 16);
 
@@ -1796,7 +1796,7 @@ fn arrange_and_pattern_zoom_are_monotonic_across_short_and_long_horizons_and_foc
             steps: vec![Step::default(); 8],
         },
     });
-    let mut app = App::new(pat_proj, "short-pat.json".into()).unwrap();
+    let mut app = App::new_in_memory(pat_proj, "short-pat.json".into()).unwrap();
     app.apply(crate::Action::SelectPattern { pattern: short_id })
         .unwrap();
     app.press_keys("gp").unwrap();
@@ -1863,7 +1863,7 @@ fn arrange_and_pattern_zoom_are_monotonic_across_short_and_long_horizons_and_foc
 fn arrange_tail_clamping_and_paging_stride_match_visible_bars() {
     let mut proj = Project::empty();
     proj.bars = 12;
-    let mut app = App::new(proj, "tail-clamp.json".into()).unwrap();
+    let mut app = App::new_in_memory(proj, "tail-clamp.json".into()).unwrap();
     // Zoom in once from 12 bars -> 10 bars.
     app.zoom_view(1);
     assert_eq!(app.arrange_visible_bars(), 10);
@@ -1898,7 +1898,7 @@ fn arrange_tail_clamping_and_paging_stride_match_visible_bars() {
 fn arrange_smooth_scrolloff_tracks_cursor_walk_follow_and_handoff() {
     let mut proj = Project::empty();
     proj.bars = 32;
-    let mut app = App::new(proj, "scrolloff.json".into()).unwrap();
+    let mut app = App::new_in_memory(proj, "scrolloff.json".into()).unwrap();
     app.press_keys("ga").unwrap();
     // Zoom in from 16 bars -> 8 bars (scrolloff = 2 bars).
     app.arrange_ui.zoom = 2.0;
@@ -2241,7 +2241,7 @@ fn pattern_view_projects_paused_next_step_and_distinguishes_song_usage_states() 
         Placement::new(101, part_id, 0, 16),
         Placement::new(102, part_id, 64, 16),
     ];
-    let mut disjoint_app = App::new(disjoint_proj, "disjoint.json".into()).unwrap();
+    let mut disjoint_app = App::new_in_memory(disjoint_proj, "disjoint.json".into()).unwrap();
     disjoint_app
         .apply(crate::Action::SelectPattern { pattern: 1 })
         .unwrap();
@@ -2295,7 +2295,7 @@ fn pattern_view_projects_paused_next_step_and_distinguishes_song_usage_states() 
         target: ModulationTarget::Macro { index: 0 },
         pattern: macro_pat_id,
     });
-    let mut fx_app = App::new(fx_proj, "fx-status.json".into()).unwrap();
+    let mut fx_app = App::new_in_memory(fx_proj, "fx-status.json".into()).unwrap();
     fx_app
         .apply(crate::Action::SelectPattern {
             pattern: env_pat_id,

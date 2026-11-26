@@ -60,6 +60,11 @@ path = "examples/glass-cathedral/build.rs"
 name = "build-iron-circuit"
 path = "examples/iron-circuit/build.rs"
 
+[[example]]
+name = "render-docs-screenshots"
+path = "tools/render_docs_screenshots.rs"
+required-features = ["gui"]
+
 [features]
 default = ["audio", "midi", "gui", "rbs"]
 audio = ["cadence-engine/audio"]
@@ -84,14 +89,14 @@ serde_json.workspace = true
 name = "rbs_import"
 required-features = ["rbs"]
 
-[[test]]
-name = "docs_screenshots_gpu"
-required-features = ["gui"]
-
 [dev-dependencies]
 hound.workspace = true
 image.workspace = true
 tempfile.workspace = true
+
+[profile.dev.package."*"]
+opt-level = 2
+debug = 0
 
 [profile.dev.package.cadence-core]
 opt-level = 2
@@ -99,6 +104,14 @@ opt-level = 2
 [profile.dev.package.cadence-engine]
 opt-level = 2
 
+[profile.test]
+debug = 0
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[profile.release-fast]
+inherits = "release"
+lto = "off"
+codegen-units = 16

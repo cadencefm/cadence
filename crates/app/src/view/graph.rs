@@ -1178,7 +1178,7 @@ mod tests {
             .iter()
             .map(|z| z.modules.len())
             .sum();
-        let app = App::new(proj, "graph-unit.json".into()).unwrap();
+        let app = App::new_in_memory(proj, "graph-unit.json".into()).unwrap();
 
         let mut snap = AudioSnapshot {
             peak: 1.5,

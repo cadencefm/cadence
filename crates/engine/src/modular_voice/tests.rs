@@ -278,6 +278,9 @@ fn feedback_z1_self_fm_and_resonant_drive_loop_remain_stable_and_finite() {
         for _ in 0..(sr * 2.1) as usize {
             let f = v.next_frame(&bank, None);
             assert!(f[0].is_finite() && f[1].is_finite());
+            if !v.is_active() {
+                break;
+            }
         }
         assert!(
             !v.is_active(),
@@ -1216,6 +1219,9 @@ fn extreme_parameters_and_un_enveloped_zones_stay_finite_and_terminate_across_sa
         for _ in 0..(sr * 2.1) as usize {
             let f = voice.next_frame(&bank, None);
             assert!(f[0].is_finite() && f[1].is_finite());
+            if !voice.is_active() {
+                break;
+            }
         }
         assert!(!voice.is_active(), "voice latched at sr={sr}");
     }
@@ -2691,6 +2697,9 @@ fn runaway_feedback_patches_stay_finite_and_bounded_by_voice_guard_ceiling() {
         for _ in 0..(sr * 2.1) as usize {
             let f = voice.next_frame(&bank, None);
             assert!(f[0].is_finite() && f[1].is_finite());
+            if !voice.is_active() {
+                break;
+            }
         }
         assert!(
             !voice.is_active(),

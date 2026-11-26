@@ -186,7 +186,7 @@ mod tests {
 
         let out_dir = tempfile::tempdir().unwrap();
         let bundle_dir = out_dir.path().join("my-song-bundle");
-        let library = SampleLibrary::discover(&[], None);
+        let library = SampleLibrary::from_roots_only(&[], None);
         let report = save_portable_bundle(
             &project,
             &LiveFlags::default(),
@@ -253,7 +253,7 @@ mod tests {
         let empty_base = tempfile::tempdir().unwrap();
         let out_dir = tempfile::tempdir().unwrap();
         let bundle_dir = out_dir.path().join("kit-bundle");
-        let library = SampleLibrary::discover(&[], None);
+        let library = SampleLibrary::from_roots_only(&[], None);
 
         let report = save_portable_bundle(
             &project,

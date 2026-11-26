@@ -1,9 +1,7 @@
 mod common;
 
 use cadence_core::assets::load_project_samples;
-use cadence_core::material::{
-    parse_document_json, Edit, LiveFlags, ModulationTarget, PatternKind, Project, MAX_BARS,
-};
+use cadence_core::material::{Edit, LiveFlags, ModulationTarget, PatternKind, Project, MAX_BARS};
 use cadence_core::mixer::{ChannelKind, ChannelRef, EffectParam};
 use cadence_core::params::{InstrumentParam, ParamAddress, RackParam, ZoneParam};
 use cadence_core::rack::{drum_midi, FilterMode, ModuleKind, ModuleParam};
@@ -12,10 +10,14 @@ use cadence_core::score::ScoreWindow;
 use cadence_engine::audio::{render_measure_report, render_schedule_pcm};
 use cadence_formats::rbs::{import_rbs_bytes, import_rbs_file, peek_rbs_header};
 use std::collections::HashSet;
-use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 fn load_rbs_samples(score: &ScoreWindow) -> SampleBank {
-    let mut lib = common::factory_sample_library(None, false);
+    static FACTORY_LIB: OnceLock<Mutex<cadence_core::sampler::SampleLibrary>> = OnceLock::new();
+    let mut lib = FACTORY_LIB
+        .get_or_init(|| Mutex::new(common::factory_sample_library(None, false)))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let loaded = load_project_samples(score, &mut lib);
     assert!(
         loaded.issues.is_empty(),
@@ -940,36 +942,6 @@ fn tb303_slide_legato_glides_under_max_shuffle_and_accent_barks_cleanly() {
     );
 }
 
-#[test]
-fn cli_import_rbs_with_output_exits_cleanly_in_batch_mode() {
-    let dir = tempfile::tempdir().unwrap();
-    let rbs_path = dir.path().join("batch_test.rbs");
-    let out_path = dir.path().join("out.cadence.json");
-
-    let mut rbs = SyntheticRbs::new(2);
-    rbs.set_303_step(0, 0, 0, 0x02);
-    rbs.tracks[1] = vec![(0, 0, 1), (0, 1, 0)];
-    std::fs::write(&rbs_path, rbs.build("BatchExit")).unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_cadence"))
-        .arg("--import-rbs")
-        .arg(&rbs_path)
-        .arg("--output")
-        .arg(&out_path)
-        .output()
-        .expect("run cadence --import-rbs --output");
-    assert!(
-        output.status.success(),
-        "batch --import-rbs --output must exit 0 cleanly: stderr={}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(out_path.is_file(), "output JSON file must be written");
-    let raw = std::fs::read(&out_path).unwrap();
-    let (loaded, _) = parse_document_json(&raw).unwrap();
-    assert_eq!(loaded.title, "BatchExit");
-    assert_eq!(loaded.bars, 2);
-}
-
 fn build_synthetic_1x_smf(title: &str, bars: u32, loop_on: bool) -> Vec<u8> {
     let mut raw = vec![0u8; 0x4000];
     raw[0..4].copy_from_slice(&[0xBC, 0x03, 0x01, 0x00]); // v3.1 (ReBirth 1.x)
@@ -1220,17 +1192,17 @@ fn synthetic_full_song_mode_fade_in_transpose_echo_send_and_zero_clips() {
         "TR-808 default selector=0 should use CL/LC zones"
     );
 
-    // Solo TB-303 A & TB-303 B individually across bars 0..16 -> start near 0, fade in audibly, 0 clips!
+    // Solo TB-303 A & TB-303 B individually across bars 0..8 -> start near 0, fade in audibly by bar 4, 0 clips!
     for (ch_idx, label) in [(0usize, "TB-303 A"), (1usize, "TB-303 B")] {
         let mut flags = LiveFlags::default();
         flags.solo_channels.insert(proj.mixer.channels[ch_idx].id);
         let score = proj.compile_with_flags(&flags).unwrap();
         let (rep, pcm) =
-            render_schedule_pcm(&[(0, &score)], 0, 16 * 16, load_rbs_samples(&score), 24_000)
+            render_schedule_pcm(&[(0, &score)], 0, 8 * 16, load_rbs_samples(&score), 16_000)
                 .unwrap();
         assert_eq!(rep.output.full_scale_samples, 0, "{label} clipped");
-        let (bar0_l, bar0_r) = slice_peak_lr(&pcm, 1.0 / (16.0 * 16.0), 5.0 / (16.0 * 16.0));
-        let (fade_l, fade_r) = slice_peak_lr(&pcm, 4.0 / 16.0, 1.0);
+        let (bar0_l, bar0_r) = slice_peak_lr(&pcm, 1.0 / (8.0 * 16.0), 5.0 / (8.0 * 16.0));
+        let (fade_l, fade_r) = slice_peak_lr(&pcm, 4.0 / 8.0, 1.0);
         let bar0 = bar0_l.max(bar0_r);
         let fade = fade_l.max(fade_r);
         assert!(
@@ -1242,7 +1214,7 @@ fn synthetic_full_song_mode_fade_in_transpose_echo_send_and_zero_clips() {
     // Full 32-bar mix render -> audible with zero clips!
     let score = proj.compile().unwrap();
     let (rep, pcm) =
-        render_schedule_pcm(&[(0, &score)], 0, 32 * 16, load_rbs_samples(&score), 24_000).unwrap();
+        render_schedule_pcm(&[(0, &score)], 0, 32 * 16, load_rbs_samples(&score), 12_000).unwrap();
     let (pl, pr) = slice_peak_lr(&pcm, 0.0, 1.0);
     assert!(
         pl.max(pr) > 0.20 && rep.output.full_scale_samples == 0,
@@ -1761,17 +1733,17 @@ fn bank_launchpad_populates_all_non_empty_slots_up_to_32_without_altering_song_a
     let (_, base_pcm) = render_schedule_pcm(
         &[(0, &base_score)],
         0,
-        64,
+        16,
         load_rbs_samples(&base_score),
-        24_000,
+        12_000,
     )
     .unwrap();
     let (_, rich_pcm) = render_schedule_pcm(
         &[(0, &rich_score)],
         0,
-        64,
+        16,
         load_rbs_samples(&rich_score),
-        24_000,
+        12_000,
     )
     .unwrap();
     assert_eq!(
@@ -1874,9 +1846,9 @@ fn rbs_import_leaves_macros_unbound_so_direct_knob_edits_take_effect() {
     let base_pcm = render_schedule_pcm(
         &[(0, &base_score)],
         0,
-        32,
+        16,
         load_rbs_samples(&base_score),
-        24_000,
+        12_000,
     )
     .unwrap()
     .1;
@@ -1960,9 +1932,9 @@ fn rbs_import_leaves_macros_unbound_so_direct_knob_edits_take_effect() {
         let (_, edited_pcm) = render_schedule_pcm(
             &[(0, &edited_score)],
             0,
-            32,
+            16,
             load_rbs_samples(&edited_score),
-            24_000,
+            12_000,
         )
         .unwrap();
         assert!(

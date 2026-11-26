@@ -1814,6 +1814,14 @@ fn resolve_output_stream(
 ) -> Result<ResolvedOutput> {
     use cpal::traits::{DeviceTrait, HostTrait};
 
+    if let Some(sr) = request.sample_rate {
+        if !(MIN_AUDIO_SAMPLE_RATE..=MAX_AUDIO_SAMPLE_RATE).contains(&sr) {
+            bail!(
+                "requested audio sample rate {sr} Hz outside supported range {MIN_AUDIO_SAMPLE_RATE}..={MAX_AUDIO_SAMPLE_RATE} Hz"
+            );
+        }
+    }
+
     let host = cpal::default_host();
     let default_device = host.default_output_device();
     let default_name = default_device.as_ref().and_then(|d| d.name().ok());
@@ -2095,7 +2103,7 @@ mod effect_meter_tests {
         p.lanes.push(lane);
 
         let score = p.compile().unwrap();
-        let rt = AudioRuntime::start(score, true).unwrap();
+        let rt = AudioRuntime::start_with_samples(score, Vec::new(), true).unwrap();
         assert!(rt.transport(TransportIntent::Play { playing: true }));
 
         let deadline = Instant::now() + Duration::from_secs(3);

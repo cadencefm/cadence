@@ -255,7 +255,8 @@ mod tests {
         let snap = rich_snapshot();
 
         // 1. Default demo workspace (Arrange Placements + Bank + Output)
-        let mut app = App::new(Project::demo(), "demo.json".into()).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots_only(&[], None);
+        let mut app = App::new_with_library(Project::demo(), "demo.json".into(), lib).unwrap();
         let px_default = gpu
             .render_rgba8(&app.frame_view(&snap, "Metal · 48 kHz"), &theme)
             .unwrap();
@@ -485,7 +486,8 @@ mod tests {
             ..AudioSnapshot::default()
         };
 
-        let mut app = App::new(project, demo_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+        let mut app = App::new_with_library(project, demo_path, lib).unwrap();
         let status = "Metal · 48 kHz";
 
         // 1. Default Arrange + Bank + Live Output (Afterglow 64-bar EDM arrangement)
@@ -581,7 +583,8 @@ mod tests {
         let demo_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/demo/project.json");
         let project = cadence_app::load_project(&demo_path).unwrap();
-        let mut app = App::new(project, demo_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+        let mut app = App::new_with_library(project, demo_path, lib).unwrap();
         app.set_midi_available_ports(
             vec!["Minilab3 MIDI".into(), "IAC Driver Bus 1".into()],
             vec!["Minilab3 MIDI".into(), "IAC Driver Bus 1".into()],
@@ -648,7 +651,8 @@ mod tests {
         let demo_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../examples/demo/project.json");
         let project = cadence_app::load_project(&demo_path).unwrap();
-        let mut app = App::new(project, demo_path.clone()).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+        let mut app = App::new_with_library(project, demo_path.clone(), lib).unwrap();
         app.config.record_recent_project(&demo_path);
 
         // 1. Open / Recent tab (`gf`)
@@ -798,7 +802,8 @@ mod tests {
         let frames = cadence_core::sampler::load_sample_file(&sample_path, None)
             .expect("load brass-pad.wav")
             .frames;
-        let mut app = App::new(project, demo_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+        let mut app = App::new_with_library(project, demo_path, lib).unwrap();
 
         // 1. Sampler Instrument deck (`gi zz`) with active start/end crop dimming + Forward loop!
         app.execute_command("sampler BrassCrop samples/brass-pad.wav")

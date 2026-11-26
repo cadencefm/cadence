@@ -32,7 +32,9 @@ fn gpu_renders_zoomed_out_overview_substep_roll_and_offscreen_graph_wires() {
     let snap = common::build_snapshot(&project, 324);
 
     // 1. Zoomed-out Evaluated Overview (25% zoom = full 64 bars / 1024 steps on Afterglow)
-    let mut app = App::new(project.clone(), demo_path.clone()).expect("init Afterglow app");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+    let mut app =
+        App::new_with_library(project.clone(), demo_path.clone(), lib).expect("init Afterglow app");
     app.press_keys("vozz").unwrap();
     app.arrange_ui.zoom = 0.25;
     let fv_over_25 = app.frame_view(&snap, status);
@@ -111,7 +113,8 @@ fn gpu_renders_zoomed_out_overview_substep_roll_and_offscreen_graph_wires() {
     roll_project.lanes[0].parts.push(LanePart::new(part_live));
     roll_project.lanes[0].placements = vec![Placement::new(970, part_main, 0, 128)];
 
-    let mut roll_app = App::new(roll_project, demo_path.clone()).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+    let mut roll_app = App::new_with_library(roll_project, demo_path.clone(), lib).unwrap();
     roll_app.selected_lane = Some(lane_id);
     roll_app.arrange_ui.view = ArrangeView::Roll;
     roll_app.arrange_ui.zoom = 4.0; // zoomed in cleanly (4 bars = 64 steps) so sub-step triplets pop!
@@ -175,7 +178,8 @@ fn gpu_renders_zoomed_out_overview_substep_roll_and_offscreen_graph_wires() {
             inst0_id,
         ));
     }
-    let mut graph_app = App::new(graph_project, demo_path).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+    let mut graph_app = App::new_with_library(graph_project, demo_path, lib).unwrap();
     // Open full-screen Signal Graph and explicitly select the INSTRUMENTS column so its selected
     // instrument illuminates upstream PARTS scrolled BOTH above and below + SOURCES below!
     graph_app.press_keys("gGzz").unwrap();
@@ -244,7 +248,8 @@ fn gpu_renders_arrange_user_cursor_bar_and_scrolloff_across_themes() {
     // Walk cursor right past the 16-bar scrolloff threshold (bar 15, step 224) with playhead
     // running at bar 10 (step 150) so BOTH the vertical user cursor bar and green playhead
     // appear simultaneously with smooth 4-bar lookahead (viewport shows bars 4..=19).
-    let mut app = App::new(project, demo_path).expect("init Afterglow app");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+    let mut app = App::new_with_library(project, demo_path, lib).expect("init Afterglow app");
     app.press_keys("ga").unwrap();
     for _ in 0..14 {
         app.press_keys("l").unwrap();

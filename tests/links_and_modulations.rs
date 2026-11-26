@@ -11,7 +11,7 @@ use cadence_core::rack::{ModuleParam, ZoneParam};
 use cadence_core::runtime::AudioSnapshot;
 
 fn demo_app() -> App {
-    App::new(Project::demo(), "links-demo.json".into()).unwrap()
+    App::new_in_memory(Project::demo(), "links-demo.json".into()).unwrap()
 }
 
 fn deck_controls(app: &App) -> Vec<ControlView> {

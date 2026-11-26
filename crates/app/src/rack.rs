@@ -1781,7 +1781,7 @@ mod tests {
 
     #[test]
     fn rack_creation_and_modular_ex_commands_roundtrip_with_undo() {
-        let mut app = App::new(Project::demo(), "rack-ex.json".into()).unwrap();
+        let mut app = App::new_in_memory(Project::demo(), "rack-ex.json".into()).unwrap();
 
         // 1. `:new synth|sampler|kit|rack|modular [name]` create unified Rack instruments.
         for (cmd, expected_name, tmpl) in [
@@ -1899,7 +1899,7 @@ mod tests {
 
     #[test]
     fn rack_deck_three_tab_keyboard_ux_panel_patchbay_zones() {
-        let mut app = App::new(Project::demo(), "rack-ux.json".into()).unwrap();
+        let mut app = App::new_in_memory(Project::demo(), "rack-ux.json".into()).unwrap();
         let inst_id = app.project().instruments[0].id;
         app.open_instrument(inst_id).unwrap();
         assert_eq!(app.rack_ui.tab, RackTab::Panel);
@@ -2046,7 +2046,8 @@ mod tests {
         write_synthetic_wav_with_riff_meta(&wav_path, 1024, 48, 44, 52, 100, 400);
 
         let proj_path = dir.path().join("demo.json");
-        let mut app = App::new(Project::demo(), proj_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+        let mut app = App::new_with_library(Project::demo(), proj_path, lib).unwrap();
         // Start with a fresh Synth Rack (zero Sampler modules!).
         app.execute_command("new synth SynthToSample").unwrap();
         let inst_id = app.active_instrument().unwrap();
@@ -2122,7 +2123,8 @@ mod tests {
             .unwrap();
 
         let proj_path = dir.path().join("demo.json");
-        let mut app = App::new(Project::demo(), proj_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+        let mut app = App::new_with_library(Project::demo(), proj_path, lib).unwrap();
         let inst_id = app.project().instruments[0].id;
         let orig_rack = app.instrument(inst_id).unwrap().rack.clone();
         app.open_instrument(inst_id).unwrap();
@@ -2196,7 +2198,8 @@ mod tests {
     fn bounce_into_rack_zone_and_new_sampler_rack() {
         let dir = tempfile::tempdir().unwrap();
         let proj_path = dir.path().join("bounce.json");
-        let mut app = App::new(Project::demo(), proj_path).unwrap();
+        let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&proj_path));
+        let mut app = App::new_with_library(Project::demo(), proj_path, lib).unwrap();
         let inst_id = app.project().instruments[0].id;
 
         // 1. Bounce into existing Rack zone (auto-adds Sampler module!)
@@ -2295,7 +2298,7 @@ mod tests {
         let inst_id = proj.instruments[0].id;
         proj.apply(Edit::UpdateRackPatch { id: inst_id, rack })
             .unwrap();
-        let mut app = App::new(proj, "all-vis.json".into()).unwrap();
+        let mut app = App::new_in_memory(proj, "all-vis.json".into()).unwrap();
         app.open_instrument(inst_id).unwrap();
 
         let mut seen = [false; 12];
@@ -2383,7 +2386,7 @@ mod tests {
 
     #[test]
     fn zones_tab_enter_opens_sample_name_output_and_l_switches_to_panel() {
-        let mut app = App::new(Project::demo(), "zones-enter.json".into()).unwrap();
+        let mut app = App::new_in_memory(Project::demo(), "zones-enter.json".into()).unwrap();
         let inst_id = app.project().instruments[0].id;
         let expected_ch = app.instrument(inst_id).unwrap().channel;
         app.open_instrument(inst_id).unwrap();

@@ -549,7 +549,9 @@ fn file_hub_preserves_state_on_error_bounds_preview_guards_dirty_and_ctrl_c_clos
     let dir_as_file = dir.path().join("cannot_overwrite_dir");
     std::fs::create_dir_all(&dir_as_file).unwrap();
 
-    let mut seed_app = App::new(Project::demo(), valid_proj.clone()).unwrap();
+    let seed_lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&valid_proj));
+    let mut seed_app =
+        App::new_with_library(Project::demo(), valid_proj.clone(), seed_lib).unwrap();
     seed_app
         .apply(Action::Save {
             path: valid_proj.clone(),
@@ -562,7 +564,8 @@ fn file_hub_preserves_state_on_error_bounds_preview_guards_dirty_and_ctrl_c_clos
         f.set_len(9 * 1024 * 1024).unwrap();
     }
 
-    let mut app = App::new(Project::demo(), valid_proj.clone()).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&valid_proj));
+    let mut app = App::new_with_library(Project::demo(), valid_proj.clone(), lib).unwrap();
     // 1. Bounded preview handles oversized files safely.
     app.open_file_hub(FileHubTab::Browse);
     app.press_keys("/huge.json<Enter>").unwrap();
@@ -640,7 +643,8 @@ fn file_hub_preserves_state_on_error_bounds_preview_guards_dirty_and_ctrl_c_clos
 fn file_hub_finder_routing_for_presets_and_midi_profiles() {
     let dir = tempfile::tempdir().unwrap();
     let save_path = dir.path().join("project.json");
-    let mut app = App::new(Project::demo(), save_path).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&save_path));
+    let mut app = App::new_with_library(Project::demo(), save_path, lib).unwrap();
 
     app.open_file_hub(FileHubTab::Save);
     app.press_keys("jjj").unwrap(); // row 3: Save Active Instrument Preset
@@ -692,7 +696,7 @@ fn file_hub_finder_routing_for_presets_and_midi_profiles() {
 
 #[test]
 fn import_rbs_command_respects_dirty_confirm_guard_and_force_bang() {
-    let mut app = App::new(Project::demo(), PathBuf::from("demo.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("demo.json")).unwrap();
     app.execute_command("bpm 138").unwrap();
     assert!(app.dirty());
 

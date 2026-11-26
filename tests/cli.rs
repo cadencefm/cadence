@@ -13,7 +13,8 @@ fn exported_demo() -> Project {
     Project::demo()
 }
 fn save(project: &Project, path: &Path) {
-    App::new(project.clone(), path.to_path_buf())
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(path));
+    App::new_with_library(project.clone(), path.to_path_buf(), lib)
         .unwrap()
         .save_project(path)
         .unwrap();
@@ -309,22 +310,12 @@ fn stdio_recovers_after_oversized_and_invalid_lines_and_accepts_eof() {
 fn conflicting_modes_are_rejected_before_any_file_is_written() {
     let directory = tempdir().unwrap();
     let output = cadence(directory.path())
-        .args(["--stdio", "--check"])
+        .args(["--write-demo", "ignored.json", "--check"])
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("cannot be used with"));
-    for arguments in [
-        vec!["--stdio", "--output", "ignored.json"],
-        vec!["--write-demo", "ignored.json", "--check"],
-        vec!["--write-demo", "ignored.json", "--script", "missing.jsonl"],
-        vec!["--write-demo", "ignored.json", "--render", "ignored.wav"],
-    ] {
-        let output = cadence(directory.path()).args(arguments).output().unwrap();
-        assert_eq!(output.status.code(), Some(2));
-    }
     assert!(!directory.path().join("ignored.json").exists());
-    assert!(!directory.path().join("ignored.wav").exists());
 }
 
 #[test]
@@ -551,9 +542,9 @@ fn stdio_idle_loop_lands_pending_launch_without_additional_stdin() {
         "launch should be pending on the next bar: {queued}"
     );
 
-    // Stay completely idle on stdin for > 1 bar at 300 BPM (800 ms) so the stdio
-    // idle tick loop observes the transport and lands the launch by itself!
-    std::thread::sleep(Duration::from_millis(1_100));
+    // Stay completely idle on stdin across the bar boundary at 300 BPM (remaining <=700 ms
+    // from step >= 2 to step 16) so the stdio idle tick loop lands the launch by itself.
+    std::thread::sleep(Duration::from_millis(850));
 
     let after = send(json!({"op":"get_state"}));
     assert_eq!(

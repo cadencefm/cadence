@@ -182,7 +182,7 @@ mod tests {
 
     #[test]
     fn macro_binding_min_and_max_display_use_native_parameter_units() {
-        let mut app = App::new(Project::demo(), "macros-unit.json".into()).unwrap();
+        let mut app = App::new_in_memory(Project::demo(), "macros-unit.json".into()).unwrap();
         let ch_name = app.project().mixer.channels[0].name.clone();
         app.execute_command("macro 1 bind instrument Saw cutoff 0.0 1.0")
             .unwrap();

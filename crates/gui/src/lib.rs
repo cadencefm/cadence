@@ -830,7 +830,7 @@ mod tests {
 
     #[test]
     fn redraw_and_wait_cache_snapshot_without_duplicate_host_queries() {
-        let mut app = App::new(Project::demo(), PathBuf::from("gui-cache.json")).unwrap();
+        let mut app = App::new_in_memory(Project::demo(), PathBuf::from("gui-cache.json")).unwrap();
         let mut bridge = CountingBridge {
             snapshots: Cell::new(0),
             playing: true,

@@ -375,7 +375,8 @@ fn gpu_renders_rack_panel_patchbay_zones_preset_categories_and_signal_graph() {
     project.validate().expect("modular showcase validates");
 
     let snap = common::build_snapshot(&project, 16);
-    let mut app = App::new(project, demo_path).expect("init app");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+    let mut app = App::new_with_library(project, demo_path, lib).expect("init app");
     app.set_preset_catalog(PresetCatalog::from_roots(std::slice::from_ref(
         &presets_root,
     )));

@@ -36,6 +36,7 @@ fn check(path: &Path, cwd: &Path) -> std::process::Output {
         .current_dir(cwd)
         .arg("--project")
         .arg(path)
+        .arg("--sample-roots-only")
         .arg("--check")
         .output()
         .unwrap()
@@ -60,6 +61,7 @@ fn missing_required_asset_reports_readiness_and_preserves_export_destination() {
     let rendered = Command::new(env!("CARGO_BIN_EXE_cadence"))
         .arg("--project")
         .arg(&path)
+        .arg("--sample-roots-only")
         .arg("--render")
         .arg(&output)
         .args(["--bars", "1"])
@@ -156,7 +158,9 @@ fn unused_missing_instruments_do_not_block_render_but_scheduling_them_does() {
     let folder = tempfile::tempdir().unwrap();
     let mut project = sampled_project("./absent.wav");
     let placement = project.lanes[0].placements.remove(0);
-    let mut app = App::new(project, folder.path().join("project.json")).unwrap();
+    let proj_path = folder.path().join("project.json");
+    let lib = SampleLibrary::from_roots_only(&[], Some(&proj_path));
+    let mut app = App::new_with_library(project, proj_path, lib).unwrap();
     assert_eq!(app.sample_issues().len(), 1);
     assert!(app.ready());
     let lane = app.project().lanes[0].id;
@@ -177,7 +181,8 @@ fn explicit_reopen_reloads_repaired_or_corrupt_sample_data() {
     let project = sampled_project("./tone.wav");
     save(&project, &path);
     tone(&sample);
-    let mut app = App::new(project, path.clone()).unwrap();
+    let lib = SampleLibrary::from_roots_only(&[], Some(&path));
+    let mut app = App::new_with_library(project, path.clone(), lib).unwrap();
     app.ensure_samples_ready().unwrap();
     fs::write(&sample, b"corrupt replacement").unwrap();
     app.apply(Action::Load { path: path.clone() }).unwrap();
@@ -205,7 +210,7 @@ fn hot_path_parameter_edits_skip_sample_resync_and_save_as_relativizes_rack_zone
     use cadence_app::{KeyCode, KeyEvent, KeyModifiers};
 
     // 1. Hot-path knob & fader edits do not trigger SampleBank resync.
-    let mut app = App::new(Project::demo(), "demo.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "demo.json".into()).unwrap();
     let synth_name = app
         .project()
         .instruments
@@ -238,9 +243,12 @@ fn hot_path_parameter_edits_skip_sample_resync_and_save_as_relativizes_rack_zone
     fs::create_dir_all(&sub_b).unwrap();
     tone(&samples_dir.join("snare.wav"));
 
-    let mut save_app = App::new(Project::demo(), sub_a.join("orig.json")).unwrap();
-    save_app.execute_command("kit KitRel tr808").unwrap();
+    let orig_path = sub_a.join("orig.json");
+    let lib = SampleLibrary::from_roots_only(&[], Some(&orig_path));
+    let mut save_app = App::new_with_library(Project::demo(), orig_path, lib).unwrap();
+    save_app.execute_command("new kit KitRel").unwrap();
     save_app.execute_command("instrument KitRel").unwrap();
+    save_app.execute_command("zone add Snare 38").unwrap();
     save_app
         .execute_command("zone sample ../samples/snare.wav")
         .unwrap();
