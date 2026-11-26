@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn rename_instrument_action_commands_and_undo_mirror_rename_channel() {
-        let mut app = App::new(Project::demo(), "rename-inst.json".into()).unwrap();
+        let mut app = App::new_in_memory(Project::demo(), "rename-inst.json".into()).unwrap();
         let inst0 = app.doc.project().instruments[0].id;
         let orig_name = app.doc.project().instruments[0].name.clone();
         let inst1_name = app.doc.project().instruments[1].name.clone();

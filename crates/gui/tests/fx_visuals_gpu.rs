@@ -330,7 +330,8 @@ fn gpu_renders_all_eight_fx_decks_and_automated_mixer_faders() {
     project
         .validate()
         .expect("normalized FX visuals fixture must validate");
-    let mut app = App::new(project, demo_path).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+    let mut app = App::new_with_library(project, demo_path, lib).unwrap();
 
     // Render all 8 FX decks (zoomed to showcase detail + verify zero clipped labels/curves).
     let cases = [
@@ -544,7 +545,7 @@ fn gpu_renders_fx_edge_cases_mono_reverb_neg_makeup_comp_and_44k_grid() {
     snap.set_effect_meter(comp_hot_id, 4.2, 6.5);
 
     let theme = Theme::cadence_dark();
-    let mut app = App::new(project, "fx-edge-cases.json".into()).unwrap();
+    let mut app = App::new_in_memory(project, "fx-edge-cases.json".into()).unwrap();
 
     for (idx, (id, filename)) in [
         (rev_mono_id, "13-fx-reverb-mono.png"),
@@ -655,7 +656,7 @@ fn gpu_renders_delay_stereo_and_drive_hard_clip_and_fold_modes_distinctly() {
         ..AudioSnapshot::default()
     };
     let theme = Theme::cadence_dark();
-    let mut app = App::new(project, "delay-drive-modes.json".into()).unwrap();
+    let mut app = App::new_in_memory(project, "delay-drive-modes.json".into()).unwrap();
 
     let mut render = |id: u64, filename: &str| -> Vec<u8> {
         app.press_keys("<Esc>").unwrap();
@@ -887,7 +888,8 @@ fn gpu_renders_filter_groove_browser_overlay_in_dark_and_light_themes() {
         }),
     });
     project.validate().unwrap();
-    let mut app = App::new(project, "groove-browser-gpu.json".into()).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], None);
+    let mut app = App::new_with_library(project, "groove-browser-gpu.json".into(), lib).unwrap();
     app.execute_command(&format!("fx {filter_id}")).unwrap();
     app.press_keys("Pjjjj").unwrap(); // open Filter Groove Browser & scroll to live preview 12 Velvet Arch!
     let snap = AudioSnapshot {

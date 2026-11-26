@@ -7,7 +7,8 @@ use cadence_core::{
 };
 
 fn app() -> App {
-    let mut app = App::new(Project::empty(), "unused.json".into()).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots_only(&[], None);
+    let mut app = App::new_with_library(Project::empty(), "unused.json".into(), lib).unwrap();
     app.execute_command("part new One init 0 2 4 6 7").unwrap();
     app.execute_command("part new Two pulse_lead 0 1 2 3 4 5 6")
         .unwrap();
@@ -424,7 +425,7 @@ fn derived_source_navigation_works_directly_with_jk_enter_and_tab_cycles_decks()
 #[test]
 fn a_pinned_pattern_keeps_its_target_while_its_source_opens_below_with_a_trail() {
     use cadence_app::layout::{DeckKind, Target};
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     let id = |a: &App, name: &str| {
         a.project()
             .patterns
@@ -465,7 +466,7 @@ fn a_pinned_pattern_keeps_its_target_while_its_source_opens_below_with_a_trail()
 
 #[test]
 fn a_placement_deck_replaces_forks_reshapes_and_deletes_only_that_placement() {
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     a.press_keys("ga").unwrap();
     // Bass lane: one placement from bar 5.
     a.press_keys("jllll<Enter>").unwrap();
@@ -546,7 +547,7 @@ fn a_placement_deck_replaces_forks_reshapes_and_deletes_only_that_placement() {
 fn instrument_controls_use_hl_wb_edit_and_even_fine_steps() {
     use cadence_core::rack::ModuleParam;
 
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     a.press_keys("gi").unwrap();
     assert!(a.deck_focused());
     assert!(matches!(a.detail, Detail::Instrument(_)));
@@ -677,7 +678,7 @@ fn take_deck_bank_launchpad_from_here_and_layout_presets_work_end_to_end() {
     use cadence_app::layout::DeckKind;
     use cadence_app::BankMode;
 
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
 
     // 1. Bank Launchpad (gb): hjkl navigates lanes/parts, Enter launches, x releases, v switches to Material.
     a.execute_command("lane Lead add Intro").unwrap();
@@ -713,7 +714,7 @@ fn take_deck_bank_launchpad_from_here_and_layout_presets_work_end_to_end() {
     assert!(a.deck_visible_kind(DeckKind::Bank));
 
     // 3. ' ("from here") forks edited pattern & splits straddling placements from cursor bar in 1 undo!
-    let mut b = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut b = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     let baseline = b.project().clone();
     let harmony_id = b
         .project()
@@ -743,7 +744,7 @@ fn take_deck_bank_launchpad_from_here_and_layout_presets_work_end_to_end() {
     assert_eq!(b.project(), &baseline);
 
     // 4. Take deck (gt): arm take, navigate bars, mark range, keep range with k!
-    let mut c = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut c = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     c.apply(Action::SetTakeArmed { armed: true }).unwrap();
     c.apply(Action::Play { playing: true }).unwrap();
     c.advance(16);
@@ -767,7 +768,7 @@ fn rack_tab_hints_and_replace_pattern_picker_filtering() {
     use cadence_app::view::OverlayView;
     use cadence_core::runtime::AudioSnapshot;
 
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
 
     // 1. Replace pattern picker (`r` on a Placement) filters strictly to PatternType::Notes.
     app.execute_command("pattern values NonNotesVal 16 ramp 0:0.1 8:0.9")
@@ -847,7 +848,7 @@ fn bank_32_slot_scroll_window_tracks_cursor_and_centers_unselected_lane_override
     proj.lanes[0].parts.truncate(22);
     proj.validate().unwrap();
 
-    let mut app = App::new(proj, "bank_scroll.json".into()).unwrap();
+    let mut app = App::new_in_memory(proj, "bank_scroll.json".into()).unwrap();
     app.press_keys("gb").unwrap();
     let snap = AudioSnapshot::default();
     let bank_lane0 = |app: &App| {

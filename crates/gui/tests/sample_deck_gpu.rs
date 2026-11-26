@@ -88,7 +88,7 @@ fn gpu_renders_sample_waveform_deck_dark_light_zoomed_and_empty() {
     let wav_path = tmp.path().join("samples/funk_break_120.wav");
     write_visual_break_wav(&wav_path);
 
-    let lib = SampleLibrary::discover(&[tmp.path().join("samples")], Some(&save_path));
+    let lib = SampleLibrary::from_roots_only(&[tmp.path().join("samples")], Some(&save_path));
     let mut app = App::new_with_library(Project::demo(), save_path, lib).unwrap();
     app.execute_command("sampler BreakLoop samples/funk_break_120.wav")
         .unwrap();
@@ -183,7 +183,7 @@ fn gpu_renders_sample_deck_live_recording_monitor_and_offline_edit_picker() {
     let wav_path = tmp.path().join("samples/funk_break_120.wav");
     write_visual_break_wav(&wav_path);
 
-    let lib = SampleLibrary::discover(&[tmp.path().join("samples")], Some(&save_path));
+    let lib = SampleLibrary::from_roots_only(&[tmp.path().join("samples")], Some(&save_path));
     let mut app = App::new_with_library(Project::demo(), save_path, lib).unwrap();
     app.config.audio_input_device = Some("Focusrite Scarlett 4i4".into());
     app.config.audio_input_monitor = InputMonitorMode::Auto;

@@ -8,7 +8,12 @@ use std::{
     time::{Duration, Instant},
 };
 fn app() -> App {
-    App::new(Project::empty(), "unused.json".into()).unwrap()
+    App::new_with_library(
+        Project::empty(),
+        "unused.json".into(),
+        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
+    )
+    .unwrap()
 }
 fn finish(app: &mut App) {
     for _ in 0..40 {
@@ -419,7 +424,12 @@ fn action_new_honors_user_config_defaults_clears_overlays_and_supports_kit_place
     };
 
     // 1. `Action::New` clears open FileHub overlay and applies `config.default_bpm` / `default_root_midi`.
-    let mut a = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut a = App::new_with_library(
+        Project::demo(),
+        "unused.json".into(),
+        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
+    )
+    .unwrap();
     a.config = UserConfig {
         default_bpm: 127.0,
         default_root_midi: 62, // D4
@@ -553,7 +563,7 @@ fn action_new_honors_user_config_defaults_clears_overlays_and_supports_kit_place
     assert!((sp.velocity_scale - 0.85).abs() < 1e-4);
 
     // 4. Picker `A` auditions candidate sounds on `Replace::Instrument` (via `r` on Instrument row).
-    let mut demo = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut demo = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     demo.press_keys("ga<Enter>").unwrap();
     let inst_row = demo
         .control_descriptors()

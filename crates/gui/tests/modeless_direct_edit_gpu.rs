@@ -86,7 +86,7 @@ fn gpu_modeless_decks_value_input_chords_mixer_jam_and_overlays() {
     // -----------------------------------------------------------------------
     // 1. Instrument Deck: Modeless cyan focus + Enter ValueInput amber overlay
     // -----------------------------------------------------------------------
-    let mut app = App::new(Project::demo(), PathBuf::from("modeless_gpu.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("modeless_gpu.json")).unwrap();
     let snap = common::build_snapshot(app.project(), 18);
     app.press_keys("gizz").unwrap();
     for _ in 0..16 {

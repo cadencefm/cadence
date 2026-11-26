@@ -388,7 +388,7 @@ fn help_overlay_hints_bar_and_fx_usage_cover_all_decks_and_effects() {
         .expect("gg/ge help entry");
     assert!(gg_entry.summary.contains("song start/end"));
 
-    let mut app = App::new(Project::demo(), PathBuf::from("demo.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("demo.json")).unwrap();
     app.press_keys("gk").unwrap();
     let mac_hints = app.hints();
     assert!(
@@ -421,7 +421,7 @@ fn help_overlay_hints_bar_and_fx_usage_cover_all_decks_and_effects() {
 
 #[test]
 fn help_and_inspect_scrolling_preserve_control_cursor_and_ctrl_u_clears_help_query() {
-    let mut app = App::new(Project::demo(), PathBuf::from("demo.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("demo.json")).unwrap();
 
     let synth_name = app
         .project()

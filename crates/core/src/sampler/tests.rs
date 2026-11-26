@@ -84,7 +84,7 @@ fn indexes_supported_formats_in_a_temporary_library() {
         fs::write(root.join(format!("test.{extension}")), []).unwrap();
     }
     fs::write(root.join("notes.txt"), b"not an audio asset").unwrap();
-    let library = SampleLibrary::discover(std::slice::from_ref(&root), None);
+    let library = SampleLibrary::from_roots_only(std::slice::from_ref(&root), None);
     let entries: Vec<_> = library
         .entries
         .iter()
@@ -112,7 +112,7 @@ fn project_relative_assets_win_and_rebase_when_a_new_project_is_opened() {
     }
     fs::create_dir(first.join("samples")).unwrap();
     fs::copy(&hat, first.join("samples/old-only.wav")).unwrap();
-    let mut library = SampleLibrary::discover(
+    let mut library = SampleLibrary::from_roots(
         std::slice::from_ref(&global),
         Some(&first.join("score.json")),
     );
@@ -150,7 +150,7 @@ fn removed_library_file_is_not_returned_from_the_decode_cache() {
     let folder = tempfile::tempdir().unwrap();
     let path = folder.path().join("temporary-asset.wav");
     fs::copy(demo_sample("cyber-hat.wav"), &path).unwrap();
-    let mut library = SampleLibrary::discover(&[folder.path().to_path_buf()], None);
+    let mut library = SampleLibrary::from_roots_only(&[folder.path().to_path_buf()], None);
     library.load("temporary-asset.wav").unwrap();
     fs::remove_file(path).unwrap();
     assert!(library.load("temporary-asset.wav").is_err());

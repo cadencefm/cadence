@@ -8,7 +8,7 @@ use cadence_core::{
 };
 
 fn app(pattern: u64) -> App {
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     app.apply(Action::SelectPattern { pattern }).unwrap();
     app.selected_placement = Some(2);
     app

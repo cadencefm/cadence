@@ -46,7 +46,8 @@ fn make_temp_demo_app() -> (tempfile::TempDir, App) {
     let dir = tempfile::tempdir().unwrap();
     let save_path = dir.path().join("project.json");
     let project = Project::demo();
-    let app = App::new(project, save_path).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&save_path));
+    let app = App::new_with_library(project, save_path, lib).unwrap();
     (dir, app)
 }
 
@@ -296,7 +297,9 @@ fn rack_zone_ex_commands_sample_loading_and_audio_effect() {
     });
     project.bars = 1;
 
-    let mut audio_app = App::new(project, dir.path().join("kit_audio.json")).unwrap();
+    let kit_path = dir.path().join("kit_audio.json");
+    let lib = common::factory_sample_library(Some(&kit_path), false);
+    let mut audio_app = App::new_with_library(project, kit_path, lib).unwrap();
     audio_app.execute_command("instrument Kit808").unwrap();
     let (base_report, base_pcm) = render_schedule_pcm(
         &[(0, audio_app.compiled_project())],

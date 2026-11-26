@@ -134,7 +134,7 @@ fn gpu_renders_live_staging_automated_channel_pan_and_midi_rec_cc() {
     let snap = common::build_snapshot(&project, 12);
     let theme = Theme::cadence_dark();
     let status = "Metal · 48 kHz";
-    let mut app = App::new(project, PathBuf::from("live_staging_gpu.json")).unwrap();
+    let mut app = App::new_in_memory(project, PathBuf::from("live_staging_gpu.json")).unwrap();
     app.execute_command("lane Drums add Kick restart").unwrap();
 
     // --- 1. Live Staging active: Chrome STAGED badge + Arrange & Bank previews! ---
@@ -270,7 +270,7 @@ fn gpu_renders_bank_32_slot_scroll_window_compact_and_zoomed() {
     let snap = common::build_snapshot(&project, 12);
     let theme = Theme::cadence_dark();
     let status = "Metal · 48 kHz";
-    let mut app = App::new(project, PathBuf::from("bank_32_gpu.json")).unwrap();
+    let mut app = App::new_in_memory(project, PathBuf::from("bank_32_gpu.json")).unwrap();
     app.press_keys("gb").unwrap();
     // Scroll part cursor right (`l`) to slot 15 (0-indexed 14) so both ◀ and ▶ scroll indicators appear!
     for _ in 0..14 {

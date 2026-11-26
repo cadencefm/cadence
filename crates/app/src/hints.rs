@@ -900,7 +900,7 @@ mod tests {
         let snap = AudioSnapshot::default();
 
         // 1. Default demo (<= 10 lanes and <= 10 sections): no `Tab bank`.
-        let mut app = App::new(Project::demo(), path.clone()).unwrap();
+        let mut app = App::new_in_memory(Project::demo(), path.clone()).unwrap();
         assert!(app.project().lanes.len() <= LANE_KEYS.len());
         assert!(app.project().sections.len() <= SECTION_KEYS.len());
         app.press_keys("gj").unwrap();
@@ -931,7 +931,7 @@ mod tests {
             });
             next_id += 1;
         }
-        let mut app_lanes = App::new(project_lanes, path.clone()).unwrap();
+        let mut app_lanes = App::new_in_memory(project_lanes, path.clone()).unwrap();
         app_lanes.press_keys("gj").unwrap();
         assert!(
             app_lanes
@@ -975,7 +975,7 @@ mod tests {
             });
             next_id += 1;
         }
-        let mut app_secs = App::new(project_secs, path).unwrap();
+        let mut app_secs = App::new_in_memory(project_secs, path).unwrap();
         app_secs.press_keys("gj").unwrap();
         assert!(
             app_secs

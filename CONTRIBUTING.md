@@ -49,7 +49,7 @@ cargo test -p cadence-engine --lib
 cargo test --workspace
 
 # 5. Deterministic audio, parity & signal-hygiene invariants (required for core/engine/examples)
-cargo test --release --test audio_invariants
+cargo test --profile release-fast --no-default-features --test audio_invariants
 ```
 
 ### Headless GPU Regression Tests & Visual Inspection

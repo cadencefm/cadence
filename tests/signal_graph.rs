@@ -34,7 +34,7 @@ fn select_graph_target(app: &mut App, target: GraphTarget) {
 
 #[test]
 fn signal_graph_effect_and_channel_selection_and_direct_cable_workflows() {
-    let mut app = App::new(Project::demo(), "graph-demo.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "graph-demo.json".into()).unwrap();
 
     // Add a Group bus, a Return channel, and an insert Effect on Lead channel so all node kinds exist.
     let lead_ch = app.project().mixer.channels[0].id;
@@ -254,7 +254,7 @@ fn signal_graph_effect_and_channel_selection_and_direct_cable_workflows() {
 
 #[test]
 fn filter_env_source_cycler_skips_degrees_and_renders_graph_cable() {
-    let mut app = App::new(Project::empty(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::empty(), "unused.json".into()).unwrap();
     app.execute_command("pattern notes Melody 0 2 4 7").unwrap();
     app.execute_command("pattern degrees Harmony 16 hold 0:0 8:2")
         .unwrap();
@@ -344,7 +344,7 @@ fn filter_env_source_cycler_skips_degrees_and_renders_graph_cable() {
 fn signal_graph_macro_cables_param_link_bus_route_and_zeroed_sends() {
     use cadence_core::material::Edit;
 
-    let mut app = App::new(Project::demo(), "graph-parity.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "graph-parity.json".into()).unwrap();
     let lead_ch = app.project().mixer.channels[0].id;
     let echo_ret = app
         .project()

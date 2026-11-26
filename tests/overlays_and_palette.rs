@@ -422,7 +422,9 @@ fn preset_browser_multizone_rack_preview_preserves_zone_modulations_links_and_ma
         .save(&presets_dir.join("two-zone-alt.preset.json"))
         .unwrap();
 
-    let mut app = App::new(project, dir.path().join("kit-project.json")).unwrap();
+    let save_path = dir.path().join("kit-project.json");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&save_path));
+    let mut app = App::new_with_library(project, save_path, lib).unwrap();
     app.set_preset_catalog(PresetCatalog::from_roots(&[presets_dir]));
     app.execute_command("instrument PercKit").unwrap();
     assert!(!app.dirty());
@@ -537,7 +539,7 @@ fn preset_browser_multizone_rack_preview_preserves_zone_modulations_links_and_ma
 
 #[test]
 fn song_properties_modal_all_fields_thirteen_scales_and_undo_redo() {
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     let orig_title = app.project().title.clone();
     let orig_bpm = app.project().bpm;
     let orig_root = app.project().root_midi;
@@ -651,7 +653,7 @@ fn song_properties_modal_all_fields_thirteen_scales_and_undo_redo() {
 
 #[test]
 fn mini_notation_editor_live_validation_commit_and_cancel() {
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     app.execute_command("mini Groove 8 c4 e4 g4 b4").unwrap();
     app.press_keys("gp").unwrap();
 
@@ -718,7 +720,7 @@ fn mini_notation_editor_live_validation_commit_and_cancel() {
 
 #[test]
 fn unified_value_input_across_rack_effect_zone_mixer_and_macros() {
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
 
     // 1. Rack Filter `Cutoff` via digit entry & exact units ("1.75khz") + live parse validation!
     let inst_id = app.project().instruments[0].id;
@@ -840,7 +842,9 @@ fn fuzzy_action_palette_search_dynamic_items_and_command_passthrough() {
     .save(&presets_dir.join("palette-saw.preset.json"))
     .unwrap();
 
-    let mut app = App::new(Project::demo(), dir.path().join("demo.json")).unwrap();
+    let save_path = dir.path().join("demo.json");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&save_path));
+    let mut app = App::new_with_library(Project::demo(), save_path, lib).unwrap();
     app.set_preset_catalog(PresetCatalog::from_roots(&[presets_dir]));
 
     // 1. Open via `Ctrl+Shift+p`, fuzzy search `"song key"` -> opens Song Properties on Key Root!
@@ -952,7 +956,7 @@ fn fuzzy_action_palette_search_dynamic_items_and_command_passthrough() {
 
 #[test]
 fn palette_command_arity_static_and_dynamic_entries() {
-    let mut app = App::new(Project::demo(), "palette_parity.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "palette_parity.json".into()).unwrap();
 
     // Ensure project has at least one modulation and one effect for dynamic Palette entries.
     let first_ch = ChannelRef::Channel(app.project().mixer.channels[0].id);
@@ -993,7 +997,7 @@ fn palette_command_arity_static_and_dynamic_entries() {
         target: ModulationTarget::ChannelGain { channel: first_ch },
         pattern: val_pat_id,
     });
-    let mut app = App::new(p, "palette_parity.json".into()).unwrap();
+    let mut app = App::new_in_memory(p, "palette_parity.json".into()).unwrap();
 
     // 1. Command arity: `clips` requires arg (`clear [all]`), while `midi`, `quantize`, `wav` allow 0-arg!
     app.press_keys(":clips").unwrap();

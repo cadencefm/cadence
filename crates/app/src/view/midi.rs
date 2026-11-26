@@ -753,7 +753,7 @@ mod tests {
 
     #[test]
     fn smart_macro_tiles_format_non_project_macros_with_native_parameter_units() {
-        let mut app = App::new(Project::demo(), "midi-unit.json".into()).unwrap();
+        let mut app = App::new_in_memory(Project::demo(), "midi-unit.json".into()).unwrap();
         app.press_keys("gi").unwrap();
         let view = app.build_midi_view(&AudioSnapshot::default());
         let cutoff_tile = view

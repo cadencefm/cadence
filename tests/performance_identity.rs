@@ -5,7 +5,12 @@ use cadence_core::{
     music::Step,
 };
 fn app() -> App {
-    let mut a = App::new(Project::empty(), "unused.json".into()).unwrap();
+    let mut a = App::new_with_library(
+        Project::empty(),
+        "unused.json".into(),
+        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
+    )
+    .unwrap();
     a.execute_command("part new Tone init 0").unwrap();
     a
 }
@@ -109,7 +114,7 @@ fn rejected_load_and_exhausted_ids_leave_score_and_input_unchanged() {
             steps: vec![Step::default()],
         },
     });
-    let mut exhausted = App::new(p.clone(), "unused.json".into()).unwrap();
+    let mut exhausted = App::new_in_memory(p.clone(), "unused.json".into()).unwrap();
     assert!(exhausted.apply(pattern()).is_err());
     assert_eq!(exhausted.project(), &p);
 }

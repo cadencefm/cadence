@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 fn demo_app() -> App {
-    let mut app = App::new(Project::demo(), PathBuf::from("live_staging.json")).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), PathBuf::from("live_staging.json")).unwrap();
     app.execute_command("lane Drums add Kick restart").unwrap();
     app
 }
@@ -641,7 +641,7 @@ fn channel_pan_modulation_audibly_shifts_stereo_left_to_right_and_projects_to_mi
     );
 
     // 4. MixerDeckView projects live effective_pan + pan_modulators, and GraphDeckView wires the edge!
-    let mut app = App::new(project, PathBuf::from("pan_test.json")).unwrap();
+    let mut app = App::new_in_memory(project, PathBuf::from("pan_test.json")).unwrap();
     keys(&mut app, "gm");
     let snap_left = AudioSnapshot {
         playing: true,
@@ -725,11 +725,11 @@ fn channel_pan_modulation_audibly_shifts_stereo_left_to_right_and_projects_to_mi
 
 #[test]
 fn midi_learn_automatable_parity_and_sampler_smart_macros() {
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     app.execute_command("instrument SampMacro sampler").unwrap();
 
     // 1. Default Sampler Rack 8-knob Smart Macro bank maps continuous automatable params.
-    let mut samp_app = App::new(Project::empty(), "unused.json".into()).unwrap();
+    let mut samp_app = App::new_in_memory(Project::empty(), "unused.json".into()).unwrap();
     samp_app
         .execute_command("instrument SampMacro sampler")
         .unwrap();
@@ -872,7 +872,7 @@ fn midi_cc_overdub_resets_channel_strip_gain_to_unity() {
         pattern: pat_id,
         target: ModulationTarget::ChannelGain { channel: ch_ref },
     });
-    let mut overdub_app = App::new(overdub_proj, "overdub.json".into()).unwrap();
+    let mut overdub_app = App::new_in_memory(overdub_proj, "overdub.json".into()).unwrap();
     overdub_app.config.midi_mappings.push(MidiMapping {
         id: 99,
         label: "Ch0 Gain".into(),

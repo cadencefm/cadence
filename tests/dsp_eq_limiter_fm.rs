@@ -176,7 +176,7 @@ fn limiter_enforces_brickwall_ceiling_reports_live_gr_and_wires_fx_add_command()
     assert_eq!(lim.gain_reduction_db(), 0.0);
 
     // 2. End-to-end `:fx add limiter` command + Signal Graph "LIM" tag + EffectDeckView.
-    let mut app = App::new(Project::demo(), "demo.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "demo.json".into()).unwrap();
     app.execute_command("fx add limiter master").unwrap();
     let lim_dev = app
         .project()
@@ -290,7 +290,7 @@ fn limiter_enforces_brickwall_ceiling_reports_live_gr_and_wires_fx_add_command()
     assert!(max_sample > rt_ceil_lin * 0.70, "max_sample={max_sample}");
 
     // Real-time silent AudioRuntime publishes live GR > 2.0 dB via EffectMeter.
-    let rt = AudioRuntime::start(compiled, true).unwrap();
+    let rt = AudioRuntime::start_with_samples(compiled, Vec::new(), true).unwrap();
     assert!(rt.transport(TransportIntent::Play { playing: true }));
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut observed_gr = 0.0_f32;
@@ -581,7 +581,7 @@ fn rack_linear_fm_silent_modulator_sidebands_automation_and_serde_roundtrip() {
     // 5. Rack InstrumentDeckView reflects the FM cable on both PinnedOverview and VCO A module faceplate!
     let mut proj_view = make_project(false);
     proj_view.instruments[0].rack = build_fm_rack(0.45);
-    let mut app = App::new(proj_view, "fm.json".into()).unwrap();
+    let mut app = App::new_in_memory(proj_view, "fm.json".into()).unwrap();
     app.apply(cadence_app::Action::SelectInstrument { instrument: 1 })
         .unwrap();
 

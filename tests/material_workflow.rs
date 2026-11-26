@@ -9,9 +9,10 @@ use cadence_core::{
 };
 use std::path::PathBuf;
 fn empty() -> App {
-    App::new(
+    App::new_with_library(
         Project::empty(),
         PathBuf::from("/tmp/cadence-material-test.json"),
+        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
     )
     .unwrap()
 }

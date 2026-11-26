@@ -16,7 +16,8 @@ use serde_json::{json, Value};
 fn document_round_trips_live_flags_outside_undo_and_prunes_stale_flags() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("song.json");
-    let mut app = App::new(Project::demo(), path.clone()).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&path));
+    let mut app = App::new_with_library(Project::demo(), path.clone(), lib).unwrap();
     let lead = app.project().lanes[0].id;
     let ch = ChannelRef::Channel(app.project().mixer.channels[0].id);
 
@@ -83,7 +84,7 @@ fn document_round_trips_live_flags_outside_undo_and_prunes_stale_flags() {
 
 #[test]
 fn launching_parts_never_bumps_revision_and_lane_part_lifecycle_holds() {
-    let mut app = App::new(Project::demo(), "unused.json".into()).unwrap();
+    let mut app = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
     let lead = app.project().lanes[0].id;
     let part = app.project().lanes[0].parts[0];
     let rev = app.revision();

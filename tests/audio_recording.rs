@@ -90,7 +90,8 @@ fn quantized_audio_recording_lands_24bit_wav_sampler_placement_audibly_and_undoe
     project.bpm = 300.0; // Fast tempo: 1 bar (16 steps) = 0.8s wall clock.
     project.bars = 4;
 
-    let mut app = App::new(project, project_path).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&project_path));
+    let mut app = App::new_with_library(project, project_path, lib).unwrap();
     let mut engine =
         AudioRuntime::start_with_samples(app.audio_project().clone(), app.sample_bank(), true)
             .unwrap();
@@ -276,7 +277,8 @@ fn free_time_count_in_rack_zone_and_record_workflow_dialog_all_work() {
     project.bpm = 300.0;
     project.bars = 4;
 
-    let mut app = App::new(project, project_path).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&project_path));
+    let mut app = App::new_with_library(project, project_path, lib).unwrap();
     let mut engine =
         AudioRuntime::start_with_samples(app.audio_project().clone(), app.sample_bank(), true)
             .unwrap();
@@ -427,7 +429,8 @@ fn stopped_transport_recording_preserves_active_loop_region_across_quantized_and
     project.bpm = 300.0;
     project.bars = 4;
 
-    let mut app = App::new(project, project_path).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&project_path));
+    let mut app = App::new_with_library(project, project_path, lib).unwrap();
     let mut engine =
         AudioRuntime::start_with_samples(app.audio_project().clone(), app.sample_bank(), true)
             .unwrap();

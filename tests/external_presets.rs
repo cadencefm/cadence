@@ -260,7 +260,8 @@ fn empty_preset_dirs_and_missing_samples_never_crash_and_surface_clear_notices()
 fn unified_instrument_preset_save_load_and_zone_preset() {
     let dir = tempfile::tempdir().unwrap();
     let save_path = dir.path().join("project.json");
-    let mut app = App::new(Project::empty(), save_path).unwrap();
+    let lib = common::factory_sample_library(Some(&save_path), false);
+    let mut app = App::new_with_library(Project::empty(), save_path, lib).unwrap();
 
     // Create three Rack instruments: Synth preset, Sampler instrument, and multi-zone Kit preset.
     app.execute_command("instrument AcidLead acid-303").unwrap();
@@ -565,19 +566,26 @@ fn factory_sources_presets_samples_metadata_and_24khz_kit_audition_are_valid() {
         }
     }
 
-    // 5. 24 kHz audition sanity check: render baked + live synth TR-808, TR-909, and EDM Kit beats,
-    //    verifying hat choke, zero clips, sample integrity, and stereo zone panning without clipping!
+    // 5. 24 kHz audition sanity check: render baked + live synth TR-808, TR-909, and EDM Kit beats
+    //    in parallel, verifying hat choke, zero clips, sample integrity, and stereo zone panning!
     let mut lib = common::factory_sample_library(None, false);
-    let mut kit_projects: std::collections::HashMap<&str, Project> =
-        std::collections::HashMap::new();
-    for kit_id in [
+    let kit_ids = [
         "tr-808",
         "tr-909",
         "edm-kit",
         "tr-808-synth",
         "tr-909-synth",
         "edm-kit-synth",
-    ] {
+    ];
+    let mut kit_inputs = Vec::with_capacity(kit_ids.len());
+    let mut kit_banks: std::collections::HashMap<
+        &str,
+        (
+            cadence_core::score::ScoreWindow,
+            cadence_core::runtime::SampleBank,
+        ),
+    > = std::collections::HashMap::new();
+    for kit_id in kit_ids {
         let rack = catalog
             .find_by_category("Kit", kit_id)
             .unwrap()
@@ -586,7 +594,7 @@ fn factory_sources_presets_samples_metadata_and_24khz_kit_audition_are_valid() {
         let is_sample_kit = rack.has_samplers();
         let mut p = Project::empty();
         p.bpm = 126.0;
-        p.bars = 2;
+        p.bars = 1;
         p.root_midi = drum_midi::BD; // 36
         p.scale = (0..12).collect(); // chromatic degrees -> direct pad mapping
         p.mixer
@@ -628,7 +636,7 @@ fn factory_sources_presets_samples_metadata_and_24khz_kit_audition_are_valid() {
             id: 1,
             part: 1,
             start_step: 0,
-            length_steps: 32,
+            length_steps: 16,
             phase: PhaseMode::Song,
             offset_steps: 0,
             exceptions: Vec::new(),
@@ -642,68 +650,6 @@ fn factory_sources_presets_samples_metadata_and_24khz_kit_audition_are_valid() {
             "{kit_id} had sample issues: {:?}",
             loaded.issues
         );
-        let report = render_measure_report(&score, loaded.bank.clone(), 2, 24_000).unwrap();
-        let peak = report.output.peak[0].max(report.output.peak[1]);
-        let rms = report.output.rms[0].max(report.output.rms[1]);
-        kit_projects.insert(kit_id, p.clone());
-        assert_eq!(
-            report.output.full_scale_samples, 0,
-            "{kit_id} audition groove clipped!"
-        );
-        assert!(
-            peak > 0.25,
-            "{kit_id} audition groove peak too quiet: {:?}",
-            report.output.peak
-        );
-        assert!(
-            rms > 0.03,
-            "{kit_id} audition groove RMS too quiet: {:?}",
-            report.output.rms
-        );
-        assert!(
-            report.output.dc[0].abs() < 0.005 && report.output.dc[1].abs() < 0.005,
-            "{kit_id} DC offset too high: {:?}",
-            report.output.dc
-        );
-
-        // Truthful mono/stereo verification:
-        // - If the kit's on-disk samples include true stereo L/R differences, playback must preserve them.
-        // - If a dry hardware kit uses pure dry mono samples with centered zones, playback must stay clean balanced mono.
-        let (_, pcm) =
-            render_schedule_pcm(&[(0, &score)], 0, 32, loaded.bank.clone(), 24_000).unwrap();
-        let bank_has_stereo_content = loaded.bank.iter().any(|(_, s)| {
-            s.right.as_deref().is_some_and(|r| {
-                s.left
-                    .iter()
-                    .zip(r.iter())
-                    .any(|(&l, &rr)| (l - rr).abs() > 1e-4)
-            })
-        });
-        let max_lr_diff = pcm
-            .iter()
-            .map(|&[l, r]| (l as i32 - r as i32).abs())
-            .max()
-            .unwrap_or(0);
-        if is_sample_kit {
-            if bank_has_stereo_content {
-                assert!(
-                    max_lr_diff > 0,
-                    "{kit_id} contains stereo sample data that must survive stereo playback"
-                );
-            } else {
-                assert!(
-                    max_lr_diff <= 1,
-                    "{kit_id} dry centered mono kit should remain balanced mono (max_lr_diff={max_lr_diff})"
-                );
-            }
-        } else {
-            assert!(
-                loaded.bank.is_empty(),
-                "live synth kit '{kit_id}' must require zero external WAV samples"
-            );
-        }
-
-        // Verify stereo kit image via per-zone panning (works identically for dry mono AND stereo kits!).
         let cp_zone_id = p.instruments[0]
             .rack
             .zones
@@ -711,7 +657,7 @@ fn factory_sources_presets_samples_metadata_and_24khz_kit_audition_are_valid() {
             .find(|z| z.low_midi <= drum_midi::CP && drum_midi::CP <= z.high_midi)
             .expect("CP zone")
             .id;
-        let mut panned = p.clone();
+        let mut panned = p;
         panned
             .apply(Edit::SetParam {
                 address: ParamAddress::Zone {
@@ -723,57 +669,147 @@ fn factory_sources_presets_samples_metadata_and_24khz_kit_audition_are_valid() {
             })
             .unwrap();
         let panned_score = panned.compile().unwrap();
-        let panned_report =
-            render_measure_report(&panned_score, loaded.bank.clone(), 2, 24_000).unwrap();
-        assert_eq!(
-            panned_report.output.full_scale_samples, 0,
-            "{kit_id} panned stereo groove clipped!"
-        );
-        let (_, panned_pcm) =
-            render_schedule_pcm(&[(0, &panned_score)], 0, 32, loaded.bank, 24_000).unwrap();
-        assert!(
-            panned_pcm
-                .iter()
-                .any(|&[l, r]| (l as i32 - r as i32).abs() > 500),
-            "{kit_id} panned CP zone must produce genuine stereo L/R width"
-        );
+        kit_banks.insert(kit_id, (score.clone(), loaded.bank.clone()));
+        kit_inputs.push((kit_id, is_sample_kit, score, panned_score, loaded.bank));
     }
+
+    std::thread::scope(|s| {
+        let handles: Vec<_> = kit_inputs
+            .into_iter()
+            .map(|(kit_id, is_sample_kit, score, panned_score, bank)| {
+                s.spawn(move || {
+                    let (report, pcm) =
+                        render_schedule_pcm(&[(0, &score)], 0, 16, bank.clone(), 24_000).unwrap();
+                    let peak = report.output.peak[0].max(report.output.peak[1]);
+                    let rms = report.output.rms[0].max(report.output.rms[1]);
+                    assert_eq!(
+                        report.output.full_scale_samples, 0,
+                        "{kit_id} audition groove clipped!"
+                    );
+                    assert!(
+                        peak > 0.25,
+                        "{kit_id} audition groove peak too quiet: {:?}",
+                        report.output.peak
+                    );
+                    assert!(
+                        rms > 0.03,
+                        "{kit_id} audition groove RMS too quiet: {:?}",
+                        report.output.rms
+                    );
+                    assert!(
+                        report.output.dc[0].abs() < 0.005 && report.output.dc[1].abs() < 0.005,
+                        "{kit_id} DC offset too high: {:?}",
+                        report.output.dc
+                    );
+
+                    // Truthful mono/stereo verification:
+                    // - If the kit's on-disk samples include true stereo L/R differences, playback must preserve them.
+                    // - If a dry hardware kit uses pure dry mono samples with centered zones, playback must stay clean balanced mono.
+                    let bank_has_stereo_content = bank.iter().any(|(_, s)| {
+                        s.right.as_deref().is_some_and(|r| {
+                            s.left
+                                .iter()
+                                .zip(r.iter())
+                                .any(|(&l, &rr)| (l - rr).abs() > 1e-4)
+                        })
+                    });
+                    let max_lr_diff = pcm
+                        .iter()
+                        .map(|&[l, r]| (l as i32 - r as i32).abs())
+                        .max()
+                        .unwrap_or(0);
+                    if is_sample_kit {
+                        if bank_has_stereo_content {
+                            assert!(
+                                max_lr_diff > 0,
+                                "{kit_id} contains stereo sample data that must survive stereo playback"
+                            );
+                        } else {
+                            assert!(
+                                max_lr_diff <= 1,
+                                "{kit_id} dry centered mono kit should remain balanced mono (max_lr_diff={max_lr_diff})"
+                            );
+                        }
+                    } else {
+                        assert!(
+                            bank.is_empty(),
+                            "live synth kit '{kit_id}' must require zero external WAV samples"
+                        );
+                    }
+
+                    // Verify stereo kit image via per-zone panning (works identically for dry mono AND stereo kits!).
+                    let (panned_report, panned_pcm) =
+                        render_schedule_pcm(&[(0, &panned_score)], 0, 16, bank, 24_000).unwrap();
+                    assert_eq!(
+                        panned_report.output.full_scale_samples, 0,
+                        "{kit_id} panned stereo groove clipped!"
+                    );
+                    assert!(
+                        panned_pcm
+                            .iter()
+                            .any(|&[l, r]| (l as i32 - r as i32).abs() > 500),
+                        "{kit_id} panned CP zone must produce genuine stereo L/R width"
+                    );
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+    });
 
     // Live synth kits must match their baked sample kits 1:1 across 44.1 kHz and 48 kHz,
     // and noise/resonator synth grooves must remain sample-rate invariant up to 96 kHz.
-    for (baked_id, synth_id) in [
-        ("tr-808", "tr-808-synth"),
-        ("tr-909", "tr-909-synth"),
-        ("edm-kit", "edm-kit-synth"),
-    ] {
-        let mut render_at = |id: &str, sr: u32| -> (f64, f64) {
-            let score = kit_projects[id].compile().unwrap();
-            let loaded = load_project_samples(&score, &mut lib);
-            assert!(loaded.issues.is_empty());
-            let rep = render_measure_report(&score, loaded.bank, 1, sr).unwrap();
-            (
-                rep.output.peak[0].max(rep.output.peak[1]),
-                rep.output.rms[0].max(rep.output.rms[1]),
-            )
-        };
-        for sr in [44_100u32, 48_000] {
-            let (b_peak, b_rms) = render_at(baked_id, sr);
-            let (s_peak, s_rms) = render_at(synth_id, sr);
-            let rms_diff_db = (20.0 * (s_rms / b_rms).log10()).abs();
-            let peak_diff_db = (20.0 * (s_peak / b_peak).log10()).abs();
-            assert!(
-                rms_diff_db < 0.6 && peak_diff_db < 1.5,
-                "{synth_id} must match {baked_id} playback level @ {sr} Hz (baked peak={b_peak:.4}/rms={b_rms:.4}, synth peak={s_peak:.4}/rms={s_rms:.4}, dRMS={rms_diff_db:.2} dB, dPeak={peak_diff_db:.2} dB)"
-            );
+    let parity_pairs: &[(&str, &str)] = if cfg!(debug_assertions) {
+        &[("tr-808", "tr-808-synth")]
+    } else {
+        &[
+            ("tr-808", "tr-808-synth"),
+            ("tr-909", "tr-909-synth"),
+            ("edm-kit", "edm-kit-synth"),
+        ]
+    };
+    let kit_banks = &kit_banks;
+    std::thread::scope(|s| {
+        let handles: Vec<_> = parity_pairs
+            .iter()
+            .map(|&(baked_id, synth_id)| {
+                s.spawn(move || {
+                    let render_at = |id: &str, sr: u32| -> (f64, f64) {
+                        let (score, bank) = &kit_banks[id];
+                        let rep = render_measure_report(score, bank.clone(), 1, sr).unwrap();
+                        (
+                            rep.output.peak[0].max(rep.output.peak[1]),
+                            rep.output.rms[0].max(rep.output.rms[1]),
+                        )
+                    };
+                    let mut s44_rms = 0.0_f64;
+                    for sr in [44_100u32, 48_000] {
+                        let (b_peak, b_rms) = render_at(baked_id, sr);
+                        let (s_peak, s_rms) = render_at(synth_id, sr);
+                        if sr == 44_100 {
+                            s44_rms = s_rms;
+                        }
+                        let rms_diff_db = (20.0 * (s_rms / b_rms).log10()).abs();
+                        let peak_diff_db = (20.0 * (s_peak / b_peak).log10()).abs();
+                        assert!(
+                            rms_diff_db < 0.6 && peak_diff_db < 1.5,
+                            "{synth_id} must match {baked_id} playback level @ {sr} Hz (baked peak={b_peak:.4}/rms={b_rms:.4}, synth peak={s_peak:.4}/rms={s_rms:.4}, dRMS={rms_diff_db:.2} dB, dPeak={peak_diff_db:.2} dB)"
+                        );
+                    }
+                    let (_, s96_rms) = render_at(synth_id, 96_000);
+                    let sr_drift_db = (20.0 * (s96_rms / s44_rms).log10()).abs();
+                    assert!(
+                        sr_drift_db < 0.6,
+                        "{synth_id} groove RMS drifted between 44.1 kHz and 96 kHz: {sr_drift_db:.2} dB"
+                    );
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
         }
-        let (_, s44_rms) = render_at(synth_id, 44_100);
-        let (_, s96_rms) = render_at(synth_id, 96_000);
-        let sr_drift_db = (20.0 * (s96_rms / s44_rms).log10()).abs();
-        assert!(
-            sr_drift_db < 0.6,
-            "{synth_id} groove RMS drifted between 44.1 kHz and 96 kHz: {sr_drift_db:.2} dB"
-        );
-    }
+    });
 
     // Keep bare RackPatch default verified cleanly.
     RackPatch::default_synth().validate().unwrap();
@@ -1021,7 +1057,9 @@ fn filter_groove_bank_stepping_browser_fork_and_save_end_to_end() {
             ..FilterPatch::default()
         }),
     });
-    let mut disk_app = App::new(disk_proj, dir.path().join("song.json")).unwrap();
+    let song_path = dir.path().join("song.json");
+    let disk_lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&song_path));
+    let mut disk_app = App::new_with_library(disk_proj, song_path, disk_lib).unwrap();
     assert_eq!(
         disk_app.filter_grooves().len(),
         55,

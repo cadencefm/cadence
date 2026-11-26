@@ -40,7 +40,8 @@ fn gpu_renders_midi_deck_settings_and_help_dark_and_light() {
     let light = Theme::studio_light();
     let status = "Metal · 48 kHz";
 
-    let mut app = App::new(Project::demo(), PathBuf::from("midi_settings_help.json")).unwrap();
+    let mut app =
+        App::new_in_memory(Project::demo(), PathBuf::from("midi_settings_help.json")).unwrap();
     app.apply(Action::Play { playing: true }).unwrap();
     app.midi.in_ports = vec!["Arturia MiniLab 3 MIDI".into(), "Launchpad X".into()];
     app.midi.out_ports = vec!["Arturia MiniLab 3 DAW".into()];

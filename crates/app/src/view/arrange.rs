@@ -575,7 +575,8 @@ mod tests {
                 exceptions: Vec::new(),
             }],
         });
-        let mut app = App::new(project, "zoom-overview-test.json".into()).expect("create App");
+        let mut app =
+            App::new_in_memory(project, "zoom-overview-test.json".into()).expect("create App");
         let snap = AudioSnapshot::default();
 
         for (mode, zoom) in [
@@ -626,7 +627,7 @@ mod tests {
             .parts
             .push(cadence_core::material::LanePart::new(part_id));
 
-        let mut app = App::new(project, "live_override_test.json".into()).unwrap();
+        let mut app = App::new_in_memory(project, "live_override_test.json".into()).unwrap();
         app.observe_transport(0, 1, true, false);
         app.apply(Action::Launch {
             lane: lane_id,

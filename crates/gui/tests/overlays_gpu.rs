@@ -77,7 +77,9 @@ fn gpu_renders_preset_browser_song_props_mini_editor_palette_and_value_input() {
             .unwrap();
     }
 
-    let mut app = App::new(Project::demo(), tmp_root.path().join("demo.json")).unwrap();
+    let save_path = tmp_root.path().join("demo.json");
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&save_path));
+    let mut app = App::new_with_library(Project::demo(), save_path, lib).unwrap();
     app.set_preset_catalog(PresetCatalog::from_roots(&[presets_dir]));
     app.execute_command("section Intro 1 4").unwrap();
     app.execute_command("section Drop 5 4").unwrap();
@@ -275,7 +277,8 @@ fn gpu_renders_live_timing_chrome_settings_authoring_mixer_and_effect_routing() 
         return;
     };
 
-    let mut app = App::new(Project::demo(), "overlays-workflows-gpu.json".into()).unwrap();
+    let mut app =
+        App::new_in_memory(Project::demo(), "overlays-workflows-gpu.json".into()).unwrap();
     let dark = Theme::cadence_dark();
     let status = "Metal · 48 kHz";
     let snap = AudioSnapshot {

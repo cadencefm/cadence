@@ -904,4 +904,42 @@ mod cli_tests {
             Some(Path::new("presets/drums"))
         );
     }
+
+    #[test]
+    fn cli_rejects_mutually_exclusive_flag_combinations() {
+        for bad_args in [
+            vec!["cadence", "--stdio", "--check"],
+            vec!["cadence", "--stdio", "--output", "ignored.json"],
+            vec!["cadence", "--write-demo", "ignored.json", "--check"],
+            vec![
+                "cadence",
+                "--write-demo",
+                "ignored.json",
+                "--script",
+                "missing.jsonl",
+            ],
+            vec![
+                "cadence",
+                "--write-demo",
+                "ignored.json",
+                "--render",
+                "ignored.wav",
+            ],
+            vec!["cadence", "--empty", "--project", "foo.json"],
+            vec!["cadence", "--empty", "--import-rbs", "foo.rbs"],
+            vec!["cadence", "--stdio", "--stems", "stems_dir"],
+            vec!["cadence", "--stdio", "--ctl"],
+            vec!["cadence", "--write-demo", "a.json", "--stems", "stems_dir"],
+            vec!["cadence", "--list-midi", "--render", "a.wav"],
+            vec!["cadence", "--ctl", "--render", "a.wav"],
+            vec!["cadence", "--ctl", "--check"],
+        ] {
+            let err = Args::try_parse_from(&bad_args).unwrap_err();
+            assert_eq!(
+                err.exit_code(),
+                2,
+                "expected clap conflict exit code 2 for {bad_args:?}, got {err}"
+            );
+        }
+    }
 }

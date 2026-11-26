@@ -227,7 +227,8 @@ fn gpu_renders_float_metering_mixer_output_chrome_and_effect_gr_holds() {
     project
         .validate()
         .expect("normalized float metering fixture must validate");
-    let mut app = App::new(project, demo_path).unwrap();
+    let lib = cadence_core::sampler::SampleLibrary::from_roots(&[], Some(&demo_path));
+    let mut app = App::new_with_library(project, demo_path, lib).unwrap();
 
     // 1. Zoomed Mixer (`gm zz`) showing ALL 14 dense console strips (Kick HOT pre-fader, Snare CMP,
     //    Drums GRP HOT + CMP, Master HOT + LIM) side-by-side at studio strip width!

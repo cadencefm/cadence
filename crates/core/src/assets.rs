@@ -245,7 +245,7 @@ mod tests {
     fn successful_sample_preparation_and_synth_only_projects_are_ready() {
         let project = Project::demo();
         let score = project.compile().unwrap();
-        let mut library = SampleLibrary::discover(&[], None);
+        let mut library = SampleLibrary::from_roots_only(&[], None);
         let report = load_project_samples(&score, &mut library);
         assert!(report.issues.is_empty());
         assert!(report.ensure_ready().is_ok());
