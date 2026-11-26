@@ -523,6 +523,8 @@ pub struct AudioSnapshot {
     pub health: AudioHealth,
     /// Live hardware audio input metering, software monitoring, and capture gate telemetry.
     pub input: AudioInputTelemetry,
+    /// Live hardware audio input oscilloscope trace (populated when input stream is running).
+    pub input_waveform: Vec<f32>,
 }
 
 impl Default for AudioSnapshot {
@@ -547,6 +549,7 @@ impl Default for AudioSnapshot {
             next_step: 0,
             health: AudioHealth::default(),
             input: AudioInputTelemetry::default(),
+            input_waveform: Vec::new(),
         }
     }
 }

@@ -23,9 +23,6 @@ const CONTROL_TARGET_HZ: f64 = 750.0;
 /// Target live mixer meter seqlock publication cadence (`187.5 Hz`:
 /// `256` frames @ 44.1/48 kHz, `512` @ 96 kHz, `1024` @ 192 kHz).
 const METER_PUBLISH_TARGET_HZ: f64 = 187.5;
-/// Target master oscilloscope downsampling cadence (`1_500 Hz`:
-/// `32` frames @ 44.1/48 kHz, `64` @ 96 kHz, `128` @ 192 kHz).
-const WAVE_DOWNSAMPLE_TARGET_HZ: f64 = 1_500.0;
 
 /// Construct a [`ZoneTriggerCtx`] borrowing only read-only fields of `Engine`
 /// so callers can simultaneously borrow `voice_pool`, `scheduler`, or `mixer` mutably.

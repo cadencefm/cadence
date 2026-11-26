@@ -332,8 +332,8 @@ pub const HELP_ENTRIES: &[HelpEntry] = &[
     HelpEntry {
         tab: HelpTab::SoundFx,
         category: "SAMPLE / SLICE",
-        keys: "gw · W (Rack) · h/l scrub · w/b slice · =/- zoom · [/] crop · {/} loop · s/x/X split · d/D auto/grid · A play · K kit · W write RIFF",
-        summary: "Dedicated zoomable Waveform & Slicer deck: non-destructive crop/loop with zero-crossing snap, transient & grid slicing, Slice→Rack Kit & lossless RIFF cue/labl write",
+        keys: "gw · W (Rack) · h/l scrub · w/b slice · =/- zoom · [/] crop · {/} loop · s/x/X split · d/D slice · e/T/N edit WAV · ta rec · A play · K kit · W RIFF",
+        summary: "Zoomable Waveform, Slicer & Live Input Recording Monitor deck: zero-crossing crop/loop, transient/grid slicing, offline WAV Trim/Normalize/Reverse/Fade (undoable), Slice→Rack Kit & lossless RIFF cue/labl write",
     },
     // Live Performance, Launchpad & Jam
     HelpEntry {

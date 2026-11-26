@@ -4,6 +4,7 @@ use anyhow::Result;
 use cadence_app::{
     App, CompletedRecording, Outcome, RecordingHostCommand, RecordingMode, RecordingRequest,
 };
+use cadence_core::dsp::LivePeakRecorder;
 use cadence_core::runtime::{AudioInputStatus, CapturePhase};
 use cadence_engine::audio::{finalize_recording_wav, AudioRuntime};
 use std::time::{Duration, Instant};
@@ -13,10 +14,13 @@ const MAX_RECORDING_SECONDS: usize = 15 * 60;
 /// Maximum time to wait in `CapturePhase::Finishing` for post-punch-out tail frames
 /// before force-sealing (guards against disconnected or silent input streams).
 const FINISHING_TIMEOUT: Duration = Duration::from_millis(450);
+const LIVE_PEAK_BINS: usize = 512;
+const INITIAL_PEAK_FRAMES_PER_BIN: usize = 128;
 
 struct ActiveRecording {
     request: RecordingRequest,
     frames: Vec<[f32; 2]>,
+    peak_tracker: LivePeakRecorder,
     dropped_frames: u64,
     sample_rate: u32,
     seen_recording: bool,
@@ -59,6 +63,10 @@ impl HostRecorder {
                     actual_end_abs_step: req.punch_out_abs_step.unwrap_or(0),
                     request: req,
                     frames: Vec::with_capacity(sr as usize * 8),
+                    peak_tracker: LivePeakRecorder::new(
+                        LIVE_PEAK_BINS,
+                        INITIAL_PEAK_FRAMES_PER_BIN,
+                    ),
                     dropped_frames: 0,
                     sample_rate: sr,
                     seen_recording: already_recording,
@@ -103,13 +111,18 @@ impl HostRecorder {
         }
         let sr = rec.sample_rate.max(8_000);
         let max_frames = (sr as usize).saturating_mul(MAX_RECORDING_SECONDS);
-        let remaining_cap = max_frames.saturating_sub(rec.frames.len());
+        let prev_len = rec.frames.len();
+        let remaining_cap = max_frames.saturating_sub(prev_len);
         let (drained, dropped) = if remaining_cap > 0 {
             audio.drain_capture_frames(&mut rec.frames, remaining_cap)
         } else {
             (0, 0)
         };
         rec.dropped_frames = rec.dropped_frames.saturating_add(dropped);
+        if drained > 0 {
+            rec.peak_tracker.push_stereo(&rec.frames[prev_len..]);
+            app.set_recording_preview_peaks(rec.peak_tracker.snapshot_peaks());
+        }
         let mut mutated = drained > 0;
 
         if matches!(

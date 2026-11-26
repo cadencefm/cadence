@@ -16,6 +16,9 @@ use std::sync::{Arc, Mutex};
 
 pub(super) const VOICES: usize = 256;
 pub(super) const WAVE_SAMPLES: usize = 256;
+/// Target oscilloscope downsampling cadence (`1_500 Hz`:
+/// `32` frames @ 44.1/48 kHz, `64` @ 96 kHz, `128` @ 192 kHz).
+pub(super) const WAVE_DOWNSAMPLE_TARGET_HZ: f64 = 1_500.0;
 pub(super) const MAILBOXES: usize = 64;
 pub(super) const TRANSPORT_MAILBOXES: usize = 16;
 pub(super) const SILENT_RATE: u32 = 48_000;
@@ -401,6 +404,7 @@ pub(super) struct Shared {
     pub(super) note_owners: Box<[[AtomicU64; 128]]>,
     pub(super) note_owned: Box<[[AtomicBool; 128]]>,
     pub(super) waveform: Box<[AtomicU32]>,
+    pub(super) input_waveform: Box<[AtomicU32]>,
     pub(super) audio_tap: Box<[[AtomicU32; 2]]>,
     pub(super) capture_ring: Box<[[AtomicU32; 2]]>,
     pub(super) monitor_ring: Box<[[AtomicU32; 2]]>,
@@ -458,6 +462,7 @@ pub(super) struct Shared {
     pub(super) input_buffer_frames: AtomicU32,
     pub(super) input_peak: [AtomicU32; 2],
     pub(super) input_peak_hold: [AtomicU32; 2],
+    pub(super) input_wave_write: AtomicUsize,
     pub(super) input_frames_seen: AtomicU64,
 
     // ── Capture SPSC producer (Input-RT) vs consumer (Capture writer thread) ──
@@ -540,6 +545,10 @@ impl Shared {
             .map(|_| AtomicU32::new(0.0_f32.to_bits()))
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let input_waveform = (0..WAVE_SAMPLES)
+            .map(|_| AtomicU32::new(0.0_f32.to_bits()))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         let audio_tap = (0..AUDIO_TAP_CAPACITY)
             .map(|_| [AtomicU32::new(0), AtomicU32::new(0)])
             .collect::<Vec<_>>()
@@ -593,6 +602,7 @@ impl Shared {
             note_owners,
             note_owned,
             waveform,
+            input_waveform,
             audio_tap,
             capture_ring,
             monitor_ring,
@@ -639,6 +649,7 @@ impl Shared {
             input_buffer_frames: AtomicU32::new(0),
             input_peak: std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())),
             input_peak_hold: std::array::from_fn(|_| AtomicU32::new(0.0_f32.to_bits())),
+            input_wave_write: AtomicUsize::new(0),
             input_frames_seen: AtomicU64::new(0),
             _pad_capture_write: CacheLineAlign,
             capture_write: AtomicU64::new(0),
@@ -745,6 +756,26 @@ impl Shared {
         self.input_clipped.store(false, Ordering::Relaxed);
         self.input_frames_seen.store(0, Ordering::Relaxed);
         self.input_nonzero_seen.store(false, Ordering::Relaxed);
+        self.input_wave_write.store(0, Ordering::Release);
+        for slot in self.input_waveform.iter() {
+            slot.store(0.0_f32.to_bits(), Ordering::Relaxed);
+        }
+    }
+
+    /// Lock-free snapshot of the live hardware input oscilloscope ring (`WAVE_SAMPLES` frames),
+    /// returning an empty `Vec` when no hardware input stream is running.
+    pub(super) fn read_input_waveform(&self, input_status: AudioInputStatus) -> Vec<f32> {
+        if input_status != AudioInputStatus::Running {
+            return Vec::new();
+        }
+        let end = self.input_wave_write.load(Ordering::Acquire) % WAVE_SAMPLES;
+        (0..WAVE_SAMPLES)
+            .map(|i| {
+                f32::from_bits(
+                    self.input_waveform[(end + i) % WAVE_SAMPLES].load(Ordering::Relaxed),
+                )
+            })
+            .collect()
     }
 
     /// Recompute `input_monitoring_active` from current monitor policy, stream status, and capture phase.

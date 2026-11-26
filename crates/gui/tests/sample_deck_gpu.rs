@@ -166,3 +166,133 @@ fn gpu_renders_sample_waveform_deck_dark_light_zoomed_and_empty() {
     assert!(distinct_pixel_ratio(&px_empty, dark.surface.canvas) > 0.10);
     maybe_save_png("04-sample-deck-empty-dark.png", 1440, 860, &px_empty);
 }
+
+#[test]
+fn gpu_renders_sample_deck_live_recording_monitor_and_offline_edit_picker() {
+    use cadence_core::dsp::LivePeakRecorder;
+    use cadence_core::runtime::{
+        AudioInputMode, AudioInputStatus, AudioInputTelemetry, CapturePhase, InputMonitorMode,
+    };
+
+    let Ok(mut gpu) = HeadlessGpu::new(1440, 860) else {
+        return;
+    };
+
+    let tmp = common::TempTestDir::new("sample-deck-v2");
+    let save_path = tmp.path().join("project.json");
+    let wav_path = tmp.path().join("samples/funk_break_120.wav");
+    write_visual_break_wav(&wav_path);
+
+    let lib = SampleLibrary::discover(&[tmp.path().join("samples")], Some(&save_path));
+    let mut app = App::new_with_library(Project::demo(), save_path, lib).unwrap();
+    app.config.audio_input_device = Some("Focusrite Scarlett 4i4".into());
+    app.config.audio_input_monitor = InputMonitorMode::Auto;
+    app.execute_command("sampler BreakLoop samples/funk_break_120.wav")
+        .unwrap();
+    app.press_keys("gwzz").unwrap();
+
+    let dark = Theme::cadence_dark();
+    let light = Theme::studio_light();
+    let status = "Metal · 48 kHz";
+
+    // 1. Offline Sample Edit picker (`e`) over loaded Sample Deck.
+    let base_snap = AudioSnapshot {
+        sample_rate: 48_000,
+        ..AudioSnapshot::default()
+    };
+    app.press_keys("e").unwrap();
+    let fv_picker = app.frame_view(&base_snap, status);
+    assert!(fv_picker.overlay.is_some());
+    let px_picker = gpu.render_rgba8(&fv_picker, &dark).unwrap();
+    assert!(distinct_pixel_ratio(&px_picker, dark.surface.canvas) > 0.20);
+    maybe_save_png("05-sample-deck-edit-picker-dark.png", 1440, 860, &px_picker);
+    app.press_keys("<Esc>").unwrap();
+
+    // 2. Armed Live Recording Monitor (live hardware input oscilloscope + L/R meters).
+    app.press_keys("ta").unwrap();
+    let live_scope: Vec<f32> = (0..256)
+        .map(|i| {
+            let t = i as f32 / 256.0;
+            (std::f32::consts::TAU * 3.0 * t).sin() * 0.52
+                + (std::f32::consts::TAU * 11.0 * t).sin() * 0.22
+        })
+        .collect();
+    let mut rec_snap = AudioSnapshot {
+        playing: true,
+        sample_rate: 48_000,
+        input: AudioInputTelemetry {
+            status: AudioInputStatus::Running,
+            sample_rate: 48_000,
+            channels: 2,
+            buffer_frames: 256,
+            peak: [0.58, 0.49],
+            peak_hold: [0.74, 0.66],
+            clipped: false,
+            digital_silence: false,
+            mode: AudioInputMode::Stereo,
+            monitor_mode: InputMonitorMode::Auto,
+            monitoring: true,
+            capture_phase: CapturePhase::Armed,
+            capture_start_step: 16,
+            capture_end_step: 48,
+            captured_frames: 0,
+            dropped_frames: 0,
+        },
+        input_waveform: live_scope.clone(),
+        ..AudioSnapshot::default()
+    };
+    let fv_armed = app.frame_view(&rec_snap, status);
+    let px_armed = gpu.render_rgba8(&fv_armed, &dark).unwrap();
+    assert!(distinct_pixel_ratio(&px_armed, dark.surface.canvas) > 0.15);
+    maybe_save_png("06-sample-deck-armed-dark.png", 1440, 860, &px_armed);
+
+    // 3. Active Recording Monitor (growing crimson LivePeakRecorder waveform + inset LIVE IN scope) — Dark & Light!
+    rec_snap.input.capture_phase = CapturePhase::Recording;
+    rec_snap.input.captured_frames = 115_200; // 2.4s @ 48kHz
+    rec_snap.input.peak = [0.76, 0.68];
+    rec_snap.input.peak_hold = [0.88, 0.81];
+    app.observe_audio_recording(&rec_snap);
+
+    let mut tracker = LivePeakRecorder::new(512, 128);
+    let synth_take: Vec<[f32; 2]> = (0..115_200)
+        .map(|i| {
+            let t = i as f32 / 48_000.0;
+            let beat = (t * 2.0).fract();
+            let env = (-beat * 8.5).exp() * 0.82 + 0.12;
+            let sig = (std::f32::consts::TAU * 140.0 * t).sin() * env;
+            [sig, sig * 0.9]
+        })
+        .collect();
+    tracker.push_stereo(&synth_take);
+    app.set_recording_preview_peaks(tracker.snapshot_peaks());
+
+    let fv_rec = app.frame_view(&rec_snap, status);
+    let sv_rec = fv_rec
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Sample(s) => Some(s),
+            _ => None,
+        })
+        .expect("SampleDeckView while recording");
+    assert!(sv_rec.record_monitor.is_some());
+    assert!(!sv_rec
+        .record_monitor
+        .as_ref()
+        .unwrap()
+        .recording_peaks
+        .is_empty());
+
+    let px_rec_dark = gpu.render_rgba8(&fv_rec, &dark).unwrap();
+    assert!(distinct_pixel_ratio(&px_rec_dark, dark.surface.canvas) > 0.18);
+    maybe_save_png("07-sample-deck-recording-dark.png", 1440, 860, &px_rec_dark);
+
+    let px_rec_light = gpu.render_rgba8(&fv_rec, &light).unwrap();
+    assert!(distinct_pixel_ratio(&px_rec_light, light.surface.canvas) > 0.18);
+    maybe_save_png(
+        "08-sample-deck-recording-light.png",
+        1440,
+        860,
+        &px_rec_light,
+    );
+}

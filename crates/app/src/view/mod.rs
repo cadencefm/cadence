@@ -54,7 +54,7 @@ pub use pattern::{
     PatternRhythmStep, PatternSourceChip, PatternVoiceView, SourcePreviewKind, SourcePreviewStrip,
     SubStepNoteView,
 };
-pub use sample::{SampleDeckView, SampleSliceView};
+pub use sample::{SampleDeckView, SampleRecordMonitorView, SampleSliceView};
 pub use take::{TakeBarSummary, TakeDeckView, TakeEventMarker};
 
 /// Semantic UI modality driving deck border / halo shader styling.
@@ -568,7 +568,7 @@ impl App {
                     } => (instrument, zone, module),
                     _ => self.resolve_sample_deck_target().unwrap_or((0, 0, 0)),
                 };
-                DeckView::Sample(self.build_sample_deck_view(instrument, zone, module))
+                DeckView::Sample(self.build_sample_deck_view(instrument, zone, module, snapshot))
             }
             DeckKind::Bank => DeckView::Bank(self.build_bank_view()),
             DeckKind::Mixer => DeckView::Mixer(self.build_mixer_view(snapshot)),

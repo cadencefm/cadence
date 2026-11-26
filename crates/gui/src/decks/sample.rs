@@ -1,13 +1,16 @@
-//! Dedicated GPU Sample / Waveform deck (`gw`):
+//! Dedicated GPU Sample / Waveform & Live Input Recording Monitor deck (`gw`):
 //! zoomable high-res waveform canvas, overview minimap, beat/time ruler, crop & loop overlays,
-//! numbered/labeled RIFF slice markers, edit cursor bar, and bottom slicing parameter toolbar.
+//! numbered/labeled RIFF slice markers, edit cursor bar, live hardware input recording
+//! waveform/oscilloscope monitor, and bottom slicing/edit toolbar.
 use crate::chrome::{draw_deck_frame, DeckFrameSpec};
+use crate::decks::output::{db_norm, db_to_meter_norm, fmt_db_fixed};
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::Theme;
-use cadence_app::view::{SampleDeckView, SampleSliceView, UiModeKind};
+use cadence_app::view::{SampleDeckView, SampleRecordMonitorView, SampleSliceView, UiModeKind};
 use cadence_app::SampleToolbarField;
 use cadence_core::music::note_name;
 use cadence_core::rack::SampleLoopMode;
+use cadence_core::runtime::CapturePhase;
 
 const TOP_STRIP_H: f32 = 24.0;
 const MINIMAP_H: f32 = 18.0;
@@ -66,47 +69,99 @@ pub fn draw_sample(
     mode: UiModeKind,
     theme: &Theme,
 ) {
-    let badge = if view.loaded {
-        let ch = match view.channels {
-            1 => "MONO",
-            2 => "ST",
-            n => return_channels_tag(n),
-        };
-        let dur = fmt_time(view.total_frames, view.sample_rate);
-        let sr_khz = f64::from(view.sample_rate) / 1000.0;
-        let slice_part = if view.slices.is_empty() {
-            String::new()
-        } else {
-            format!(
-                " · {} slice{}",
-                view.slices.len(),
-                if view.slices.len() == 1 { "" } else { "s" }
-            )
-        };
-        format!(
-            "{} · {sr_khz:.1}kHz {ch} · {dur}{slice_part} · {:.1}×",
-            trim_label(&view.sample_name, 26),
-            view.zoom
-        )
-    } else if view.load_error.is_some() {
-        format!("{} · load error", trim_label(&view.sample_name, 24))
-    } else {
-        "No sample loaded · B browse".into()
-    };
+    let active_rec = view
+        .record_monitor
+        .as_ref()
+        .filter(|r| r.phase != CapturePhase::Idle || !view.loaded);
 
-    let accent = if view.load_error.is_some() {
-        theme.accent.alert
-    } else if view.riff_sync_dirty {
-        theme.accent.warning_key
+    let (title, badge, accent) = if let Some(rec) = active_rec {
+        let sr_khz = f64::from(rec.sample_rate) / 1000.0;
+        let ch_tag = match rec.input_mode {
+            cadence_core::runtime::AudioInputMode::Stereo => "ST",
+            cadence_core::runtime::AudioInputMode::MonoLeft => "CH1",
+            cadence_core::runtime::AudioInputMode::MonoRight => "CH2",
+        };
+        let (title, badge, accent) = match rec.phase {
+            CapturePhase::Recording => {
+                let dur = if let Some(target) = rec.target_secs {
+                    format!("{:.1}s/{:.1}s", rec.elapsed_secs, target)
+                } else {
+                    format!("{:.1}s", rec.elapsed_secs)
+                };
+                (
+                    "SAMPLE  ·  RECORDING",
+                    format!("● REC {dur} · {sr_khz:.1}kHz {ch_tag}"),
+                    theme.accent.alert,
+                )
+            }
+            CapturePhase::Finishing => (
+                "SAMPLE  ·  SAVING",
+                format!("● FINALIZING {:.1}s WAV…", rec.elapsed_secs),
+                theme.accent.warning_key,
+            ),
+            CapturePhase::Armed => {
+                let punch = rec
+                    .punch_in_label
+                    .as_deref()
+                    .map(|p| format!(" → {p}"))
+                    .unwrap_or_default();
+                (
+                    "SAMPLE  ·  ARMED",
+                    format!("○ ARMED{punch} · {sr_khz:.1}kHz {ch_tag}"),
+                    theme.accent.warning_key,
+                )
+            }
+            CapturePhase::Idle => (
+                "SAMPLE  ·  INPUT MONITOR",
+                format!("◉ LIVE INPUT · {sr_khz:.1}kHz {ch_tag} · ta record"),
+                theme.accent.focus,
+            ),
+        };
+        (title, badge, accent)
     } else {
-        theme.accent.focus
+        let badge = if view.loaded {
+            let ch = match view.channels {
+                1 => "MONO",
+                2 => "ST",
+                n => return_channels_tag(n),
+            };
+            let dur = fmt_time(view.total_frames, view.sample_rate);
+            let sr_khz = f64::from(view.sample_rate) / 1000.0;
+            let slice_part = if view.slices.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " · {} slice{}",
+                    view.slices.len(),
+                    if view.slices.len() == 1 { "" } else { "s" }
+                )
+            };
+            format!(
+                "{} · {sr_khz:.1}kHz {ch} · {dur}{slice_part} · {:.1}×",
+                trim_label(&view.sample_name, 26),
+                view.zoom
+            )
+        } else if view.load_error.is_some() {
+            format!("{} · load error", trim_label(&view.sample_name, 24))
+        } else {
+            "No sample loaded · B browse · ta record".into()
+        };
+
+        let accent = if view.load_error.is_some() {
+            theme.accent.alert
+        } else if view.riff_sync_dirty {
+            theme.accent.warning_key
+        } else {
+            theme.accent.focus
+        };
+        ("SAMPLE", badge, accent)
     };
 
     let inner = draw_deck_frame(
         dl,
         area,
         &DeckFrameSpec {
-            title: "SAMPLE",
+            title,
             right_badge: Some(&badge),
             accent,
             focused,
@@ -119,6 +174,12 @@ pub fn draw_sample(
     }
 
     dl.push_clip(inner);
+
+    if let Some(rec) = active_rec {
+        draw_recording_monitor(dl, inner, rec, theme);
+        dl.pop_clip();
+        return;
+    }
 
     if !view.loaded {
         draw_empty_state(dl, inner, view, theme);
@@ -209,7 +270,7 @@ fn draw_empty_state(dl: &mut DisplayList, inner: Rect, view: &SampleDeckView, th
     let msg = if let Some(err) = &view.load_error {
         format!("Sample error: {err}")
     } else {
-        "No audio file assigned · press B to browse samples or :sample <PATH>".into()
+        "No audio file assigned · press B to browse samples or ta to record hardware input".into()
     };
     dl.text(
         body,
@@ -836,8 +897,11 @@ fn draw_toolbar(
     focused: bool,
     theme: &Theme,
 ) {
-    let kit_w = if rect.w >= 540.0 { 138.0 } else { 0.0 };
-    let fields_w = (rect.w - if kit_w > 0.0 { kit_w + 6.0 } else { 0.0 }).max(100.0);
+    let edit_w = if rect.w >= 700.0 { 86.0 } else { 0.0 };
+    let kit_w = if rect.w >= 540.0 { 132.0 } else { 0.0 };
+    let right_reserved =
+        if kit_w > 0.0 { kit_w + 6.0 } else { 0.0 } + if edit_w > 0.0 { edit_w + 6.0 } else { 0.0 };
+    let fields_w = (rect.w - right_reserved).max(100.0);
     let count = SampleToolbarField::ALL.len();
     let gap = 5.0;
     let card_w = ((fields_w - gap * (count.saturating_sub(1)) as f32) / count as f32).max(40.0);
@@ -933,6 +997,27 @@ fn draw_toolbar(
         x += card_w + gap;
     }
 
+    if edit_w > 0.0 {
+        let edit_x = rect.right() - kit_w - if kit_w > 0.0 { 6.0 } else { 0.0 } - edit_w;
+        let edit_rect = Rect::new(edit_x, rect.y + 2.0, edit_w, (rect.h - 2.0).max(20.0));
+        dl.panel(
+            edit_rect,
+            theme.accent.routing.with_alpha(0.14),
+            theme.accent.routing.with_alpha(0.75),
+            theme.radii.pill,
+            1.0,
+            0.0,
+        );
+        dl.text(
+            edit_rect.inset(4.0, 0.0),
+            "[e] EDIT",
+            theme.font.small - 0.5,
+            true,
+            theme.accent.routing,
+            TextAlign::Center,
+        );
+    }
+
     if kit_w > 0.0 {
         let kit_rect = Rect::new(
             rect.right() - kit_w,
@@ -975,4 +1060,586 @@ fn draw_toolbar(
             TextAlign::Center,
         );
     }
+}
+
+fn draw_recording_monitor(
+    dl: &mut DisplayList,
+    inner: Rect,
+    rec: &SampleRecordMonitorView,
+    theme: &Theme,
+) {
+    let (top_strip, rest) = inner.split_top(TOP_STRIP_H);
+    let (body_top, footer_rect) = if rest.h >= 24.0 + 64.0 {
+        let (b, f) = rest.split_bottom(24.0);
+        (
+            Rect::new(b.x, b.y + 3.0, b.w, (b.h - 6.0).max(1.0)),
+            Some(f),
+        )
+    } else {
+        (
+            Rect::new(rest.x, rest.y + 3.0, rest.w, (rest.h - 3.0).max(1.0)),
+            None,
+        )
+    };
+    let (meter_rect, wave_rect) = if body_top.h >= 34.0 + 48.0 {
+        let (m, w) = body_top.split_top(34.0);
+        (
+            Some(m),
+            Rect::new(w.x, w.y + 4.0, w.w, (w.h - 4.0).max(1.0)),
+        )
+    } else {
+        (None, body_top)
+    };
+
+    // 1. Top status strip: phase pill + target/device breadcrumb + right status pills.
+    let cw = theme.char_width(theme.font.small - 0.5);
+    let mut right_x = top_strip.right();
+    let mut draw_right_pill = |dl: &mut DisplayList,
+                               label: &str,
+                               fg: crate::theme::Color,
+                               bg: crate::theme::Color,
+                               border: crate::theme::Color| {
+        let w = (label.chars().count() as f32 * cw + 14.0).max(46.0);
+        if right_x - w < top_strip.x + 150.0 {
+            return;
+        }
+        right_x -= w;
+        let pr = Rect::new(right_x, top_strip.y + 3.0, w, (top_strip.h - 6.0).max(14.0));
+        dl.panel(pr, bg, border, theme.radii.badge, 1.0, 0.0);
+        dl.text(
+            pr.inset(5.0, 0.0),
+            label,
+            theme.font.small - 0.5,
+            true,
+            fg,
+            TextAlign::Center,
+        );
+        right_x -= 6.0;
+    };
+
+    let mon_lbl = match rec.monitor_mode {
+        cadence_core::runtime::InputMonitorMode::Off => "MON OFF",
+        cadence_core::runtime::InputMonitorMode::Auto => "MON AUTO",
+        cadence_core::runtime::InputMonitorMode::On => "MON ON",
+    };
+    if rec.monitoring {
+        draw_right_pill(
+            dl,
+            mon_lbl,
+            theme.accent.playhead,
+            theme.accent.playhead.with_alpha(0.16),
+            theme.accent.playhead.with_alpha(0.75),
+        );
+    } else {
+        draw_right_pill(
+            dl,
+            mon_lbl,
+            theme.text.muted,
+            theme.surface.recessed,
+            theme.border.subtle,
+        );
+    }
+    if rec.clipped {
+        draw_right_pill(
+            dl,
+            "CLIP!",
+            theme.accent.alert,
+            theme.accent.alert.with_alpha(0.20),
+            theme.accent.alert,
+        );
+    }
+    if rec.digital_silence {
+        draw_right_pill(
+            dl,
+            "! DIGITAL SILENCE",
+            theme.accent.warning_key,
+            theme.accent.warning_key.with_alpha(0.18),
+            theme.accent.warning_key,
+        );
+    }
+    if rec.dropped_frames > 0 {
+        draw_right_pill(
+            dl,
+            &format!("! {} DROPPED", rec.dropped_frames),
+            theme.accent.alert,
+            theme.accent.alert.with_alpha(0.18),
+            theme.accent.alert,
+        );
+    }
+
+    let (phase_lbl, phase_col) = match rec.phase {
+        CapturePhase::Recording => ("● REC", theme.accent.alert),
+        CapturePhase::Finishing => ("● SAVING", theme.accent.warning_key),
+        CapturePhase::Armed => ("○ ARMED", theme.accent.warning_key),
+        CapturePhase::Idle => ("◉ IN LIVE", theme.accent.playhead),
+    };
+    let pw = (phase_lbl.chars().count() as f32 * cw + 14.0).max(58.0);
+    let pr = Rect::new(
+        top_strip.x,
+        top_strip.y + 3.0,
+        pw,
+        (top_strip.h - 6.0).max(14.0),
+    );
+    dl.panel(
+        pr,
+        phase_col.with_alpha(0.20),
+        phase_col,
+        theme.radii.badge,
+        1.1,
+        if rec.phase == CapturePhase::Recording {
+            0.25
+        } else {
+            0.0
+        },
+    );
+    dl.text(
+        pr,
+        phase_lbl,
+        theme.font.small - 0.5,
+        true,
+        phase_col,
+        TextAlign::Center,
+    );
+
+    let info_x = pr.right() + 8.0;
+    let info_w = (right_x - info_x - 4.0).max(0.0);
+    if info_w > 40.0 {
+        let info = format!(
+            "{}  ·  {} ({})",
+            trim_label(&rec.target_label, 24),
+            trim_label(&rec.device_name, 26),
+            rec.input_mode.label(),
+        );
+        let max_chars = (info_w / theme.char_width(theme.font.small))
+            .floor()
+            .max(8.0) as usize;
+        dl.text(
+            Rect::new(info_x, top_strip.y, info_w, top_strip.h),
+            trim_label(&info, max_chars),
+            theme.font.small,
+            false,
+            theme.text.secondary,
+            TextAlign::Left,
+        );
+    }
+
+    // 2. Live stereo L/R hardware input meter strip.
+    if let Some(mrect) = meter_rect {
+        draw_recording_meter_strip(dl, mrect, rec, theme);
+    }
+
+    // 3. Main live recording waveform / armed oscilloscope canvas.
+    draw_recording_canvas(dl, wave_rect, rec, theme);
+
+    // 4. Bottom telemetry & key-hint bar.
+    if let Some(frect) = footer_rect {
+        let sr_khz = f64::from(rec.sample_rate) / 1000.0;
+        let left_info = match rec.phase {
+            CapturePhase::Recording | CapturePhase::Finishing => {
+                if let Some(target) = rec.target_secs {
+                    format!(
+                        "Captured {:.2}s / {:.2}s  ·  {} frames  ·  {sr_khz:.1}kHz 24-bit WAV",
+                        rec.elapsed_secs, target, rec.captured_frames
+                    )
+                } else {
+                    format!(
+                        "Captured {:.2}s  ·  {} frames  ·  {sr_khz:.1}kHz 24-bit WAV",
+                        rec.elapsed_secs, rec.captured_frames
+                    )
+                }
+            }
+            CapturePhase::Armed => {
+                let punch = rec
+                    .punch_in_label
+                    .as_deref()
+                    .map(|p| format!("Punch-in at {p}"))
+                    .unwrap_or_else(|| "Waiting for transport punch-in".into());
+                format!("{punch}  ·  {sr_khz:.1}kHz 24-bit WAV")
+            }
+            CapturePhase::Idle => format!(
+                "Live hardware input ready  ·  {sr_khz:.1}kHz  ·  press ta to record into Sampler"
+            ),
+        };
+        let right_hint = match rec.phase {
+            CapturePhase::Recording => "ta / Space stop & save  ·  ti monitor",
+            CapturePhase::Finishing => "Finalizing 24-bit WAV…",
+            CapturePhase::Armed => "ta cancel  ·  ti monitor  ·  tA options",
+            CapturePhase::Idle => "ta record  ·  tA options  ·  ti monitor  ·  B browse",
+        };
+        let hint_w = (right_hint.chars().count() as f32 * theme.char_width(theme.font.small - 0.5)
+            + 8.0)
+            .min(frect.w * 0.52);
+        let (l_rect, r_rect) = frect.split_right(hint_w);
+        dl.text(
+            l_rect,
+            trim_label(
+                &left_info,
+                (l_rect.w / theme.char_width(theme.font.small)).max(8.0) as usize,
+            ),
+            theme.font.small,
+            false,
+            theme.text.secondary,
+            TextAlign::Left,
+        );
+        dl.text(
+            r_rect,
+            trim_label(
+                right_hint,
+                (r_rect.w / theme.char_width(theme.font.small - 0.5)).max(8.0) as usize,
+            ),
+            theme.font.small - 0.5,
+            true,
+            theme.accent.warning_key,
+            TextAlign::Right,
+        );
+    }
+}
+
+fn draw_recording_meter_strip(
+    dl: &mut DisplayList,
+    rect: Rect,
+    rec: &SampleRecordMonitorView,
+    theme: &Theme,
+) {
+    dl.panel(
+        rect,
+        theme.surface.recessed,
+        theme.border.subtle,
+        theme.radii.badge,
+        1.0,
+        0.0,
+    );
+    let inner = rect.inset(8.0, 4.0);
+    if inner.w < 80.0 || inner.h < 18.0 {
+        return;
+    }
+    let zero_norm = db_to_meter_norm(0.0);
+    let ch_lbl_w = 14.0;
+    let readout_w = 54.0;
+    let bar_x = inner.x + ch_lbl_w + 4.0;
+    let bar_w = (inner.w - ch_lbl_w - readout_w - 10.0).max(24.0);
+    let row_h = (inner.h * 0.5).floor();
+    let bar_h = (row_h - 4.0).clamp(5.0, 9.0);
+
+    let channels = [
+        ("L", rec.peak_left, rec.hold_left),
+        ("R", rec.peak_right, rec.hold_right),
+    ];
+    for (idx, (lbl, peak, hold)) in channels.into_iter().enumerate() {
+        let ry = inner.y + idx as f32 * row_h;
+        dl.text(
+            Rect::new(inner.x, ry, ch_lbl_w, row_h),
+            lbl,
+            theme.font.small - 1.5,
+            true,
+            theme.text.muted,
+            TextAlign::Left,
+        );
+        let track = Rect::new(bar_x, ry + (row_h - bar_h) * 0.5, bar_w, bar_h);
+        dl.rounded(track, theme.meter.track_bg, 2.0);
+        dl.fill(
+            Rect::new(track.x + track.w * zero_norm, track.y, 1.0, track.h),
+            theme.border.hairline,
+        );
+        let norm = db_norm(peak);
+        let fw = track.w * norm;
+        if fw > 0.5 {
+            let col = if rec.clipped || peak >= 0.999 {
+                theme.meter.clip
+            } else if peak >= 0.70 {
+                theme.meter.hot
+            } else if peak >= 0.25 {
+                theme.meter.mid
+            } else {
+                theme.meter.low
+            };
+            dl.rounded_glow(
+                Rect::new(track.x, track.y, fw, track.h),
+                col,
+                2.0,
+                if peak >= 0.70 { 0.20 } else { 0.08 },
+            );
+        }
+        if hold > 1e-4 {
+            let hx = (track.x + track.w * db_norm(hold) - 1.0).clamp(track.x, track.right() - 2.0);
+            dl.fill(
+                Rect::new(hx, track.y - 1.0, 2.0, track.h + 2.0),
+                theme.meter.hold_tick,
+            );
+        }
+        let db_str = if idx == 0 && rec.clipped {
+            format!("{:>6}", "CLIP!")
+        } else {
+            fmt_db_fixed(hold.max(peak))
+        };
+        dl.text(
+            Rect::new(inner.right() - readout_w, ry, readout_w, row_h),
+            db_str,
+            theme.font.small - 1.0,
+            rec.clipped && idx == 0,
+            if rec.clipped && idx == 0 {
+                theme.meter.clip
+            } else {
+                theme.text.secondary
+            },
+            TextAlign::Right,
+        );
+    }
+}
+
+fn draw_live_scope_curve(
+    dl: &mut DisplayList,
+    plot: Rect,
+    samples: &[f32],
+    color: crate::theme::Color,
+    glow: f32,
+) {
+    if samples.len() < 2 || plot.w < 8.0 || plot.h < 8.0 {
+        return;
+    }
+    let mid_y = plot.y + plot.h * 0.5;
+    let half_h = (plot.h * 0.44).max(1.0);
+    let n = samples.len();
+    let pts: Vec<(f32, f32)> = samples
+        .iter()
+        .enumerate()
+        .map(|(i, &s)| {
+            let x = plot.x + plot.w * (i as f32 / (n - 1) as f32);
+            let y = mid_y - s.clamp(-1.0, 1.0) * half_h;
+            (x, y)
+        })
+        .collect();
+    dl.polyline(&pts, 1.75, color, glow, Some((mid_y, 0.16)));
+}
+
+fn draw_recording_canvas(
+    dl: &mut DisplayList,
+    rect: Rect,
+    rec: &SampleRecordMonitorView,
+    theme: &Theme,
+) {
+    let border_col = match rec.phase {
+        CapturePhase::Recording => theme.accent.alert.with_alpha(0.75),
+        CapturePhase::Armed | CapturePhase::Finishing => theme.accent.warning_key.with_alpha(0.70),
+        CapturePhase::Idle => theme.border.subtle,
+    };
+    dl.panel(
+        rect,
+        theme.surface.recessed,
+        border_col,
+        theme.radii.panel,
+        1.0,
+        0.0,
+    );
+    let inner = rect.inset(2.0, 2.0);
+    if inner.w < 24.0 || inner.h < 32.0 {
+        return;
+    }
+
+    let is_capturing = matches!(rec.phase, CapturePhase::Recording | CapturePhase::Finishing);
+    let (ruler, wave_body) = if is_capturing && inner.h >= RULER_H + 30.0 {
+        inner.split_top(RULER_H)
+    } else {
+        (Rect::new(inner.x, inner.y, inner.w, 0.0), inner)
+    };
+
+    dl.push_clip(inner);
+
+    // 1. Time ruler when actively recording / finalizing.
+    let axis_secs = rec
+        .target_secs
+        .unwrap_or_else(|| rec.elapsed_secs.max(1.0))
+        .max(rec.elapsed_secs.max(0.5));
+    if !ruler.is_empty() {
+        dl.fill(ruler, theme.surface.header);
+        dl.fill(
+            Rect::new(ruler.x, ruler.bottom() - 1.0, ruler.w, 1.0),
+            theme.border.hairline,
+        );
+        let step_secs = pick_ruler_interval_secs(axis_secs, wave_body.w);
+        let max_tick = (axis_secs / step_secs).ceil() as usize;
+        let cw = theme.char_width(theme.font.small - 1.0);
+        let mut last_lbl_right = wave_body.x - 100.0;
+        for ti in 0..=max_tick {
+            let t = ti as f64 * step_secs;
+            if t > axis_secs + 1e-6 {
+                break;
+            }
+            let x = wave_body.x + ((t / axis_secs) as f32).clamp(0.0, 1.0) * wave_body.w;
+            dl.fill(
+                Rect::new(x, wave_body.y, 1.0, wave_body.h),
+                theme.border.grid_step.with_alpha(0.40),
+            );
+            dl.fill(
+                Rect::new(x, ruler.bottom() - 5.0, 1.0, 5.0),
+                theme.border.grid_beat,
+            );
+            let lbl = if step_secs < 1.0 {
+                format!("{t:.2}s")
+            } else {
+                format!("{t:.1}s")
+            };
+            let lw = lbl.chars().count() as f32 * cw + 6.0;
+            if x + 3.0 >= last_lbl_right && x + 3.0 + lw <= ruler.right() {
+                dl.text(
+                    Rect::new(x + 3.0, ruler.y, lw, ruler.h - 2.0),
+                    lbl,
+                    theme.font.small - 1.0,
+                    false,
+                    theme.text.muted,
+                    TextAlign::Left,
+                );
+                last_lbl_right = x + 3.0 + lw + 6.0;
+            }
+        }
+    }
+
+    // 2. Center & ±50% amplitude reference lines.
+    let mid_y = wave_body.y + wave_body.h * 0.5;
+    dl.fill(
+        Rect::new(wave_body.x, mid_y, wave_body.w, 1.0),
+        theme.border.grid_beat.with_alpha(0.75),
+    );
+    for frac in [0.25_f32, 0.75] {
+        dl.fill(
+            Rect::new(
+                wave_body.x,
+                wave_body.y + wave_body.h * frac,
+                wave_body.w,
+                1.0,
+            ),
+            theme.border.hairline.with_alpha(0.55),
+        );
+    }
+
+    let plot = wave_body.inset(4.0, 8.0);
+    if is_capturing {
+        // Growing crimson recorded waveform envelope + leading recordhead cursor.
+        let fill_frac = if let Some(target) = rec.target_secs.filter(|&t| t > 0.0) {
+            (rec.elapsed_secs / target).clamp(0.015, 1.0) as f32
+        } else {
+            1.0
+        };
+        let fill_w = (plot.w * fill_frac).max(2.0);
+        let env_rect = Rect::new(plot.x, plot.y, fill_w, plot.h);
+        if !rec.recording_peaks.is_empty() {
+            dl.peak_envelope(
+                env_rect,
+                &rec.recording_peaks,
+                theme.accent.alert,
+                theme.glow.scope * 0.60,
+            );
+        } else if !rec.live_scope.is_empty() {
+            draw_live_scope_curve(
+                dl,
+                plot,
+                &rec.live_scope,
+                theme.accent.alert,
+                theme.glow.scope,
+            );
+        }
+        // Bright vertical recordhead leading bar.
+        let head_x = (plot.x + fill_w).clamp(wave_body.x, wave_body.right() - 2.0);
+        dl.fill(
+            Rect::new(head_x, wave_body.y, 2.0, wave_body.h),
+            theme.accent.alert,
+        );
+
+        // Sleek inset live hardware oscilloscope in the top-right corner when room allows.
+        if !rec.live_scope.is_empty() && wave_body.w >= 440.0 && wave_body.h >= 110.0 {
+            let inset_w = 176.0_f32.min(wave_body.w * 0.30);
+            let inset_h = 46.0_f32;
+            let inset = Rect::new(
+                wave_body.right() - inset_w - 8.0,
+                wave_body.y + 8.0,
+                inset_w,
+                inset_h,
+            );
+            dl.panel(
+                inset,
+                theme.surface.canvas.with_alpha(0.86),
+                theme.border.subtle,
+                theme.radii.badge,
+                1.0,
+                0.0,
+            );
+            let scope_inner = inset.inset(4.0, 4.0);
+            let smid = scope_inner.y + scope_inner.h * 0.5;
+            dl.fill(
+                Rect::new(scope_inner.x, smid, scope_inner.w, 1.0),
+                theme.border.hairline,
+            );
+            draw_live_scope_curve(
+                dl,
+                scope_inner,
+                &rec.live_scope,
+                theme.accent.playhead,
+                theme.glow.scope * 0.4,
+            );
+            dl.text(
+                Rect::new(inset.x + 5.0, inset.y + 2.0, inset.w - 10.0, 12.0),
+                "LIVE IN",
+                theme.font.small - 2.0,
+                true,
+                theme.text.muted,
+                TextAlign::Left,
+            );
+        }
+    } else {
+        // Armed / Idle live hardware input oscilloscope monitor.
+        let scope_col = if rec.phase == CapturePhase::Armed {
+            theme.accent.warning_key
+        } else {
+            theme.accent.playhead
+        };
+        if !rec.live_scope.is_empty() {
+            draw_live_scope_curve(dl, plot, &rec.live_scope, scope_col, theme.glow.scope);
+        } else {
+            dl.text(
+                wave_body,
+                "Awaiting live hardware input audio…",
+                theme.font.small,
+                false,
+                theme.text.muted,
+                TextAlign::Center,
+            );
+        }
+        let banner = if rec.phase == CapturePhase::Armed {
+            match &rec.punch_in_label {
+                Some(p) => format!("ARMED  ·  WAITING FOR PUNCH-IN @ {p}  ·  LIVE INPUT SCOPE"),
+                None => "ARMED  ·  WAITING FOR TRANSPORT  ·  LIVE INPUT SCOPE".into(),
+            }
+        } else {
+            format!(
+                "LIVE INPUT MONITOR  ·  PRESS ta TO RECORD INTO {}",
+                trim_label(&rec.target_label, 24)
+            )
+        };
+        let bw = (banner.chars().count() as f32 * theme.char_width(theme.font.small - 0.5) + 18.0)
+            .min(wave_body.w - 16.0);
+        if bw >= 80.0 {
+            let br = Rect::new(wave_body.x + 8.0, wave_body.y + 8.0, bw, 20.0);
+            dl.panel(
+                br,
+                theme.surface.canvas.with_alpha(0.86),
+                scope_col.with_alpha(0.75),
+                theme.radii.badge,
+                1.0,
+                0.0,
+            );
+            dl.text(
+                br.inset(6.0, 0.0),
+                trim_label(
+                    &banner,
+                    ((br.w - 12.0) / theme.char_width(theme.font.small - 0.5)).max(8.0) as usize,
+                ),
+                theme.font.small - 0.5,
+                true,
+                scope_col,
+                TextAlign::Center,
+            );
+        }
+    }
+
+    dl.pop_clip();
 }

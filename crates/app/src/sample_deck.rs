@@ -6,13 +6,15 @@ use super::*;
 use crate::document::CoalesceKey;
 use crate::layout::{Deck, DeckKind, Target};
 use cadence_core::dsp::{
-    default_zero_snap_radius, detect_grid_slices, detect_transient_slices, slice_regions,
-    snap_to_zero_crossing,
+    default_zero_snap_radius, detect_grid_slices, detect_transient_slices, fade_sample_buffers,
+    normalize_sample_buffers, reverse_sample_buffers, slice_regions, snap_to_zero_crossing,
+    trim_sample_buffers, DEFAULT_NORMALIZE_TARGET_DBFS, MAX_NORMALIZE_TARGET_DBFS,
+    MIN_NORMALIZE_TARGET_DBFS,
 };
-use cadence_core::rack::{SampleLoopMode, SamplerModule, MAX_ZONES};
+use cadence_core::rack::{module_sample_key, SampleLoopMode, SamplerModule, MAX_ZONES};
 use cadence_core::sampler::{
-    normalize_slices, update_wav_riff_metadata_bytes, SampleMetadata, SamplePreview, SampleSlice,
-    MAX_SAMPLE_FILE_BYTES, MAX_SAMPLE_SLICES,
+    encode_wav_with_metadata_bytes, normalize_slices, update_wav_riff_metadata_bytes,
+    SampleMetadata, SamplePreview, SampleSlice, MAX_SAMPLE_FILE_BYTES, MAX_SAMPLE_SLICES,
 };
 
 pub(crate) const SAMPLE_ZOOM_MIN: f32 = 1.0;
@@ -101,6 +103,39 @@ pub(crate) fn active_slice_index_for_cursor(
     } else {
         Some(regions.len() - 1)
     }
+}
+
+/// Shared SPOT computing the exact frame length applied by `SampleEditOp::FadeIn` /
+/// `SampleEditOp::FadeOut` (used identically by both the Offline Edit picker preview and
+/// `apply_process_sample` execution).
+pub(crate) fn compute_fade_frames_for_cursor(
+    crop_start: usize,
+    crop_end: usize,
+    cursor_frame: usize,
+    sample_rate: u32,
+    duration_ms: Option<f32>,
+    fade_in: bool,
+) -> usize {
+    let span = crop_end.saturating_sub(crop_start);
+    if span == 0 {
+        return 0;
+    }
+    let sr = f64::from(sample_rate.max(8_000));
+    if let Some(ms) = duration_ms {
+        let raw = ((f64::from(ms.max(0.0)) / 1000.0) * sr).round() as usize;
+        return raw.clamp(1, span);
+    }
+    if cursor_frame > crop_start.saturating_add(16) && cursor_frame.saturating_add(16) < crop_end {
+        return if fade_in {
+            cursor_frame.saturating_sub(crop_start).clamp(1, span)
+        } else {
+            crop_end.saturating_sub(cursor_frame).clamp(1, span)
+        };
+    }
+    let default_100ms = (sr * 0.1).round() as usize;
+    let quarter = (span / 4).max(1);
+    let min_fade = 32usize.min(span);
+    default_100ms.min(quarter).max(min_fade).clamp(1, span)
 }
 
 /// Whether a path refers to a `.wav` file (case-insensitive).
@@ -535,12 +570,27 @@ impl App {
             KeyCode::Char('D') => Some(self.auto_slice_grid(inst, zone, module)),
             KeyCode::Char('r') => Some(self.begin_rename_active_slice(inst, zone, module)),
 
-            // Audition, Browser, Slice-to-Kit, RIFF write-back
+            // Audition, Browser, Offline WAV Edit, Slice-to-Kit, RIFF write-back
             KeyCode::Char('A') => Some(self.audition_active_sample_slice(inst, zone, module)),
             KeyCode::Char('B') => Some(self.begin_sample_browser(BrowserTarget::AssignModule {
                 instrument: inst,
                 zone_id: zone,
                 module_id: Some(module),
+            })),
+            KeyCode::Char('e') => Some(self.open_sample_edit_picker(inst, zone, module)),
+            KeyCode::Char('T') => Some(self.apply(Action::ProcessSample {
+                instrument: inst,
+                zone,
+                module,
+                edit: SampleEditOp::Trim,
+            })),
+            KeyCode::Char('N') => Some(self.apply(Action::ProcessSample {
+                instrument: inst,
+                zone,
+                module,
+                edit: SampleEditOp::Normalize {
+                    target_dbfs: DEFAULT_NORMALIZE_TARGET_DBFS,
+                },
             })),
             KeyCode::Char('K') => Some(self.open_slice_to_kit_picker(inst, zone, module)),
             KeyCode::Char('W') => Some(self.apply(Action::WriteSampleRiffMetadata {
@@ -1925,6 +1975,312 @@ impl App {
             }
             _ => bail!("{usage}"),
         }
+    }
+
+    /// Execute `Action::ProcessSample`: apply an offline WAV transform (`Trim`, `Normalize`,
+    /// `Reverse`, `FadeIn`, `FadeOut`), write a brand-new portable WAV under `samples/` via
+    /// `HostIo::write_atomic`, and switch the `SamplerModule` in ONE atomic undoable commit
+    /// so `u` (Undo) instantaneously restores the original source WAV, crop, loop, and slices.
+    pub(crate) fn apply_process_sample(
+        &mut self,
+        instrument: Id,
+        zone: u16,
+        module: u16,
+        op: SampleEditOp,
+    ) -> Result<Outcome> {
+        let smp = self
+            .sampler_module_at(instrument, zone, module)
+            .context("Sampler module missing")?
+            .clone();
+        let sample = self
+            .loaded_sample_for(instrument, zone, module)
+            .context("Load a sample first (press B)")?;
+        let total_frames = sample.frames;
+        ensure!(total_frames > 0, "Sample has zero audio frames");
+        let (crop_start, crop_end) = effective_sampler_bounds(&smp, total_frames);
+        let sr = sample.sample_rate.max(8_000);
+
+        let mut updated_smp = smp.clone();
+        let (new_left, new_right, suffix, summary_detail, reset_viewport) = match op {
+            SampleEditOp::Trim => {
+                ensure!(
+                    crop_start > 0 || crop_end < total_frames,
+                    "Set crop bounds with [ and ] before trimming to a new WAV"
+                );
+                let (nl, nr) = trim_sample_buffers(
+                    &sample.left,
+                    sample.right.as_deref(),
+                    crop_start,
+                    crop_end,
+                )?;
+                let trimmed_len = nl.len();
+                updated_smp.sample_start = 0;
+                updated_smp.sample_end = 0;
+
+                // Remap loop bounds relative to `[crop_start, crop_end)` or disable if outside.
+                if updated_smp.loop_mode != SampleLoopMode::Off {
+                    let cur_ls = updated_smp.loop_start.min(total_frames.saturating_sub(1));
+                    let cur_le = if updated_smp.loop_end == 0 {
+                        crop_end
+                    } else {
+                        updated_smp.loop_end.clamp(cur_ls + 1, total_frames)
+                    };
+                    let ov_start = cur_ls.max(crop_start);
+                    let ov_end = cur_le.min(crop_end);
+                    if ov_end > ov_start.saturating_add(16) {
+                        updated_smp.loop_start = ov_start - crop_start;
+                        updated_smp.loop_end = (ov_end - crop_start).min(trimmed_len);
+                    } else {
+                        updated_smp.loop_mode = SampleLoopMode::Off;
+                        updated_smp.loop_start = 0;
+                        updated_smp.loop_end = 0;
+                    }
+                } else {
+                    updated_smp.loop_start = 0;
+                    updated_smp.loop_end = 0;
+                }
+
+                // Remap slice markers inside `[crop_start, crop_end)` by subtracting `crop_start`.
+                let mut remapped: Vec<SampleSlice> = updated_smp
+                    .slices
+                    .iter()
+                    .filter(|s| s.frame >= crop_start && s.frame < crop_end)
+                    .map(|s| SampleSlice {
+                        frame: s.frame - crop_start,
+                        label: s.label.clone(),
+                    })
+                    .collect();
+                normalize_slices(&mut remapped, Some(trimmed_len));
+                updated_smp.slices = remapped;
+
+                let dur = format_sample_time(trimmed_len, sr);
+                (nl, nr, "trim", format!("Trimmed ({dur})"), true)
+            }
+            SampleEditOp::Normalize { target_dbfs } => {
+                let target_db =
+                    target_dbfs.clamp(MIN_NORMALIZE_TARGET_DBFS, MAX_NORMALIZE_TARGET_DBFS);
+                let (nl, nr, gain_db) =
+                    normalize_sample_buffers(&sample.left, sample.right.as_deref(), target_db)?;
+                (
+                    nl,
+                    nr,
+                    "norm",
+                    format!("Normalized ({gain_db:+.1} dB → {target_db:.1} dBFS)"),
+                    false,
+                )
+            }
+            SampleEditOp::Reverse => {
+                let (nl, nr) = reverse_sample_buffers(&sample.left, sample.right.as_deref())?;
+                // Reverse crop bounds (preserving uncropped `0, 0` sentinel).
+                if crop_start > 0 || crop_end < total_frames {
+                    let rev_start = total_frames.saturating_sub(crop_end);
+                    let rev_end = total_frames.saturating_sub(crop_start);
+                    updated_smp.sample_start = rev_start;
+                    updated_smp.sample_end = if rev_end >= total_frames { 0 } else { rev_end };
+                }
+                // Reverse loop bounds if active.
+                if updated_smp.loop_mode != SampleLoopMode::Off {
+                    let cur_ls = updated_smp.loop_start.min(total_frames.saturating_sub(1));
+                    let cur_le = if updated_smp.loop_end == 0 {
+                        crop_end
+                    } else {
+                        updated_smp.loop_end.clamp(cur_ls + 1, total_frames)
+                    };
+                    let rev_ls = total_frames.saturating_sub(cur_le);
+                    let rev_le = total_frames.saturating_sub(cur_ls);
+                    if rev_le > rev_ls {
+                        updated_smp.loop_start = rev_ls;
+                        updated_smp.loop_end = rev_le;
+                    }
+                }
+                // Reverse labeled slice regions so each marker tracks its reversed hit!
+                if !updated_smp.slices.is_empty() {
+                    let regions = slice_regions(&updated_smp.slices, 0, total_frames);
+                    let mut rev_slices: Vec<SampleSlice> = regions
+                        .into_iter()
+                        .map(|(_, r_end, lbl)| SampleSlice {
+                            frame: total_frames
+                                .saturating_sub(r_end)
+                                .min(total_frames.saturating_sub(1)),
+                            label: lbl.map(str::to_string),
+                        })
+                        .collect();
+                    normalize_slices(&mut rev_slices, Some(total_frames));
+                    updated_smp.slices = rev_slices;
+                }
+                (nl, nr, "rev", "Reversed audio & slices".into(), false)
+            }
+            SampleEditOp::FadeIn { duration_ms } => {
+                let fade_frames = compute_fade_frames_for_cursor(
+                    crop_start,
+                    crop_end,
+                    self.sample_ui.cursor_frame,
+                    sr,
+                    duration_ms,
+                    true,
+                );
+                let (nl, nr) = fade_sample_buffers(
+                    &sample.left,
+                    sample.right.as_deref(),
+                    crop_start,
+                    crop_end,
+                    fade_frames,
+                    true,
+                )?;
+                let dur = format_sample_time(fade_frames, sr);
+                (nl, nr, "fadein", format!("Applied {dur} fade-in"), false)
+            }
+            SampleEditOp::FadeOut { duration_ms } => {
+                let fade_frames = compute_fade_frames_for_cursor(
+                    crop_start,
+                    crop_end,
+                    self.sample_ui.cursor_frame,
+                    sr,
+                    duration_ms,
+                    false,
+                );
+                let (nl, nr) = fade_sample_buffers(
+                    &sample.left,
+                    sample.right.as_deref(),
+                    crop_start,
+                    crop_end,
+                    fade_frames,
+                    false,
+                )?;
+                let dur = format_sample_time(fade_frames, sr);
+                (nl, nr, "fadeout", format!("Applied {dur} fade-out"), false)
+            }
+        };
+
+        let new_frames = new_left.len();
+        let meta = updated_smp.to_riff_metadata(new_frames, Some(&sample.meta));
+        let wav_bytes = encode_wav_with_metadata_bytes(&new_left, new_right.as_deref(), sr, &meta)?;
+
+        let source_stem = smp
+            .path
+            .as_deref()
+            .and_then(|p| Path::new(p).file_stem())
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or(&sample.name);
+        let (rel_path, abs_path) =
+            self.unique_sample_paths("samples", &format!("{source_stem}-{suffix}"), suffix);
+        self.io
+            .write_atomic(&abs_path, MAX_SAMPLE_FILE_BYTES, &wav_bytes)
+            .with_context(|| format!("Writing processed WAV '{}'", abs_path.display()))?;
+
+        self.assets
+            .library
+            .set_project_dir_if_unset(self.doc.asset_base());
+        self.assets.library.register_file(&abs_path);
+        let decoded = self
+            .load_library_sample(&rel_path)
+            .with_context(|| format!("Loading processed WAV '{rel_path}'"))?;
+
+        updated_smp.path = Some(rel_path.clone());
+        let label = format!("{summary_detail} → {rel_path}");
+        let mut out = self.commit_sampler_edit(
+            instrument,
+            zone,
+            module,
+            |s| *s = updated_smp,
+            label.clone(),
+            None,
+        )?;
+        self.assets
+            .samples
+            .insert(module_sample_key(instrument, zone, module), decoded);
+        if reset_viewport {
+            self.sample_ui.cursor_frame = 0;
+            self.sample_ui.zoom = 1.0;
+            self.sample_ui.view_start_frame.set(0);
+        } else {
+            self.sample_ui.cursor_frame = self
+                .sample_ui
+                .cursor_frame
+                .min(new_frames.saturating_sub(1));
+        }
+        self.status = format!("{label} (u undoes)");
+        out.samples_changed = true;
+        Ok(out)
+    }
+
+    /// Execute `:sample trim | normalize [DBFS] | reverse | fade-in [DUR] | fade-out [DUR]`.
+    pub(crate) fn execute_sample_edit_command(&mut self, args: &[String]) -> Result<Outcome> {
+        let (inst, zone, module) = self
+            .resolve_sample_deck_target()
+            .context("No Sampler instrument in project")?;
+        let sub = args
+            .first()
+            .map(|s| s.to_ascii_lowercase())
+            .unwrap_or_default();
+        let parse_opt_duration_ms = |tok: &str| -> Result<f32> {
+            let trimmed = tok.trim().to_ascii_lowercase();
+            let ms = if let Some(v) = trimmed.strip_suffix("ms") {
+                v.trim().parse::<f32>().context("Invalid ms duration")?
+            } else if let Some(v) = trimmed.strip_suffix('s') {
+                v.trim()
+                    .parse::<f32>()
+                    .context("Invalid seconds duration")?
+                    * 1000.0
+            } else {
+                trimmed
+                    .parse::<f32>()
+                    .context("Duration expects ms (e.g. 50ms) or seconds (e.g. 0.25s)")?
+            };
+            ensure!(ms.is_finite() && ms > 0.0, "Fade duration must be > 0 ms");
+            Ok(ms)
+        };
+        let edit = match sub.as_str() {
+            "trim" => {
+                ensure!(args.len() == 1, "Usage: :sample trim");
+                SampleEditOp::Trim
+            }
+            "normalize" | "norm" => {
+                ensure!(args.len() <= 2, "Usage: :sample normalize [DBFS]");
+                let target_dbfs = if let Some(raw) = args.get(1) {
+                    let cleaned = raw
+                        .trim()
+                        .trim_end_matches("dbfs")
+                        .trim_end_matches("dBFS")
+                        .trim_end_matches("db")
+                        .trim_end_matches("dB");
+                    let v: f32 = cleaned
+                        .parse()
+                        .context("Normalize target expects dBFS (e.g. -0.5 or -1.0)")?;
+                    ensure!(
+                        v.is_finite()
+                            && (MIN_NORMALIZE_TARGET_DBFS..=MAX_NORMALIZE_TARGET_DBFS).contains(&v),
+                        "Normalize target must be between {MIN_NORMALIZE_TARGET_DBFS} and {MAX_NORMALIZE_TARGET_DBFS} dBFS"
+                    );
+                    v
+                } else {
+                    DEFAULT_NORMALIZE_TARGET_DBFS
+                };
+                SampleEditOp::Normalize { target_dbfs }
+            }
+            "reverse" | "rev" => {
+                ensure!(args.len() == 1, "Usage: :sample reverse");
+                SampleEditOp::Reverse
+            }
+            "fade-in" | "fadein" => {
+                ensure!(args.len() <= 2, "Usage: :sample fade-in [MS|SECS]");
+                let duration_ms = args.get(1).map(|s| parse_opt_duration_ms(s)).transpose()?;
+                SampleEditOp::FadeIn { duration_ms }
+            }
+            "fade-out" | "fadeout" => {
+                ensure!(args.len() <= 2, "Usage: :sample fade-out [MS|SECS]");
+                let duration_ms = args.get(1).map(|s| parse_opt_duration_ms(s)).transpose()?;
+                SampleEditOp::FadeOut { duration_ms }
+            }
+            _ => bail!("Usage: :sample PATH | deck | write-meta | trim | normalize [DBFS] | reverse | fade-in [DUR] | fade-out [DUR]"),
+        };
+        self.apply(Action::ProcessSample {
+            instrument: inst,
+            zone,
+            module,
+            edit,
+        })
     }
 
     /// Execute `:sample write-meta` Ex command.

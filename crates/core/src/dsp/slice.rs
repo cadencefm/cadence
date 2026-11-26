@@ -1,8 +1,247 @@
-//! Pure, deterministic waveform analysis & slicing DSP:
-//! zoomed peak-envelope resampling, zero-crossing snapping, high-frequency-weighted
-//! spectral-flux onset/transient detection, equal/grid slicing, and slice region slicing.
+//! Pure, deterministic waveform analysis, live peak tracking, slicing, and offline sample
+//! buffer DSP (`trim`, `normalize`, `reverse`, `fade-in`/`fade-out`).
 use crate::dsp::gain::stereo_mid_f32;
+use crate::dsp::math::{db_to_lin, hann_fade_in, hann_fade_out, lin_to_db, sanitize_sample};
 use crate::sampler::{SampleSlice, MAX_SAMPLE_SLICES};
+use anyhow::{ensure, Result};
+
+/// Default peak normalization target (`-0.5 dBFS`, preserving inter-sample headroom).
+pub const DEFAULT_NORMALIZE_TARGET_DBFS: f32 = -0.5;
+pub const MIN_NORMALIZE_TARGET_DBFS: f32 = -24.0;
+pub const MAX_NORMALIZE_TARGET_DBFS: f32 = 0.0;
+
+/// Bounded, O(1)-per-frame hierarchical peak accumulator for live hardware input recording.
+///
+/// Streams arbitrary recording lengths into at most `max_bins` `(min, max)` waveform bins
+/// by coalescing adjacent bin pairs and doubling `frames_per_bin` whenever capacity fills,
+/// guaranteeing O(new_frames) CPU per UI poll and strictly bounded memory.
+#[derive(Clone, Debug)]
+pub struct LivePeakRecorder {
+    max_bins: usize,
+    frames_per_bin: usize,
+    bins: Vec<(f32, f32)>,
+    cur_min: f32,
+    cur_max: f32,
+    cur_count: usize,
+    total_frames: u64,
+}
+
+impl LivePeakRecorder {
+    pub fn new(max_bins: usize, initial_frames_per_bin: usize) -> Self {
+        let cap = max_bins.max(8);
+        Self {
+            max_bins: cap,
+            frames_per_bin: initial_frames_per_bin.max(1),
+            bins: Vec::with_capacity(cap),
+            cur_min: 0.0,
+            cur_max: 0.0,
+            cur_count: 0,
+            total_frames: 0,
+        }
+    }
+
+    pub fn clear(&mut self, initial_frames_per_bin: usize) {
+        self.frames_per_bin = initial_frames_per_bin.max(1);
+        self.bins.clear();
+        self.cur_min = 0.0;
+        self.cur_max = 0.0;
+        self.cur_count = 0;
+        self.total_frames = 0;
+    }
+
+    pub fn total_frames(&self) -> u64 {
+        self.total_frames
+    }
+
+    pub fn frames_per_bin(&self) -> usize {
+        self.frames_per_bin
+    }
+
+    /// Push newly captured stereo frames in O(frames.len()) time.
+    pub fn push_stereo(&mut self, frames: &[[f32; 2]]) {
+        for &frame in frames {
+            let m = stereo_mid_f32([sanitize_sample(frame[0]), sanitize_sample(frame[1])]);
+            if self.cur_count == 0 {
+                self.cur_min = m.min(0.0);
+                self.cur_max = m.max(0.0);
+            } else {
+                self.cur_min = self.cur_min.min(m);
+                self.cur_max = self.cur_max.max(m);
+            }
+            self.cur_count += 1;
+            self.total_frames = self.total_frames.saturating_add(1);
+            if self.cur_count >= self.frames_per_bin {
+                if self.bins.len() >= self.max_bins {
+                    self.coalesce_half();
+                }
+                self.bins.push((self.cur_min, self.cur_max));
+                self.cur_min = 0.0;
+                self.cur_max = 0.0;
+                self.cur_count = 0;
+            }
+        }
+    }
+
+    fn coalesce_half(&mut self) {
+        let pairs = self.bins.len() / 2;
+        for i in 0..pairs {
+            let a = self.bins[i * 2];
+            let b = self.bins[i * 2 + 1];
+            self.bins[i] = (a.0.min(b.0), a.1.max(b.1));
+        }
+        if self.bins.len() % 2 == 1 {
+            let tail = self.bins[self.bins.len() - 1];
+            self.bins[pairs] = tail;
+            self.bins.truncate(pairs + 1);
+        } else {
+            self.bins.truncate(pairs);
+        }
+        self.frames_per_bin = self.frames_per_bin.saturating_mul(2);
+    }
+
+    /// Snapshot current waveform peaks including any partial trailing bin so initial
+    /// recording frames appear immediately.
+    pub fn snapshot_peaks(&self) -> Vec<(f32, f32)> {
+        let mut out = self.bins.clone();
+        if self.cur_count > 0 && out.len() < self.max_bins {
+            out.push((self.cur_min, self.cur_max));
+        }
+        out
+    }
+}
+
+/// Extract the cropped frame range `[start_frame, end_frame)` into new mono/stereo buffers.
+pub fn trim_sample_buffers(
+    left: &[f32],
+    right: Option<&[f32]>,
+    start_frame: usize,
+    end_frame: usize,
+) -> Result<(Vec<f32>, Option<Vec<f32>>)> {
+    let total = left.len();
+    ensure!(total > 0, "Cannot trim an empty sample");
+    if let Some(r) = right {
+        ensure!(r.len() == total, "Stereo channel length mismatch");
+    }
+    let start = start_frame.min(total.saturating_sub(1));
+    let end = end_frame.clamp(start + 1, total);
+    ensure!(end > start, "Trim range is empty");
+    let new_left = left[start..end].to_vec();
+    let new_right = right.map(|r| r[start..end].to_vec());
+    Ok((new_left, new_right))
+}
+
+/// Linked stereo/mono peak normalization to `target_dbfs` (`-24.0..=0.0 dBFS`).
+/// Returns `(left, right, applied_gain_db)` and rejects digital silence.
+pub fn normalize_sample_buffers(
+    left: &[f32],
+    right: Option<&[f32]>,
+    target_dbfs: f32,
+) -> Result<(Vec<f32>, Option<Vec<f32>>, f32)> {
+    let total = left.len();
+    ensure!(total > 0, "Cannot normalize an empty sample");
+    if let Some(r) = right {
+        ensure!(r.len() == total, "Stereo channel length mismatch");
+    }
+    ensure!(target_dbfs.is_finite(), "Normalize target must be finite");
+    let target_db = target_dbfs.clamp(MIN_NORMALIZE_TARGET_DBFS, MAX_NORMALIZE_TARGET_DBFS);
+    let mut peak = 0.0_f32;
+    for &s in left {
+        peak = peak.max(sanitize_sample(s).abs());
+    }
+    if let Some(r) = right {
+        for &s in r {
+            peak = peak.max(sanitize_sample(s).abs());
+        }
+    }
+    ensure!(peak >= 1e-6, "Sample is silent — cannot normalize");
+    let target_lin = db_to_lin(target_db);
+    let gain = target_lin / peak;
+    let gain_db = lin_to_db(gain);
+    let new_left = left
+        .iter()
+        .map(|&s| (sanitize_sample(s) * gain).clamp(-1.0, 1.0))
+        .collect();
+    let new_right = right.map(|r| {
+        r.iter()
+            .map(|&s| (sanitize_sample(s) * gain).clamp(-1.0, 1.0))
+            .collect()
+    });
+    Ok((new_left, new_right, gain_db))
+}
+
+/// Reverse mono or stereo sample buffers frame-for-frame.
+pub fn reverse_sample_buffers(
+    left: &[f32],
+    right: Option<&[f32]>,
+) -> Result<(Vec<f32>, Option<Vec<f32>>)> {
+    let total = left.len();
+    ensure!(total > 0, "Cannot reverse an empty sample");
+    if let Some(r) = right {
+        ensure!(r.len() == total, "Stereo channel length mismatch");
+    }
+    let mut new_left = left.to_vec();
+    new_left.reverse();
+    let new_right = right.map(|r| {
+        let mut nr = r.to_vec();
+        nr.reverse();
+        nr
+    });
+    Ok((new_left, new_right))
+}
+
+/// Apply a smooth half-cosine (Hann) fade-in or fade-out inside `[start_frame, end_frame)`
+/// over `fade_frames` frames, leaving samples outside the fade region untouched.
+pub fn fade_sample_buffers(
+    left: &[f32],
+    right: Option<&[f32]>,
+    start_frame: usize,
+    end_frame: usize,
+    fade_frames: usize,
+    fade_in: bool,
+) -> Result<(Vec<f32>, Option<Vec<f32>>)> {
+    let total = left.len();
+    ensure!(total > 0, "Cannot fade an empty sample");
+    if let Some(r) = right {
+        ensure!(r.len() == total, "Stereo channel length mismatch");
+    }
+    let start = start_frame.min(total.saturating_sub(1));
+    let end = end_frame.clamp(start + 1, total);
+    let span = end - start;
+    let fade = fade_frames.clamp(1, span);
+    let mut new_left = left.to_vec();
+    let mut new_right = right.map(<[f32]>::to_vec);
+    let denom = (fade.saturating_sub(1)).max(1) as f32;
+
+    if fade_in {
+        for i in 0..fade {
+            let g = if fade == 1 {
+                0.0
+            } else {
+                hann_fade_in(i as f32 / denom)
+            };
+            let idx = start + i;
+            new_left[idx] = sanitize_sample(new_left[idx]) * g;
+            if let Some(r) = new_right.as_mut() {
+                r[idx] = sanitize_sample(r[idx]) * g;
+            }
+        }
+    } else {
+        let fade_start = end - fade;
+        for i in 0..fade {
+            let g = if fade == 1 {
+                0.0
+            } else {
+                hann_fade_out(i as f32 / denom)
+            };
+            let idx = fade_start + i;
+            new_left[idx] = sanitize_sample(new_left[idx]) * g;
+            if let Some(r) = new_right.as_mut() {
+                r[idx] = sanitize_sample(r[idx]) * g;
+            }
+        }
+    }
+    Ok((new_left, new_right))
+}
 
 /// Compute `(min, max)` mono-summed peak bins over the frame range `[start_frame, end_frame)`
 /// for crisp zoomed waveform rendering at any zoom level.
@@ -453,5 +692,67 @@ mod tests {
         let zoomed = compute_waveform_peaks_window(&audio, None, 1_400, 1_600, 100);
         assert_eq!(zoomed.len(), 100);
         assert!(zoomed.iter().any(|&(lo, hi)| hi >= 0.89 && lo <= -0.79));
+    }
+
+    #[test]
+    fn live_peak_recorder_stays_bounded_and_preserves_extremes_across_coalescing() {
+        let mut rec = LivePeakRecorder::new(64, 16);
+        let mut chunk = vec![[0.1_f32, 0.1_f32]; 10_000];
+        chunk[4_321] = [0.95, 0.95];
+        chunk[7_777] = [-0.88, -0.88];
+        rec.push_stereo(&chunk[..3_000]);
+        rec.push_stereo(&chunk[3_000..]);
+        assert_eq!(rec.total_frames(), 10_000);
+        let peaks = rec.snapshot_peaks();
+        assert!(peaks.len() <= 64, "peaks must stay bounded by max_bins");
+        assert!(peaks.len() >= 16);
+        assert!(peaks.iter().any(|&(_, hi)| (hi - 0.95).abs() < 1e-4));
+        assert!(peaks.iter().any(|&(lo, _)| (lo + 0.88).abs() < 1e-4));
+    }
+
+    #[test]
+    fn offline_sample_ops_trim_normalize_reverse_and_fade_accurately() {
+        let left = vec![0.1, 0.25, -0.5, 0.25, 0.1, 0.05];
+        let right = vec![-0.1, 0.1, 0.2, -0.25, 0.05, -0.02];
+
+        // 1. Trim extracts exact slice.
+        let (tl, tr) = trim_sample_buffers(&left, Some(&right), 1, 5).unwrap();
+        assert_eq!(tl, vec![0.25, -0.5, 0.25, 0.1]);
+        assert_eq!(tr.unwrap(), vec![0.1, 0.2, -0.25, 0.05]);
+
+        // 2. Normalize scales stereo-linked peak to exact target dBFS and rejects silence.
+        let (nl, nr, gain_db) =
+            normalize_sample_buffers(&left, Some(&right), DEFAULT_NORMALIZE_TARGET_DBFS).unwrap();
+        let expected_peak = db_to_lin(DEFAULT_NORMALIZE_TARGET_DBFS);
+        let actual_peak = nl
+            .iter()
+            .chain(nr.as_ref().unwrap().iter())
+            .fold(0.0_f32, |acc, &s| acc.max(s.abs()));
+        assert!((actual_peak - expected_peak).abs() < 1e-4);
+        assert!(gain_db > 5.0);
+        assert!(normalize_sample_buffers(&[0.0; 16], None, -0.5).is_err());
+
+        // 3. Reverse round-trips cleanly.
+        let (rl, rr) = reverse_sample_buffers(&left, Some(&right)).unwrap();
+        assert_eq!(rl[0], left[5]);
+        assert_eq!(rl[5], left[0]);
+        let (rl2, rr2) = reverse_sample_buffers(&rl, rr.as_deref()).unwrap();
+        assert_eq!(rl2, left);
+        assert_eq!(rr2.unwrap(), right);
+
+        // 4. Hann fade-in / fade-out hit exact 0.0 and 1.0 endpoints without altering exterior frames.
+        let ones = vec![1.0_f32; 12];
+        let (fi, _) = fade_sample_buffers(&ones, None, 2, 10, 4, true).unwrap();
+        assert_eq!(fi[0], 1.0);
+        assert_eq!(fi[1], 1.0);
+        assert!(fi[2].abs() < 1e-6);
+        assert!((fi[5] - 1.0).abs() < 1e-6);
+        assert_eq!(fi[6], 1.0);
+
+        let (fo, _) = fade_sample_buffers(&ones, None, 2, 10, 4, false).unwrap();
+        assert_eq!(fo[5], 1.0);
+        assert!((fo[6] - 1.0).abs() < 1e-6);
+        assert!(fo[9].abs() < 1e-6);
+        assert_eq!(fo[10], 1.0);
     }
 }

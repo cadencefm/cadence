@@ -297,3 +297,335 @@ fn slice_to_rack_kit_creates_chromatic_kit_pattern_and_undoes_atomically() {
     assert_eq!(replaced.rack.zones.len(), 4);
     assert_eq!(replaced.rack.zones[0].name, "Boom");
 }
+
+#[test]
+fn offline_sample_ops_trim_normalize_reverse_fade_write_portable_wavs_and_undo_cleanly() {
+    use cadence_app::{HostIo, MemoryHostIo};
+    use cadence_core::dsp::{db_to_lin, DEFAULT_NORMALIZE_TARGET_DBFS};
+    use cadence_core::sampler::encode_wav_with_metadata_bytes;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    let io = Arc::new(MemoryHostIo::new("/virtual/sample-ops"));
+    let sr = 44_100u32;
+    let frames = sr as usize; // 1.0s
+    let mut left = vec![0.0_f32; frames];
+    let mut right = vec![0.0_f32; frames];
+    for i in 0..frames {
+        let t = i as f32 / sr as f32;
+        // Distinct asymmetric amplitude ramp so Reverse, Trim, Normalize, and Fade are unmistakable.
+        let env = 0.08 + 0.17 * (i as f32 / frames as f32);
+        let wave = (std::f32::consts::TAU * 220.0 * t).sin();
+        left[i] = wave * env;
+        right[i] = wave * env * 0.85;
+    }
+    let meta = SampleMetadata {
+        root_midi: 60,
+        has_root: true,
+        loop_mode: SampleLoopMode::Forward,
+        loop_start: frames / 4,
+        loop_end: (frames * 3) / 4,
+        slices: vec![
+            SampleSlice::new(0, Some("Kick".into())),
+            SampleSlice::new(frames / 3, Some("Hat".into())),
+            SampleSlice::new((frames * 2) / 3, Some("Snare".into())),
+        ],
+        ..SampleMetadata::default()
+    };
+    let wav_bytes = encode_wav_with_metadata_bytes(&left, Some(&right), sr, &meta).unwrap();
+    let src_abs = Path::new("/virtual/sample-ops/samples/source.wav");
+    io.insert_file(src_abs, wav_bytes);
+
+    let mut app = App::new_with_host_io(
+        Project::demo(),
+        PathBuf::from("/virtual/sample-ops/project.json"),
+        Arc::clone(&io) as Arc<dyn HostIo>,
+    )
+    .unwrap();
+    app.execute_command("sampler EditTrack samples/source.wav")
+        .unwrap();
+    app.press_keys("gw").unwrap();
+    assert_eq!(app.focused_deck_kind(), Some(DeckKind::Sample));
+    let before_proj = app.project().clone();
+
+    let sampler_of = |app: &App| -> cadence_core::rack::SamplerModule {
+        let inst = app
+            .project()
+            .instruments
+            .iter()
+            .find(|i| i.name == "EditTrack")
+            .unwrap();
+        match &inst.rack.zones[0].modules[0].kind {
+            ModuleKind::Sampler(s) => s.clone(),
+            _ => panic!("expected Sampler"),
+        }
+    };
+
+    // 1. Normalize via `N` shortcut writes new portable WAV at -0.5 dBFS and undoes cleanly!
+    app.press_keys("N").unwrap();
+    let norm_smp = sampler_of(&app);
+    let norm_rel = norm_smp.path.as_deref().unwrap();
+    assert!(norm_rel.starts_with("samples/source-norm"));
+    assert!(io
+        .read_file(Path::new("/virtual/sample-ops").join(norm_rel))
+        .is_some());
+    let norm_data = app.sample_bank().into_iter().next().unwrap().1;
+    let norm_peak = norm_data
+        .left
+        .iter()
+        .chain(norm_data.right.as_ref().unwrap().iter())
+        .fold(0.0_f32, |a, &s| a.max(s.abs()));
+    assert!(
+        (norm_peak - db_to_lin(DEFAULT_NORMALIZE_TARGET_DBFS)).abs() < 0.01,
+        "normalized peak {norm_peak} should match -0.5 dBFS"
+    );
+    assert_eq!(norm_smp.slices.len(), 3);
+    app.apply(Action::Undo).unwrap();
+    assert_eq!(app.project(), &before_proj);
+
+    // 2. Reverse via `e` Offline Edit picker -> `3` reverses audio AND labeled slice regions!
+    app.press_keys("e3").unwrap();
+    let rev_smp = sampler_of(&app);
+    let rev_rel = rev_smp.path.as_deref().unwrap();
+    assert!(rev_rel.starts_with("samples/source-rev"));
+    assert_eq!(rev_smp.slices.len(), 3);
+    assert_eq!(rev_smp.slices[0].label.as_deref(), Some("Snare"));
+    assert_eq!(rev_smp.slices[1].label.as_deref(), Some("Hat"));
+    assert_eq!(rev_smp.slices[2].label.as_deref(), Some("Kick"));
+    app.apply(Action::Undo).unwrap();
+    assert_eq!(app.project(), &before_proj);
+
+    // 3. Crop middle `[frames/4 .. frames*3/4]` and Trim via `T` shortcut:
+    //    writes trimmed WAV, resets crop to full (0..0), remaps interior slice ("Hat") to frame ~frames/12!
+    let inst_id = app
+        .project()
+        .instruments
+        .iter()
+        .find(|i| i.name == "EditTrack")
+        .unwrap()
+        .id;
+    app.apply(Action::SetSamplerRegion {
+        instrument: inst_id,
+        zone: 1,
+        module: 1,
+        sample_start: Some(frames / 4),
+        sample_end: Some((frames * 3) / 4),
+        loop_mode: None,
+        loop_start: None,
+        loop_end: None,
+        loop_xfade_ms: None,
+    })
+    .unwrap();
+    app.press_keys("T").unwrap();
+    let trim_smp = sampler_of(&app);
+    assert!(trim_smp
+        .path
+        .as_deref()
+        .unwrap()
+        .starts_with("samples/source-trim"));
+    assert_eq!(trim_smp.sample_start, 0);
+    assert_eq!(trim_smp.sample_end, 0);
+    assert_eq!(trim_smp.slices.len(), 2);
+    assert_eq!(trim_smp.slices[0].label.as_deref(), Some("Hat"));
+    assert_eq!(trim_smp.slices[0].frame, frames / 3 - frames / 4);
+    assert_eq!(trim_smp.slices[1].label.as_deref(), Some("Snare"));
+    assert_eq!(trim_smp.slices[1].frame, (frames * 2) / 3 - frames / 4);
+    let trim_data = app
+        .sample_bank()
+        .into_iter()
+        .find(|(_, d)| d.resolved_path.to_string_lossy().contains("source-trim"))
+        .expect("trimmed sample loaded")
+        .1;
+    assert_eq!(trim_data.frames, frames / 2);
+    assert_eq!(trim_data.meta.slices.len(), 2);
+    // Two undos revert Trim then Crop back to exact original project.
+    app.apply(Action::Undo).unwrap();
+    app.apply(Action::Undo).unwrap();
+    assert_eq!(app.project(), &before_proj);
+
+    // 4. Fade-In and Fade-Out via `:sample fade-in 50ms` and `:sample fade-out 50ms`.
+    app.execute_command("sample fade-in 50ms").unwrap();
+    let fi_smp = sampler_of(&app);
+    assert!(fi_smp
+        .path
+        .as_deref()
+        .unwrap()
+        .starts_with("samples/source-fadein"));
+    let fi_data = app
+        .sample_bank()
+        .into_iter()
+        .find(|(_, d)| d.resolved_path.to_string_lossy().contains("source-fadein"))
+        .unwrap()
+        .1;
+    assert!(fi_data.left[0].abs() < 1e-4, "fade-in must start at 0.0");
+    let mid_peak = fi_data.left[frames / 2 - 100..frames / 2 + 100]
+        .iter()
+        .fold(0.0_f32, |a, &s| a.max(s.abs()));
+    assert!(mid_peak > 0.10, "fade-in must leave interior audio intact");
+
+    app.execute_command("sample fade-out 50ms").unwrap();
+    let fo_data = app
+        .sample_bank()
+        .into_iter()
+        .find(|(_, d)| d.resolved_path.to_string_lossy().contains("fadeout"))
+        .unwrap()
+        .1;
+    assert!(
+        fo_data.left[frames - 1].abs() < 1e-4,
+        "fade-out must end at 0.0"
+    );
+    assert!(!src_abs.exists(), "MemoryHostIo must never touch real disk");
+}
+
+#[test]
+fn sample_deck_live_recording_monitor_targets_active_zone_and_lands_back_in_sample_deck() {
+    use cadence_app::{
+        BounceTarget, CompletedRecording, HostIo, MemoryHostIo, RecordingHostCommand,
+    };
+    use cadence_core::dsp::LivePeakRecorder;
+    use cadence_core::runtime::{AudioInputStatus, AudioInputTelemetry, CapturePhase};
+    use cadence_core::sampler::encode_wav_with_metadata_bytes;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    let io = Arc::new(MemoryHostIo::new("/virtual/rec-deck"));
+    let mut app = App::new_with_host_io(
+        Project::demo(),
+        PathBuf::from("/virtual/rec-deck/project.json"),
+        Arc::clone(&io) as Arc<dyn HostIo>,
+    )
+    .unwrap();
+    app.config.audio_input_device = Some("Studio Interface".into());
+    app.execute_command("sampler VocalSlot blank").unwrap();
+    app.press_keys("gw").unwrap();
+    assert_eq!(app.focused_deck_kind(), Some(DeckKind::Sample));
+    let vocal_id = app
+        .project()
+        .instruments
+        .iter()
+        .find(|i| i.name == "VocalSlot")
+        .unwrap()
+        .id;
+
+    // 1. Empty Sample Deck with running hardware input shows live input oscilloscope monitor.
+    let mut snap = AudioSnapshot {
+        sample_rate: 48_000,
+        input: AudioInputTelemetry {
+            status: AudioInputStatus::Running,
+            sample_rate: 48_000,
+            channels: 2,
+            peak: [0.42, 0.38],
+            peak_hold: [0.55, 0.50],
+            ..AudioInputTelemetry::default()
+        },
+        input_waveform: (0..256).map(|i| (i as f32 * 0.12).sin() * 0.45).collect(),
+        ..AudioSnapshot::default()
+    };
+    let fv_idle = app.frame_view(&snap, "test");
+    let sv_idle = fv_idle
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Sample(s) => Some(s),
+            _ => None,
+        })
+        .expect("SampleDeckView present");
+    let mon_idle = sv_idle
+        .record_monitor
+        .as_ref()
+        .expect("empty Sample deck with running input shows live monitor");
+    assert_eq!(mon_idle.phase, CapturePhase::Idle);
+    assert_eq!(mon_idle.live_scope.len(), 256);
+
+    // 2. Pressing `ta` on Sample Deck targets THIS Sampler's zone and switches to Armed/Recording monitor!
+    let rec_cmd = app
+        .press_keys("ta")
+        .unwrap()
+        .into_iter()
+        .find_map(|o| o.recording_command);
+    let req = match rec_cmd {
+        Some(RecordingHostCommand::Arm { request }) => *request,
+        other => panic!("expected RecordingHostCommand::Arm, got {other:?}"),
+    };
+    assert_eq!(
+        req.target,
+        BounceTarget::RackZone {
+            instrument: vocal_id,
+            zone_index: Some(0),
+            midi: None,
+            zone_name: None,
+        }
+    );
+
+    // Simulate active recording with streaming LivePeakRecorder peaks!
+    snap.input.capture_phase = CapturePhase::Recording;
+    snap.input.captured_frames = 48_000;
+    app.observe_audio_recording(&snap);
+    let mut tracker = LivePeakRecorder::new(512, 128);
+    let captured_stereo: Vec<[f32; 2]> = (0..48_000)
+        .map(|i| {
+            let v = (std::f32::consts::TAU * 330.0 * i as f32 / 48_000.0).sin() * 0.65;
+            [v, v * 0.9]
+        })
+        .collect();
+    tracker.push_stereo(&captured_stereo);
+    app.set_recording_preview_peaks(tracker.snapshot_peaks());
+
+    let fv_rec = app.frame_view(&snap, "test");
+    let sv_rec = fv_rec
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Sample(s) => Some(s),
+            _ => None,
+        })
+        .unwrap();
+    let mon_rec = sv_rec.record_monitor.as_ref().unwrap();
+    assert_eq!(mon_rec.phase, CapturePhase::Recording);
+    assert_eq!(mon_rec.captured_frames, 48_000);
+    assert!(!mon_rec.recording_peaks.is_empty());
+
+    // 3. Finalizing recording lands the new WAV directly back onto DeckKind::Sample ready to slice!
+    let left: Vec<f32> = captured_stereo.iter().map(|f| f[0]).collect();
+    let right: Vec<f32> = captured_stereo.iter().map(|f| f[1]).collect();
+    let rec_wav =
+        encode_wav_with_metadata_bytes(&left, Some(&right), 48_000, &SampleMetadata::default())
+            .unwrap();
+    io.insert_file(&req.output_path, rec_wav);
+    let completed = CompletedRecording {
+        request: req,
+        frames: 48_000,
+        sample_rate: 48_000,
+        duration_sec: 1.0,
+        peak_left_db: -3.7,
+        peak_right_db: -4.6,
+        full_scale_samples: 0,
+        dropped_frames: 0,
+        actual_start_abs_step: 0,
+        actual_end_abs_step: 8,
+    };
+    app.complete_recording(completed).unwrap();
+    assert_eq!(
+        app.focused_deck_kind(),
+        Some(DeckKind::Sample),
+        "recording from Sample Deck must land directly back in Sample Deck"
+    );
+
+    snap.input.capture_phase = CapturePhase::Idle;
+    snap.input.captured_frames = 0;
+    let fv_done = app.frame_view(&snap, "test");
+    let sv_done = fv_done
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Sample(s) => Some(s),
+            _ => None,
+        })
+        .unwrap();
+    assert!(sv_done.loaded);
+    assert_eq!(sv_done.total_frames, 48_000);
+    assert!(
+        sv_done.record_monitor.is_none(),
+        "loaded Sample Deck returns cleanly to waveform editor once recording finishes"
+    );
+}

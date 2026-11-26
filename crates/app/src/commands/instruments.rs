@@ -145,17 +145,36 @@ impl App {
                 self.browse_samples()
             }
             InstrumentVerb::Sample => {
-                ensure!(!args.is_empty(), "Usage: :sample PATH | deck | write-meta");
-                if args.len() == 1 && args[0].eq_ignore_ascii_case("deck") {
+                ensure!(
+                    !args.is_empty(),
+                    "Usage: :sample PATH | deck | write-meta | trim | normalize [DBFS] | reverse | fade-in [DUR] | fade-out [DUR]"
+                );
+                let head = args[0].to_ascii_lowercase();
+                if args.len() == 1 && head == "deck" {
                     return self.open_sample_deck();
                 }
-                if args.len() == 1
-                    && (args[0].eq_ignore_ascii_case("write-meta")
-                        || args[0].eq_ignore_ascii_case("write-riff"))
-                {
+                if args.len() == 1 && matches!(head.as_str(), "write-meta" | "write-riff") {
                     return self.execute_sample_write_meta_command();
                 }
-                require_args(args, 1, ":sample PATH | deck | write-meta")?;
+                if matches!(
+                    head.as_str(),
+                    "trim"
+                        | "normalize"
+                        | "norm"
+                        | "reverse"
+                        | "rev"
+                        | "fade-in"
+                        | "fadein"
+                        | "fade-out"
+                        | "fadeout"
+                ) {
+                    return self.execute_sample_edit_command(args);
+                }
+                require_args(
+                    args,
+                    1,
+                    ":sample PATH | deck | write-meta | trim | normalize [DBFS] | reverse | fade-in [DUR] | fade-out [DUR]",
+                )?;
                 let id = self
                     .active_instrument()
                     .or(self.selected_instrument)
