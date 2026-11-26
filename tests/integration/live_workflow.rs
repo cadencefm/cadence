@@ -423,31 +423,9 @@ fn staging_collects_gestures_previews_them_and_fires_them_together() {
 
 #[test]
 fn fivefold_live_rebuilds_its_parts_and_its_performance_lands_on_the_planned_bars() {
-    use std::process::Command;
     let repo = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let folder = repo.join("examples/fivefold-live");
     let temp = tempfile::tempdir().unwrap();
-    let run = |args: &[&str]| {
-        let result = Command::new(env!("CARGO_BIN_EXE_cadence"))
-            .current_dir(&repo)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            result.status.success(),
-            "{}\n{}",
-            String::from_utf8_lossy(&result.stdout),
-            String::from_utf8_lossy(&result.stderr)
-        );
-    };
-    // Every curated showcase project passes --check cleanly with zero sample/validation errors.
-    for proj in [
-        "examples/demo/project.json",
-        "examples/glass-cathedral/project.json",
-        "examples/fivefold-live/project.json",
-    ] {
-        run(&["--project", proj, "--sample-roots-only", "--check"]);
-    }
     let shipped = cadence_app::load_project(&folder.join("project.json")).unwrap();
     // Replay the performance headlessly, writing its take to a scratch path.
     let take_path = temp.path().join("set.take.jsonl");

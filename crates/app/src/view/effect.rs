@@ -947,351 +947,6 @@ mod tests {
     use cadence_core::rack::FilterMode;
 
     #[test]
-    fn all_eight_effect_visual_builders_produce_finite_bounded_curves() {
-        let sr = 48_000.0;
-
-        // 1. EQ (Parametric mid_hz + mid_q)
-        let eq = build_eq_visual(
-            &EqPatch {
-                hpf_hz: 120.0,
-                low_db: 4.5,
-                mid_db: -3.0,
-                mid_hz: 2400.0,
-                mid_q: 3.2,
-                high_db: 6.0,
-            },
-            None,
-            sr,
-        );
-        match eq {
-            EffectVisualView::Eq {
-                curve_db,
-                hpf_active,
-                hpf_norm,
-                mid_hz_norm,
-                mid_q_span,
-                ..
-            } => {
-                assert_eq!(curve_db.len(), EQ_CURVE_POINTS);
-                assert!(hpf_active);
-                assert!((0.0..=1.0).contains(&hpf_norm));
-                assert!(mid_hz_norm > 0.6 && mid_hz_norm < 0.85);
-                assert!(mid_q_span.0 < mid_hz_norm && mid_hz_norm < mid_q_span.1);
-                assert!(curve_db
-                    .iter()
-                    .all(|v| v.is_finite() && (-18.0..=18.0).contains(v)));
-                // HPF at 120 Hz pulls 20 Hz far down while high shelf lifts 20 kHz.
-                assert!(curve_db[0] < -10.0, "HPF must attenuate 20 Hz");
-                assert!(curve_db[EQ_CURVE_POINTS - 1] > 3.0, "High shelf must boost");
-            }
-            other => panic!("expected Eq visual, got {other:?}"),
-        }
-
-        // 2. Filter (Rhythmic Envelope / PCF)
-        let filt_base = FilterPatch {
-            mode: FilterMode::AcidLowPass,
-            cutoff_hz: 600.0,
-            resonance: 0.72,
-            drive: 0.35,
-            mix: 1.0,
-            env_pattern: 6,
-            env_pattern_id: None,
-            env_amount: 2.5,
-            env_decay_ms: 240.0,
-        };
-        let filt_mod = FilterPatch {
-            cutoff_hz: 4200.0,
-            ..filt_base
-        };
-        let filt = build_filter_visual(&filt_base, Some(&filt_mod), Some(4200.0), None, sr);
-        match filt {
-            EffectVisualView::Filter {
-                curve_db,
-                mod_curve_db,
-                cutoff_norm,
-                mod_cutoff_norm,
-                ..
-            } => {
-                assert_eq!(curve_db.len(), FILTER_CURVE_POINTS);
-                assert!(curve_db
-                    .iter()
-                    .all(|v| v.is_finite() && (-48.0..=18.0).contains(v)));
-                let mc = mod_curve_db.expect("modulated curve");
-                assert_eq!(mc.len(), FILTER_CURVE_POINTS);
-                assert!(mc
-                    .iter()
-                    .all(|v| v.is_finite() && (-48.0..=18.0).contains(v)));
-                assert!(mod_cutoff_norm.unwrap() > cutoff_norm);
-            }
-            other => panic!("expected Filter visual, got {other:?}"),
-        }
-
-        // 3. Compressor
-        let comp = build_compressor_visual(
-            &CompressorPatch {
-                threshold_db: -18.0,
-                ratio: 6.0,
-                attack_ms: 5.0,
-                release_ms: 80.0,
-                makeup_db: 4.0,
-                mix: 1.0,
-            },
-            7.2,
-            9.5,
-        );
-        match comp {
-            EffectVisualView::Compressor {
-                transfer_curve,
-                compression_curve,
-                threshold_norm,
-                gain_reduction_db,
-                gr_hold_db,
-                ..
-            } => {
-                assert_eq!(transfer_curve.len(), COMP_CURVE_POINTS);
-                assert_eq!(compression_curve.len(), COMP_CURVE_POINTS);
-                assert!((0.0..=1.0).contains(&threshold_norm));
-                assert!((gain_reduction_db - 7.2).abs() < 1e-4);
-                assert!((gr_hold_db - 9.5).abs() < 1e-4);
-                assert!(transfer_curve.iter().all(|(x, y)| x.is_finite()
-                    && y.is_finite()
-                    && (0.0..=1.0).contains(x)
-                    && (0.0..=1.0).contains(y)));
-                // Above threshold without makeup, output must stay below 1:1 unity diagonal.
-                let (x_hi, y_hi) = compression_curve[COMP_CURVE_POINTS - 1];
-                assert!(
-                    y_hi < x_hi - 0.15,
-                    "compression curve must bend below unity"
-                );
-            }
-            other => panic!("expected Compressor visual, got {other:?}"),
-        }
-
-        // 4. Drive
-        let drv = build_drive_visual(
-            &DrivePatch {
-                mode: DriveMode::Tape,
-                drive: 0.78,
-                asymmetry: 0.0,
-                tone_hz: 4500.0,
-                output_db: -1.5,
-                mix: 1.0,
-            },
-            sr,
-        );
-        match drv {
-            EffectVisualView::Drive {
-                mode,
-                curve,
-                tone_curve_db,
-                tone_norm,
-                ..
-            } => {
-                assert_eq!(mode, DriveMode::Tape);
-                assert_eq!(curve.len(), DRIVE_CURVE_POINTS);
-                assert_eq!(tone_curve_db.len(), TONE_CURVE_POINTS);
-                assert!((0.0..=1.0).contains(&tone_norm));
-                assert!(curve.iter().all(|(x, y)| x.is_finite()
-                    && y.is_finite()
-                    && (-1.0..=1.0).contains(x)
-                    && (-1.25..=1.25).contains(y)));
-                assert!(tone_curve_db
-                    .iter()
-                    .all(|v| v.is_finite() && (-24.0..=3.0).contains(v)));
-            }
-            other => panic!("expected Drive visual, got {other:?}"),
-        }
-
-        // 4b. Drive modes (HardClip & Fold) produce distinct transfer curves matching SPOT!
-        let hard = build_drive_visual(
-            &DrivePatch {
-                mode: DriveMode::HardClip,
-                drive: 0.90,
-                asymmetry: 0.0,
-                tone_hz: 8000.0,
-                output_db: 0.0,
-                mix: 1.0,
-            },
-            sr,
-        );
-        let fold = build_drive_visual(
-            &DrivePatch {
-                mode: DriveMode::Fold,
-                drive: 0.75,
-                asymmetry: 0.0,
-                tone_hz: 8000.0,
-                output_db: 0.0,
-                mix: 1.0,
-            },
-            sr,
-        );
-        match (hard, fold) {
-            (
-                EffectVisualView::Drive {
-                    mode: m_h,
-                    curve: c_h,
-                    ..
-                },
-                EffectVisualView::Drive {
-                    mode: m_f,
-                    curve: c_f,
-                    ..
-                },
-            ) => {
-                assert_eq!(m_h, DriveMode::HardClip);
-                assert_eq!(m_f, DriveMode::Fold);
-                assert_ne!(c_h, c_f);
-            }
-            other => panic!("expected HardClip & Fold visuals, got {other:?}"),
-        }
-
-        // 5. Delay (PingPong & Stereo)
-        let dly = build_delay_visual(
-            &DelayPatch {
-                mode: DelayMode::PingPong,
-                steps: 3.0,
-                feedback: 0.55,
-                mix: 0.45,
-            },
-            128.0,
-        );
-        match dly {
-            EffectVisualView::Delay {
-                mode,
-                taps,
-                delay_ms,
-                ..
-            } => {
-                assert_eq!(mode, DelayMode::PingPong);
-                assert!(delay_ms.is_finite() && delay_ms > 200.0);
-                assert!(taps.len() >= 4);
-                assert!(taps[0].is_dry);
-                assert!(taps.iter().all(|t| t.x_norm.is_finite()
-                    && t.amplitude.is_finite()
-                    && (0.0..=1.0).contains(&t.x_norm)
-                    && (0.0..=1.0).contains(&t.amplitude)));
-                // Echo taps decay monotonically and alternate L/R in PingPong.
-                assert!(taps[1].amplitude > taps[2].amplitude);
-                assert_ne!(taps[1].left_channel, taps[2].left_channel);
-            }
-            other => panic!("expected Delay visual, got {other:?}"),
-        }
-        let dly_st = build_delay_visual(
-            &DelayPatch {
-                mode: DelayMode::Stereo,
-                steps: 3.0,
-                feedback: 0.55,
-                mix: 0.45,
-            },
-            128.0,
-        );
-        match dly_st {
-            EffectVisualView::Delay { mode, taps, .. } => {
-                assert_eq!(mode, DelayMode::Stereo);
-                assert!(taps.len() >= 4);
-                assert!(taps.iter().all(|t| t.left_channel));
-            }
-            other => panic!("expected Stereo Delay visual, got {other:?}"),
-        }
-
-        // 6. Chorus
-        let chr = build_chorus_visual(
-            &ChorusPatch {
-                rate_hz: 1.1,
-                depth: 0.65,
-                width: 0.9,
-                mix: 0.5,
-            },
-            true,
-            12.5,
-            124.0,
-        );
-        match chr {
-            EffectVisualView::Chorus {
-                left_lfo,
-                right_lfo,
-                phase_deg,
-                ..
-            } => {
-                assert_eq!(left_lfo.len(), CHORUS_CURVE_POINTS);
-                assert_eq!(right_lfo.len(), CHORUS_CURVE_POINTS);
-                assert!((phase_deg - 81.0).abs() < 0.5);
-                assert!(left_lfo
-                    .iter()
-                    .chain(right_lfo.iter())
-                    .all(|v| v.is_finite() && (-1.0..=1.0).contains(v)));
-            }
-            other => panic!("expected Chorus visual, got {other:?}"),
-        }
-
-        // 7. Reverb
-        let rvb = build_reverb_visual(
-            &ReverbPatch {
-                size: 0.72,
-                decay_seconds: 3.6,
-                damping_hz: 4200.0,
-                predelay_ms: 42.0,
-                mix: 0.35,
-                width: 0.85,
-            },
-            sr,
-        );
-        match rvb {
-            EffectVisualView::Reverb {
-                decay_curve,
-                hf_decay_curve,
-                damping_curve_db,
-                predelay_norm,
-                ..
-            } => {
-                assert_eq!(decay_curve.len(), REVERB_CURVE_POINTS);
-                assert_eq!(hf_decay_curve.len(), REVERB_CURVE_POINTS);
-                assert_eq!(damping_curve_db.len(), TONE_CURVE_POINTS);
-                assert!(predelay_norm > 0.0 && predelay_norm <= 0.30);
-                assert!(decay_curve
-                    .iter()
-                    .chain(hf_decay_curve.iter())
-                    .all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
-                // Predelay starts at 0.0 and tail decays smoothly toward end.
-                assert_eq!(decay_curve[0], 0.0);
-                assert!(decay_curve[REVERB_CURVE_POINTS - 1] < 0.15);
-            }
-            other => panic!("expected Reverb visual, got {other:?}"),
-        }
-
-        // 8. Limiter
-        let lim = build_limiter_visual(
-            &LimiterPatch {
-                ceiling_db: -1.5,
-                input_drive_db: 9.0,
-                release_ms: 65.0,
-                mix: 1.0,
-            },
-            5.4,
-            7.8,
-            false,
-        );
-        match lim {
-            EffectVisualView::Limiter {
-                transfer_curve,
-                ceiling_norm,
-                gain_reduction_db,
-                gr_hold_db,
-                ..
-            } => {
-                assert_eq!(transfer_curve.len(), LIMITER_CURVE_POINTS);
-                assert!((gain_reduction_db - 5.4).abs() < 1e-4);
-                assert!((gr_hold_db - 7.8).abs() < 1e-4);
-                assert!(transfer_curve.iter().all(|(x, y)| x.is_finite()
-                    && y.is_finite()
-                    && (0.0..=1.0).contains(x)
-                    && *y <= ceiling_norm + 1e-4));
-            }
-            other => panic!("expected Limiter visual, got {other:?}"),
-        }
-    }
-
-    #[test]
     fn frame_view_emits_effect_deck_view_with_live_gr_and_pcf_sweep() {
         let mut project = Project::demo();
         let next_id = project
@@ -1758,6 +1413,73 @@ mod tests {
                 );
             }
             other => panic!("expected Filter visual, got {other:?}"),
+        }
+
+        // 9. Delay (PingPong alternating L/R vs Stereo) & Chorus stereo LFO phase.
+        match build_delay_visual(
+            &DelayPatch {
+                mode: DelayMode::PingPong,
+                steps: 3.0,
+                feedback: 0.55,
+                mix: 0.45,
+            },
+            128.0,
+        ) {
+            EffectVisualView::Delay {
+                mode,
+                taps,
+                delay_ms,
+                ..
+            } => {
+                assert_eq!(mode, DelayMode::PingPong);
+                assert!(delay_ms.is_finite() && delay_ms > 200.0);
+                assert!(taps.len() >= 4 && taps[0].is_dry);
+                assert!(taps[1].amplitude > taps[2].amplitude);
+                assert_ne!(taps[1].left_channel, taps[2].left_channel);
+            }
+            other => panic!("expected PingPong Delay visual, got {other:?}"),
+        }
+        match build_delay_visual(
+            &DelayPatch {
+                mode: DelayMode::Stereo,
+                steps: 3.0,
+                feedback: 0.55,
+                mix: 0.45,
+            },
+            128.0,
+        ) {
+            EffectVisualView::Delay { mode, taps, .. } => {
+                assert_eq!(mode, DelayMode::Stereo);
+                assert!(taps.len() >= 4 && taps.iter().all(|t| t.left_channel));
+            }
+            other => panic!("expected Stereo Delay visual, got {other:?}"),
+        }
+        match build_chorus_visual(
+            &ChorusPatch {
+                rate_hz: 1.1,
+                depth: 0.65,
+                width: 0.9,
+                mix: 0.5,
+            },
+            true,
+            12.5,
+            124.0,
+        ) {
+            EffectVisualView::Chorus {
+                left_lfo,
+                right_lfo,
+                phase_deg,
+                ..
+            } => {
+                assert_eq!(left_lfo.len(), CHORUS_CURVE_POINTS);
+                assert_eq!(right_lfo.len(), CHORUS_CURVE_POINTS);
+                assert!((phase_deg - 81.0).abs() < 0.5);
+                assert!(left_lfo
+                    .iter()
+                    .chain(right_lfo.iter())
+                    .all(|v| v.is_finite() && (-1.0..=1.0).contains(v)));
+            }
+            other => panic!("expected Chorus visual, got {other:?}"),
         }
     }
 

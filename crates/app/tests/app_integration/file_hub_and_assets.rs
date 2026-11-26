@@ -1,6 +1,6 @@
 //! Integration tests for File Hub, Settings asset directory management,
 //! portable bundles, preset/MIDI JSON routing, bounded previews, and dirty guards.
-mod common;
+use crate::common;
 
 use cadence_app::host_io::{HostIo, MemoryHostIo};
 use cadence_app::view::{FileHubView, FrameView, OverlayView};

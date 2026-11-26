@@ -1,4 +1,4 @@
-mod common;
+use crate::common;
 
 use cadence_app::{load_project, Action, App};
 use cadence_core::{material::Project, rack::module_sample_key, sampler::SampleLibrary};

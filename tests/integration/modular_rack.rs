@@ -1427,8 +1427,8 @@ fn render_kit_round_trip_emits_rack_kit_and_plays_back_with_choke_groups() {
     }
     let (baked_peak, baked_rms) = render_bd(baked_patch);
     let (synth_peak, synth_rms) = render_bd(loaded_synth_kit.patch.clone());
-    let rms_diff_db = (20.0 * (synth_rms / baked_rms).log10()).abs();
-    let peak_diff_db = (20.0 * (synth_peak / baked_peak).log10()).abs();
+    let rms_diff_db = cadence_core::dsp::lin_to_db((synth_rms / baked_rms) as f32).abs();
+    let peak_diff_db = cadence_core::dsp::lin_to_db((synth_peak / baked_peak) as f32).abs();
     assert!(
         rms_diff_db < 0.5 && peak_diff_db < 1.5,
         "render-kit synth preset must match baked kit 1:1 (baked peak={baked_peak:.4}/rms={baked_rms:.4}, synth peak={synth_peak:.4}/rms={synth_rms:.4}, dRMS={rms_diff_db:.2} dB, dPeak={peak_diff_db:.2} dB)"

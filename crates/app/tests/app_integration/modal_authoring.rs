@@ -284,7 +284,7 @@ fn mixer_strip_keys_use_decibels_and_viewport_pages_without_muting() {
         cadence_core::mixer::ChannelRef::Channel(id) => a.project().channel(id).unwrap(),
         _ => panic!(),
     };
-    assert!((20.0 * channel.strip.gain.log10() + 3.0).abs() < 1e-4);
+    assert!((cadence_core::dsp::lin_to_db(channel.strip.gain) + 3.0).abs() < 1e-4);
     assert!(!a.flags().channel_muted(first));
     assert_eq!(a.revision(), revision + 1);
     a.press_keys("u").unwrap();
@@ -315,7 +315,7 @@ fn mixer_strip_keys_use_decibels_and_viewport_pages_without_muting() {
     a.press_keys("<m-k>").unwrap();
     assert!((gain(&a) - 0.001).abs() < 1e-8);
     a.press_keys("<m-m><m-k><m-k>").unwrap();
-    assert!((20.0 * gain(&a).log10() + 58.0).abs() < 1e-4);
+    assert!((cadence_core::dsp::lin_to_db(gain(&a)) + 58.0).abs() < 1e-4);
     assert!(a.flags().channel_muted(first));
 }
 
@@ -467,7 +467,7 @@ fn stop_clears_pending_counts_and_consumed_motion_status_is_current() {
         };
         let gain = a.project().channel(id).unwrap().strip.gain;
         assert!(
-            (20.0 * gain.log10() + 19.0).abs() < 1e-4,
+            (cadence_core::dsp::lin_to_db(gain) + 19.0).abs() < 1e-4,
             "Stop must consume the old 24-count"
         );
     }

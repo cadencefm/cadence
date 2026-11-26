@@ -9,10 +9,9 @@ use cadence_core::{
 };
 use std::path::PathBuf;
 fn empty() -> App {
-    App::new_with_library(
+    App::new_in_memory(
         Project::empty(),
         PathBuf::from("/tmp/cadence-material-test.json"),
-        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
     )
     .unwrap()
 }
@@ -46,7 +45,7 @@ fn note(app: &App, id: u64, t: i64) -> cadence_core::music::Step {
 #[test]
 fn playable_creation_is_one_undo_and_ids_never_reuse_after_undo() {
     let mut app = empty();
-    cmd(&mut app, "part new Lead pulse_lead 0 2 4 6 7");
+    cmd(&mut app, "part new Lead synth 0 2 4 6 7");
     assert_eq!(app.project().patterns.len(), 1);
     assert_eq!(app.project().instruments.len(), 1);
     assert_eq!(app.project().parts.len(), 1);
@@ -119,7 +118,7 @@ fn sources_stay_shared_and_local_exceptions_are_placement_relative_and_undoable(
     cmd(&mut app, "pattern degrees Chords 16 hold 0:0 8:3");
     cmd(&mut app, "derive Lift add Motif Chords");
     let derived = app.selected_pattern.unwrap();
-    cmd(&mut app, "instrument Lead pulse_lead");
+    cmd(&mut app, "instrument Lead synth");
     cmd(&mut app, "part Part Lift Lead");
     cmd(&mut app, "lane A");
     cmd(&mut app, "place Part A 2 1 song");
@@ -358,7 +357,7 @@ fn synth_unison_controls_are_registry_backed_and_parameters_keep_native_units() 
 #[test]
 fn instrument_links_resolve_pan_to_the_instrument_and_retained_shapes_stay_visible() {
     let mut app = empty();
-    cmd(&mut app, "part new Lead pulse_lead 0 2 4");
+    cmd(&mut app, "part new Lead synth 0 2 4");
     cmd(&mut app, "pattern seed Pan 16 303 0.2 0.8");
     cmd(&mut app, "link Lead pan Pan");
     assert!(matches!(
@@ -504,7 +503,7 @@ fn binding_inspector_can_edit_performance_and_rebind_without_copying_material() 
     cmd(&mut app, "link Lead pan Pan");
     cmd(&mut app, "unlink Lead pan");
     assert!(app.project().parts[0].parameter_links.is_empty());
-    cmd(&mut app, "instrument Other pluck");
+    cmd(&mut app, "instrument Other synth");
     cmd(&mut app, "part Lead instrument Other");
     assert_eq!(
         app.project().parts[0].instrument,

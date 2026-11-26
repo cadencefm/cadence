@@ -1,7 +1,7 @@
 //! Integration tests for external `InstrumentPreset` & `PresetCatalog` discovery,
 //! unified Rack preset loading, `:zone preset`, Filter Groove bank browsing/forking/saving,
 //! missing-asset resilience, and factory kit audio integrity.
-mod common;
+use crate::common;
 
 use cadence_app::{
     authoring::DraftField,
@@ -40,84 +40,7 @@ fn draft_keys(d: &mut WorkflowDraft, p: &Project, seq: &str) {
 
 #[cfg(feature = "rbs")]
 fn minimal_synthetic_rbs_v42() -> Vec<u8> {
-    fn iff_chunk(tag: &[u8; 4], payload: &[u8]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(8 + payload.len() + 1);
-        out.extend_from_slice(tag);
-        out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        out.extend_from_slice(payload);
-        if payload.len() % 2 == 1 {
-            out.push(0);
-        }
-        out
-    }
-    fn iff_cat(kind: &[u8; 4], children: &[Vec<u8>]) -> Vec<u8> {
-        let mut body = Vec::new();
-        body.extend_from_slice(kind);
-        for c in children {
-            body.extend_from_slice(c);
-        }
-        iff_chunk(b"CAT ", &body)
-    }
-    let mut head = vec![0u8; 256];
-    head[0..9].copy_from_slice(&[0x5B, 0x54, 0x5B, 0x54, 0xBC, 0x04, 0x02, 0x00, 0x00]);
-    let mut glob = vec![0u8; 512];
-    glob[0] = 0; // Pattern mode
-    glob[1] = 1;
-    glob[2..6].copy_from_slice(&128_000u32.to_be_bytes());
-    glob[10..14].copy_from_slice(&(2 * 768u32).to_be_bytes());
-    let mut usri = vec![0u8; 712];
-    usri[..8].copy_from_slice(b"EmptyCat");
-    let mut mixr = [0u8; 64];
-    mixr[0] = 110;
-    for c in 0..4 {
-        let b = 16 + 12 * c;
-        mixr[b] = 1;
-        mixr[b + 1] = 100;
-        mixr[b + 2] = 64;
-    }
-    let mut tb = vec![0u8; 1097];
-    tb[0..9].copy_from_slice(&[1, 0, 64, 52, 85, 80, 72, 95, 0]);
-    for pat in 0..32 {
-        let base = 9 + pat * 34;
-        tb[base + 1] = 16;
-        for s in 0..16 {
-            tb[base + 2 + s * 2 + 1] = if s == 0 { 0x02 } else { 0x10 };
-        }
-    }
-    let mut t808 = vec![0u8; 6238];
-    t808[0] = 1;
-    t808[30 + 1] = 16;
-    t808[30 + 2 + 1] = 1; // BD hit
-    let mut t909 = vec![0u8; 6239];
-    t909[0] = 1;
-    t909[31 + 1] = 16;
-    t909[31 + 2 + 1] = 1; // BD hit
-    let empty_trak = iff_chunk(b"TRAK", &0u32.to_be_bytes());
-    let devl = iff_cat(
-        b"DEVL",
-        &[
-            iff_chunk(b"MIXR", &mixr),
-            iff_chunk(b"DELY", &[0u8; 8]),
-            iff_chunk(b"PCF ", &[0u8; 12]),
-            iff_chunk(b"DIST", &[0u8; 8]),
-            iff_chunk(b"COMP", &[0u8; 8]),
-            iff_chunk(b"303 ", &tb),
-            iff_chunk(b"303 ", &tb),
-            iff_chunk(b"808 ", &t808),
-            iff_chunk(b"909 ", &t909),
-        ],
-    );
-    let trkl = iff_cat(b"TRKL", &vec![empty_trak; 9]);
-    iff_cat(
-        b"RB40",
-        &[
-            iff_chunk(b"HEAD", &head),
-            iff_chunk(b"GLOB", &glob),
-            iff_chunk(b"USRI", &usri),
-            devl,
-            trkl,
-        ],
-    )
+    common::minimal_rbs_bytes("EmptyCat", 128_000)
 }
 
 #[test]
@@ -790,15 +713,15 @@ fn factory_sources_presets_samples_metadata_and_24khz_kit_audition_are_valid() {
                         if sr == 44_100 {
                             s44_rms = s_rms;
                         }
-                        let rms_diff_db = (20.0 * (s_rms / b_rms).log10()).abs();
-                        let peak_diff_db = (20.0 * (s_peak / b_peak).log10()).abs();
+                        let rms_diff_db = cadence_core::dsp::lin_to_db((s_rms / b_rms) as f32).abs();
+                        let peak_diff_db = cadence_core::dsp::lin_to_db((s_peak / b_peak) as f32).abs();
                         assert!(
                             rms_diff_db < 0.6 && peak_diff_db < 1.5,
                             "{synth_id} must match {baked_id} playback level @ {sr} Hz (baked peak={b_peak:.4}/rms={b_rms:.4}, synth peak={s_peak:.4}/rms={s_rms:.4}, dRMS={rms_diff_db:.2} dB, dPeak={peak_diff_db:.2} dB)"
                         );
                     }
                     let (_, s96_rms) = render_at(synth_id, 96_000);
-                    let sr_drift_db = (20.0 * (s96_rms / s44_rms).log10()).abs();
+                    let sr_drift_db = cadence_core::dsp::lin_to_db((s96_rms / s44_rms) as f32).abs();
                     assert!(
                         sr_drift_db < 0.6,
                         "{synth_id} groove RMS drifted between 44.1 kHz and 96 kHz: {sr_drift_db:.2} dB"

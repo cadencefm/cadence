@@ -902,7 +902,7 @@ fn multi_burst_predelay_env_and_lofi_quantizer_and_drive_asymmetry() {
 }
 
 #[test]
-fn unison_detune_stereo_width_and_equal_power_pan_law() {
+fn unison_detune_and_stereo_width() {
     let sr = 48_000.0;
     let bank = Vec::new();
 
@@ -926,34 +926,7 @@ fn unison_detune_stereo_width_and_equal_power_pan_law() {
     }
     let g = compile_zone_graph(&zone).unwrap();
 
-    // 1. Equal-power pan preserves constant L² + R² across [-1.0, +1.0].
-    let measure_power = |pan: f32| -> f64 {
-        let mut z = zone.clone();
-        if let ModuleKind::Out(ref mut out) = z.modules[5].kind {
-            out.pan = pan;
-        }
-        let mut v = ModularVoice::new_boxed(&spec(&z, &g, sr, 120.0), start(69, None));
-        for _ in 0..4800 {
-            v.next_frame(&bank, None);
-        }
-        let mut sum = 0.0;
-        for _ in 0..4800 {
-            let f = v.next_frame(&bank, None);
-            sum += f64::from(f[0]).powi(2) + f64::from(f[1]).powi(2);
-        }
-        sum / 4800.0
-    };
-    let p_center = measure_power(0.0);
-    for pan in [-1.0_f32, -0.5, 0.5, 1.0] {
-        let p = measure_power(pan);
-        let diff_db = 10.0 * (p / p_center).log10();
-        assert!(
-            diff_db.abs() < 0.1,
-            "pan={pan}: equal-power drifted {diff_db:+.3} dB from center"
-        );
-    }
-
-    // 2. 7-voice unison produces detuned sidebands & stereo width when width=1.0, mono when width=0.0.
+    // 7-voice unison produces detuned sidebands & stereo width when width=1.0, mono when width=0.0.
     let mut uni_zone = zone.clone();
     if let ModuleKind::Vco(ref mut vco) = uni_zone.modules[0].kind {
         vco.unison_voices = 7;

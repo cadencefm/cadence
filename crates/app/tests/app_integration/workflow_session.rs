@@ -8,12 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 fn app() -> App {
-    App::new_with_library(
-        Project::empty(),
-        "unused.json".into(),
-        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
-    )
-    .unwrap()
+    App::new_in_memory(Project::empty(), "unused.json".into()).unwrap()
 }
 fn finish(app: &mut App) {
     for _ in 0..40 {
@@ -87,7 +82,7 @@ fn separate_modal_workflows_reuse_material_and_build_an_explicit_placement() {
     let moving = a.selected_pattern.unwrap();
     let sources = a.project().patterns.clone();
     let revision = a.revision();
-    a.press_keys("niLead<Enter>s/pulse<Enter>").unwrap();
+    a.press_keys("niLead<Enter>s/init<Enter>").unwrap();
     assert_eq!(a.project().instruments.len(), 0);
     assert_eq!(a.revision(), revision);
     finish(&mut a);
@@ -424,12 +419,10 @@ fn action_new_honors_user_config_defaults_clears_overlays_and_supports_kit_place
     };
 
     // 1. `Action::New` clears open FileHub overlay and applies `config.default_bpm` / `default_root_midi`.
-    let mut a = App::new_with_library(
-        Project::demo(),
-        "unused.json".into(),
-        cadence_core::sampler::SampleLibrary::from_roots_only(&[], None),
-    )
-    .unwrap();
+    let mut a = App::new_in_memory(Project::demo(), "unused.json".into()).unwrap();
+    a.set_preset_catalog(cadence_core::presets::PresetCatalog::from_roots(&[
+        crate::common::repo_root().join("presets"),
+    ]));
     a.config = UserConfig {
         default_bpm: 127.0,
         default_root_midi: 62, // D4

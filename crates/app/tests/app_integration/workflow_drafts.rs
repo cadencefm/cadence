@@ -8,10 +8,9 @@ use cadence_app::{
 };
 use cadence_core::material::{PhaseMode, Project};
 use cadence_core::presets::PresetCatalog;
-use std::path::PathBuf;
 
 fn repo_presets() -> PresetCatalog {
-    PresetCatalog::from_roots(&[PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("presets")])
+    PresetCatalog::from_roots(&[crate::common::repo_root().join("presets")])
 }
 fn key(d: &mut WorkflowDraft, p: &Project, code: KeyCode) -> WorkflowOutcome {
     d.handle_key(p, KeyEvent::new(code, KeyModifiers::NONE))
