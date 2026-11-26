@@ -177,3 +177,85 @@ pub(super) fn scroll_window_centered(selected: usize, total: usize, visible: usi
 pub(super) fn scroll_window_clamped(scroll: usize, total: usize, visible: usize) -> usize {
     scroll.min(total.saturating_sub(visible))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadence_app::authoring::{DraftField, DraftFieldView, DraftInput, DraftView};
+    use cadence_app::PickerView;
+
+    #[test]
+    fn draw_overlay_authoring_left_pane_scrolls_and_picker_centers_cursor() {
+        let theme = Theme::cadence_dark();
+        let viewport = Rect::new(0.0, 0.0, 1000.0, 360.0);
+
+        let fields: Vec<DraftFieldView> = (0..14)
+            .map(|i| DraftFieldView {
+                label: format!("Field{i:02}"),
+                value: format!("Val{i:02}"),
+                active: i == 11,
+            })
+            .collect();
+        let draft = DraftView {
+            title: "PLACED PART".into(),
+            field: DraftField::Start,
+            field_label: "Start bar".into(),
+            input: DraftInput::Number,
+            text: "1".into(),
+            replace_on_type: true,
+            query: String::new(),
+            searching: false,
+            candidates: Vec::new(),
+            selected: None,
+            fields,
+            preview: vec!["Preview".into()],
+            summary: "Summary".into(),
+            error: None,
+            hints: vec![("Enter", "accept")],
+        };
+        let mut dl = DisplayList::new(viewport.w, viewport.h, 1.0);
+        dl.begin_overlay();
+        draw_overlay(&mut dl, viewport, &OverlayView::Authoring(draft), &theme);
+        let auth_texts: Vec<&str> = dl.overlay.texts.iter().map(|t| t.text.as_str()).collect();
+        assert!(
+            auth_texts.iter().any(|t| t.contains("Field11")),
+            "Active field #11 must be scrolled into view: {auth_texts:?}"
+        );
+        assert!(
+            auth_texts
+                .iter()
+                .any(|t| t.contains("▲") && t.contains("12/14")),
+            "Expected vertical scroll indicator (`▲ ... 12/14`) on left field list, got: {auth_texts:?}"
+        );
+
+        let picker = PickerView {
+            title: "ROUTE CHANNEL".into(),
+            filter: None,
+            searching: false,
+            cursor: 15,
+            audition: false,
+            items: (0..24)
+                .map(|i| (format!("Channel {i:02}"), "Group".into(), i == 15))
+                .collect(),
+        };
+        let mut dl_p = DisplayList::new(1000.0, 420.0, 1.0);
+        dl_p.begin_overlay();
+        draw_overlay(
+            &mut dl_p,
+            Rect::new(0.0, 0.0, 1000.0, 420.0),
+            &OverlayView::Picker(picker),
+            &theme,
+        );
+        let pick_texts: Vec<&str> = dl_p.overlay.texts.iter().map(|t| t.text.as_str()).collect();
+        assert!(
+            pick_texts.contains(&"Channel 15")
+                && pick_texts.contains(&"Channel 14")
+                && pick_texts.contains(&"Channel 16"),
+            "Picker scroll must center around cursor 15 (showing neighbors 14 & 16), got: {pick_texts:?}"
+        );
+        assert!(
+            !pick_texts.contains(&"Channel 00"),
+            "Picker must have scrolled past item 00"
+        );
+    }
+}

@@ -91,7 +91,6 @@ required-features = ["rbs"]
 
 [dev-dependencies]
 hound.workspace = true
-image.workspace = true
 tempfile.workspace = true
 
 [profile.dev.package."*"]
