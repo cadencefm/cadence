@@ -83,10 +83,11 @@ Every zone executes its modules at full `f64` audio rate inside zero-allocation 
 
 Switch to **`Patchbay`** (`H`/`L` or `:page patchbay`) to wire your voice directly across four color-coded signal columns—**`SOURCES`** → **`MODULATORS`** → **`PROCESSORS`** → **`VCA / OUT`**—using up to **64 patch cables per zone**.
 
-![Iron Circuit Eurorack Patchbay showing 4 module columns, cubic-Bezier cables, attenuverter pills, and selected dashed z-1 feedback loop](../screenshots/11-rack-patchbay.png)
+![Iron Circuit Eurorack Patchbay showing 4 module columns, live module shimmer meters, glowing signal cables, attenuverter pills, and selected dashed z-1 feedback loop](../screenshots/11-rack-patchbay.png)
 
-### Bipolar Attenuverter Cables & `z-1` Feedback Safety
+### Bipolar Attenuverter Cables, Live Activity Telemetry & `z-1` Feedback
 - **Every cable is a first-class modulatable parameter:** Audio (`In`: `-200%..+200%`), `PitchCv` (`±48 st`), `FmIn` (`±100%`), `PwCv` (`±45%`), `TrigIn` (`-2..+2`), `Filter.Cv` (`±6 oct`), `Vca.Cv` (`±200%`), `Resonator.Cv` (`±100%`), and `Drive`/`Out.Cv` (`±100%`). Negative depths invert polarity for inverted filter sweeps, counter-phase audio cancellation, or negative FM feedback!
+- **Live per-module & per-cable activity telemetry:** While the `Patchbay` tab is visible, the real-time audio engine streams lock-free, zero-allocation peak levels for every active module and patch cable in the focused zone—illuminating bottom shimmer bars on each module card (with amber `hot` headroom indicators above `0 dBFS`) and live energy glow along active audio, CV, pitch, FM, and `z-1` feedback cables.
 - **Cycle-safe `z-1` 1-sample feedback:** Patch any downstream module back upstream (e.g., `Fold Drive → VCO.fm -28%` or `Plate → Drive → Plate`) without deadlocks or crashes. Cadence's Kahn DAG compiler automatically flags back-edges with a **1-sample delay (`z-1`)**, soft-bounds feedback energy, and renders feedback cables as glowing **arc-length-dashed Bezier curves** badged **`z-1`**.
 
 ### Patchbay Keyboard Controls
@@ -170,6 +171,8 @@ Every continuous Rack bus control (`gain`, `pan`, `tune`, `cutoff`, `resonance`)
 
 ### Dedicated Sample / Waveform & Slicer Deck (`gw`, or `W` from Rack)
 Open any `Sampler` module on its own zoomable waveform deck (`gw` globally, **`W`** from the Instrument Rack deck, or `:wave [INSTRUMENT]`):
+
+![Afterglow Brass Pad open in the Sample Waveform & Slicer Deck showing minimap, non-destructive crop brackets, Forward loop region, and 4 labeled slice markers](../screenshots/18-sample-deck.png)
 
 - **Zoomable Waveform, Minimap & Time Ruler:** Scrub with **`h`/`l`** (fine) and **`H`/`L`** (coarse), jump markers with **`w`/`b`**, jump file edges with **`0`/`$`**, page with **`PgUp`/`PgDn`**, and zoom **`1.0×..128×`** with **`=`/`-`** / **`Ctrl+=`/`-`/`0`** (`z0` resets).
 - **Non-Destructive Crop, Loop & Zero-Crossing Snap:** Set crop bounds with **`[`** / **`]`**, loop bounds with **`{`** / **`}`** (auto-enables Forward loop), cycle loop mode (`Off` → `Forward` → `PingPong`) with **`m`**, and toggle zero-crossing snap (`SNAP ZC` / `SNAP FREE`) with **`v`**.
