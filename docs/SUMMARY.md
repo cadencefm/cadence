@@ -19,6 +19,7 @@
 - [Decks, Keymap & Interaction](spec/decks-and-interaction.md)
 - [Material & Timing](spec/material-and-timing.md)
 - [DSP & Audio Engine](spec/dsp-and-audio-engine.md)
+- [Cubic Acoustics & Modular Primitives](spec/cubic-acoustics.md)
 - [Protocols & Persistence](spec/protocols.md)
 
 # Engineering

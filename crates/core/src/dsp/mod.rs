@@ -7,6 +7,7 @@
 
 pub mod biquad;
 pub mod chorus;
+pub mod cubic;
 pub mod delay;
 pub mod dynamics;
 pub mod env;
