@@ -586,6 +586,26 @@ impl StrikePulse {
         self.active = false;
     }
 
+    /// Update sample rate without resetting active strike pulse progress.
+    #[inline]
+    pub fn set_sample_rate(&mut self, sample_rate: f64) {
+        let sr = sanitize_sample_rate(sample_rate);
+        self.h = 1.0 / sr;
+        self.h_half = 0.5 * self.h;
+    }
+
+    /// Configured strike excitation drive.
+    #[inline]
+    pub fn drive(&self) -> f64 {
+        self.drive
+    }
+
+    /// Configured strike velocity.
+    #[inline]
+    pub fn velocity(&self) -> f64 {
+        self.velocity
+    }
+
     /// Active contact duration in seconds.
     #[inline]
     pub fn strike_time(&self) -> f64 {

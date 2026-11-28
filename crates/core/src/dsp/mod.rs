@@ -18,7 +18,6 @@ pub mod math;
 pub mod noise;
 pub mod osc;
 pub mod resample;
-pub mod resonator;
 pub mod reverb;
 pub mod sampler_voice;
 pub mod saturate;
@@ -31,6 +30,10 @@ pub use biquad::{
     eq_response_db, BiquadCoeffs, DcBlocker, Eq, StereoBiquad, TptOnePoleHpf, TptOnePoleLpf,
 };
 pub use chorus::{Chorus, QuadratureLfo};
+pub use cubic::{
+    aero_mode_descriptors, modal_mode_descriptors, ModalModeDescriptor, MODAL_MAX_HZ, MODAL_MIN_HZ,
+    MODAL_SILENCE_ENERGY,
+};
 pub use delay::{Delay, DelayLine};
 pub use dynamics::{
     limiter_lookahead_frames, soft_knee_gr_db, soft_knee_gr_db_f64, Compressor, Limiter,
@@ -81,11 +84,6 @@ pub use osc::{
     VcoStepParams, CUBIC_MAX_CURVATURE, MAX_UNISON, VCO_MAX_REACH,
 };
 pub use resample::resample_stereo;
-pub use resonator::{
-    resonator_mode_descriptors, ModalResonator, ResonatorModeDescriptor, RESONATOR_AUDIBLE_MAX_HZ,
-    RESONATOR_MAX_DECAY_MS, RESONATOR_MAX_HZ, RESONATOR_MIN_DECAY_MS, RESONATOR_MIN_HZ,
-    RESONATOR_MODES, RESONATOR_REF_SAMPLE_RATE,
-};
 pub use reverb::{reverb_hf_rt60_envelope, reverb_rt60_envelope, Reverb};
 pub use sampler_voice::{sample_hermite_stereo_f64, SamplerCursor, SamplerRegion};
 pub use saturate::{

@@ -15,9 +15,9 @@ use cadence_core::mixer::{
 use cadence_core::music::{ChordTone, EndRule, Step};
 use cadence_core::params::{InstrumentParam, RackParam, ValueMode};
 use cadence_core::rack::{
-    drum_midi, module_sample_key, EnvModule, FilterMode, FilterModule, InPort, LfoModule, LfoShape,
-    ModuleKind, NoiseColor, NoiseModule, OutModule, PatchCable, PitchTracking, RackModule,
-    RackPatch, RackZone, ResonatorMode, ResonatorModule, SamplerModule, TriggerMode, VcaModule,
+    drum_midi, module_sample_key, BodyGeometry, EnvModule, FilterMode, FilterModule, InPort,
+    LfoModule, LfoShape, ModalModule, ModuleKind, NoiseColor, NoiseModule, OutModule, PatchCable,
+    PitchTracking, RackModule, RackPatch, RackZone, SamplerModule, TriggerMode, VcaModule,
     VcoModule, VoiceMode, VoiceSettings, Waveform,
 };
 use cadence_core::runtime::SampleBank;
@@ -328,12 +328,12 @@ fn poly_air_rack() -> RackPatch {
     }
 }
 
-fn sampler_resonator_rack(sample_frames: usize) -> RackPatch {
+fn sampler_modal_rack(sample_frames: usize) -> RackPatch {
     RackPatch {
         kit_name: String::new(),
         zones: vec![RackZone {
             id: 1,
-            name: "SamplerRes".into(),
+            name: "SamplerModal".into(),
             low_midi: 0,
             high_midi: 127,
             root_midi: 60,
@@ -373,14 +373,17 @@ fn sampler_resonator_rack(sample_frames: usize) -> RackPatch {
                 ),
                 RackModule::new(
                     4,
-                    "Resonator",
-                    ModuleKind::Resonator(ResonatorModule {
-                        mode: ResonatorMode::String,
-                        decay_ms: 140.0,
+                    "Modal",
+                    ModuleKind::Modal(ModalModule {
+                        geometry: BodyGeometry::Harmonic,
+                        atoms: 16,
+                        absorption: 0.04,
+                        radiation: 0.85,
                         brightness: 0.6,
-                        structure: 0.45,
+                        spread: 0.4,
+                        strike_drive: 0.0,
                         mix: 0.5,
-                        ..ResonatorModule::default()
+                        ..ModalModule::default()
                     }),
                 ),
                 RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
@@ -704,7 +707,7 @@ pub(crate) fn kitchen_sink_fixture(sample_rate: u32) -> KitchenSinkFixture {
         InstrumentInstance {
             id: 4,
             name: "Sampler".into(),
-            rack: sampler_resonator_rack(sample_frames),
+            rack: sampler_modal_rack(sample_frames),
             channel: 13,
         },
         InstrumentInstance {
@@ -889,7 +892,7 @@ pub(crate) fn kitchen_sink_fixture(sample_rate: u32) -> KitchenSinkFixture {
     // - Kick: bars 0..4 (continuous, drives sidechain ducking on MusicBus)
     // - Bass: bars 0..2 & bar 3 (sleeps across bar 2 = steps 32..47)
     // - Air (Chorus + clocked RhythmicFilter): bars 1 & 3 (sleeps bar 0 = steps 0..15 AND bar 2 = steps 32..47!)
-    // - Sampler (PingPong + Resonator): bars 0 & 2 (sleeps bars 1 & 3)
+    // - Sampler (PingPong + Modal): bars 0 & 2 (sleeps bars 1 & 3)
     // - MutedFX: bars 0..4 (muted live input metering + silent insert drain)
     let mut lane_kick = Lane::new(1, "Kick");
     lane_kick.placements.push(Placement::new(1, 1, 0, 64));

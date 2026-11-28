@@ -34,7 +34,7 @@ pub use graph::{GraphColumn, GraphDeckView, GraphEdge, GraphEdgeKind, GraphNode,
 pub use instrument::{
     ControlView, InstrumentDeckView, InstrumentVisualView, ModuleVisualView, ObjectDeckView,
     OutputDeckView, PatchbayCableKind, PatchbayCableView, PatchbayColumnView, PatchbayDeckView,
-    PatchbayNodeView, RackDeckView, RackModulePillView, RackZoneView,
+    PatchbayNodeView, PinnedSpectrumView, RackDeckView, RackModulePillView, RackZoneView,
 };
 pub use macros::{MacroBindingView, MacroSlotView, MacroTargetKind, MacrosDeckView};
 pub use midi::{

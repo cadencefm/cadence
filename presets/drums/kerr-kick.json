@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "name": "Kerr Kick",
+  "category": "Drum",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "Kerr Kick",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 36,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "fixed",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Membrane",
+            "kind": {
+              "type": "modal",
+              "geometry": "membrane",
+              "atoms": 12,
+              "pitch_tracking": "fixed",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 52.0,
+              "absorption": 0.042,
+              "radiation": 0.18,
+              "brightness": 0.32,
+              "headroom": 0.0,
+              "kerr_semitones": 11.0,
+              "pair_topology": "star",
+              "coupling": 0.18,
+              "triad_amount": 0.0,
+              "triad_axis": "sum",
+              "spread": 0.05,
+              "strike_drive": 1.15,
+              "strike_hardness": 0.74,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 2,
+            "name": "Atomic Drive",
+            "kind": {
+              "type": "drive",
+              "mode": "atomic_jet",
+              "drive": 0.25,
+              "asymmetry": 0.08,
+              "tone_hz": 9000.0,
+              "output_db": 0.0,
+              "mix": 0.45
+            }
+          },
+          {
+            "id": 3,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 2,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 1.0
+          }
+        ]
+      }
+    ],
+    "gain_db": 0.0,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "fixed_hz"
+        },
+        "label": "Pitch Hz"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "kerr"
+        },
+        "label": "Kerr Drop"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "strike_drive"
+        },
+        "label": "Strike"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "strike_hardness"
+        },
+        "label": "Hardness"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "radiation"
+        },
+        "label": "Radiation"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "absorption"
+        },
+        "label": "Damping"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 2,
+          "param": "drive"
+        },
+        "label": "Drive"
+      }
+    ]
+  }
+}

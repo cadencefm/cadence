@@ -73,7 +73,7 @@ pub struct CompiledZoneGraph {
     /// (empty when `Out.Cv` itself is strictly driven by [`Self::lifetime_envs`]). When all
     /// lifetime envelopes finish and `bias == 0`, these VCAs close their audio path to exact silence.
     pub env_gated_vcas: Box<[u8]>,
-    /// Execution slots of stateful tail-bearing modules (`Aero`, `Filter`, `Drive`, `Resonator`, `Out`)
+    /// Execution slots of stateful tail-bearing modules (`Aero`, `Filter`, `Drive`, `Modal`, `Out`)
     /// reachable from `out_slot` along `InPort::In` without crossing any [`Self::env_gated_vcas`]
     /// (or strictly `[out_slot]` when `Out.Cv` itself is strictly driven by [`Self::lifetime_envs`]).
     pub post_gate_tail_slots: Box<[u8]>,
@@ -81,6 +81,8 @@ pub struct CompiledZoneGraph {
     pub sampler_slots: Box<[u8]>,
     /// Execution slots of `Aero` modules in this zone (self-gated wind sources with physical bore tails).
     pub aero_slots: Box<[u8]>,
+    /// Execution slots of `Modal` modules in this zone (48-mode nonlinear bodies with strike/wave tails).
+    pub modal_slots: Box<[u8]>,
     /// SPOT Patchbay column index (`0..=3`) per execution slot (`column_layout.len() == ops.len()`).
     pub column_layout: Box<[u8]>,
 }
@@ -226,6 +228,7 @@ pub fn compile_zone_graph(zone: &RackZone) -> Result<CompiledZoneGraph> {
     let mut out_slot: Option<u8> = None;
     let mut sampler_slots: Vec<u8> = Vec::new();
     let mut aero_slots: Vec<u8> = Vec::new();
+    let mut modal_slots: Vec<u8> = Vec::new();
     let mut cable_cursor = 0usize;
 
     for (slot, &orig_idx) in order.iter().enumerate() {
@@ -245,6 +248,9 @@ pub fn compile_zone_graph(zone: &RackZone) -> Result<CompiledZoneGraph> {
         }
         if kind == ModuleKindTag::Aero {
             aero_slots.push(slot_u8);
+        }
+        if kind == ModuleKindTag::Modal {
+            modal_slots.push(slot_u8);
         }
         while cable_cursor < compiled_cables.len()
             && compiled_cables[cable_cursor].to_slot < slot_u8
@@ -347,7 +353,7 @@ pub fn compile_zone_graph(zone: &RackZone) -> Result<CompiledZoneGraph> {
                 ModuleKindTag::Aero
                     | ModuleKindTag::Filter
                     | ModuleKindTag::Drive
-                    | ModuleKindTag::Resonator
+                    | ModuleKindTag::Modal
                     | ModuleKindTag::Out
             ) {
                 post_gate_tail_slots.push(dst);
@@ -398,6 +404,7 @@ pub fn compile_zone_graph(zone: &RackZone) -> Result<CompiledZoneGraph> {
         post_gate_tail_slots: post_gate_tail_slots.into_boxed_slice(),
         sampler_slots: sampler_slots.into_boxed_slice(),
         aero_slots: aero_slots.into_boxed_slice(),
+        modal_slots: modal_slots.into_boxed_slice(),
         column_layout,
     })
 }

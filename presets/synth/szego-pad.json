@@ -1,0 +1,274 @@
+{
+  "version": 1,
+  "name": "Szego Pad",
+  "category": "Pad",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "Szego Pad",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 60,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": false
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Szego Core",
+            "kind": {
+              "type": "vco",
+              "waveform": "szego",
+              "reach": 0.8,
+              "shape": 0.5,
+              "chirality": 0.85,
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.5,
+              "phase_deg": 0.0,
+              "level": 0.62,
+              "pitch_tracking": "chromatic",
+              "fixed_hz": 440.0,
+              "unison_voices": 3,
+              "unison_detune_cents": 11.0,
+              "unison_width": 0.65
+            }
+          },
+          {
+            "id": 2,
+            "name": "Dipole Sub",
+            "kind": {
+              "type": "vco",
+              "waveform": "dipole",
+              "reach": 0.72,
+              "shape": 0.38,
+              "chirality": -0.75,
+              "tune_semitones": -12.0,
+              "fine_cents": 0.0,
+              "pulse_width": 0.5,
+              "phase_deg": 0.0,
+              "level": 0.42,
+              "pitch_tracking": "chromatic",
+              "fixed_hz": 440.0,
+              "unison_voices": 1,
+              "unison_detune_cents": 12.0,
+              "unison_width": 0.7
+            }
+          },
+          {
+            "id": 3,
+            "name": "Quad Filter",
+            "kind": {
+              "type": "filter",
+              "mode": "im_lpf_4",
+              "cutoff_hz": 1650.0,
+              "resonance": 0.26,
+              "drive": 0.16,
+              "kerr_semitones": 2.0,
+              "spread": 0.62,
+              "key_tracking": 0.35,
+              "vel_amount": 0.8,
+              "mix": 1.0
+            }
+          },
+          {
+            "id": 4,
+            "name": "VCA",
+            "kind": {
+              "type": "vca",
+              "gain": 1.0,
+              "bias": 0.0
+            }
+          },
+          {
+            "id": 5,
+            "name": "Amp Env",
+            "kind": {
+              "type": "env",
+              "mode": "adsr",
+              "attack_ms": 420.0,
+              "hold_ms": 0.0,
+              "decay_ms": 900.0,
+              "sustain": 0.78,
+              "release_ms": 1250.0,
+              "cubic_limit": 0.0,
+              "trigger_mode": "gate",
+              "delay_ms": 0.0,
+              "bursts": 1,
+              "burst_spacing_ms": 10.0
+            }
+          },
+          {
+            "id": 6,
+            "name": "Reach Drift",
+            "kind": {
+              "type": "lfo",
+              "shape": "sine",
+              "rate_hz": 0.22,
+              "sync": false,
+              "division_steps": 16.0,
+              "retrigger": false,
+              "bipolar": true
+            }
+          },
+          {
+            "id": 7,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": -2.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 3,
+            "from_module": 3,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 4,
+            "from_module": 4,
+            "from_port": "out",
+            "to_module": 7,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 5,
+            "from_module": 5,
+            "from_port": "out",
+            "to_module": 4,
+            "to_port": "cv",
+            "amount": 1.0
+          },
+          {
+            "id": 6,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 1,
+            "to_port": "pw_cv",
+            "amount": 0.14
+          },
+          {
+            "id": 7,
+            "from_module": 6,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "cv",
+            "amount": 0.45
+          }
+        ]
+      }
+    ],
+    "gain_db": 0.0,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "reach"
+        },
+        "label": "Reach"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "chirality"
+        },
+        "label": "Chirality"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 3,
+          "param": "cutoff"
+        },
+        "label": "Cutoff"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 3,
+          "param": "resonance"
+        },
+        "label": "Resonance"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 3,
+          "param": "kerr"
+        },
+        "label": "Kerr"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 3,
+          "param": "spread"
+        },
+        "label": "Spread"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 5,
+          "param": "attack"
+        },
+        "label": "Attack"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 5,
+          "param": "release"
+        },
+        "label": "Release"
+      }
+    ]
+  }
+}

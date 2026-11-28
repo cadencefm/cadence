@@ -556,7 +556,7 @@ impl App {
                     matches!(
                         m.kind,
                         ModuleKind::Vco(_) | ModuleKind::Aero(_) | ModuleKind::Noise(_)
-                    )
+                    ) || matches!(m.kind, ModuleKind::Modal(ref mdl) if mdl.strike_drive > 0.0)
                 });
                 Some((z.name.clone(), midi, z.id, samplers, has_synth))
             })

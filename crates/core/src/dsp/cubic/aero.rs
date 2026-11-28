@@ -14,12 +14,71 @@ use super::math::{
     MAX_ATOMS, NOMINAL_CHEST_PA, SQRT3, TAU,
 };
 use super::modal::{
-    body_ratio, couple_pairs, finite_or, joint_free_mode, sanitize_fundamental, triad_half_gh,
-    BodyGeometry, CoupleParams, FreeStepCoeffs, PairTopology, TriadAxis, TriadCache,
+    body_ratio, couple_pairs, finite_or, joint_free_mode, plate_candidates, sanitize_fundamental,
+    triad_half_gh, BodyGeometry, CoupleParams, FreeStepCoeffs, ModalModeDescriptor, PairTopology,
+    TriadAxis, TriadCache, MODAL_MIN_HZ,
 };
 
 /// Dimensionless energy floor below which an ungated aeroacoustic bore tail is considered quiet.
 const AERO_QUIET_FLOOR: f64 = 1e-14;
+
+/// Pure SPOT computation of active physical bore modal frequencies and peak-normalized visual
+/// weights for [`FlueJet`] (`is_reed = false`) and [`BrassReed`] (`is_reed = true`).
+#[allow(clippy::too_many_arguments)]
+pub fn aero_mode_descriptors(
+    is_reed: bool,
+    geometry: BodyGeometry,
+    atoms: usize,
+    base_hz: f64,
+    brightness: f64,
+    absorption: f64,
+    radiation: f64,
+    sample_rate: f64,
+) -> ([ModalModeDescriptor; MAX_ATOMS], usize) {
+    let sr = sanitize_sample_rate(sample_rate);
+    let f_base = sanitize_fundamental(base_hz, sr).clamp(f64::from(MODAL_MIN_HZ), 12_000.0);
+    let req_n = atoms.clamp(1, MAX_ATOMS);
+    let mut n = req_n;
+    while n > 1 && f_base * body_ratio(geometry, n - 1, req_n) > 0.44 * sr {
+        n -= 1;
+    }
+
+    let bright = finite_or(brightness, 0.5).clamp(0.0, 1.0);
+    let absorb = finite_or(absorption, 0.045).clamp(0.0, 0.5);
+    let rad = finite_or(radiation, 0.2).clamp(0.0, 1.0);
+    let tilt_exp = -1.45 + 2.55 * bright;
+    let denom_n = n.saturating_sub(1).max(1) as f64;
+
+    let mut out = [ModalModeDescriptor::default(); MAX_ATOMS];
+    let mut max_amp = 1e-9_f64;
+    for (k, slot) in out.iter_mut().take(n).enumerate() {
+        let ratio = body_ratio(geometry, k, req_n);
+        let freq_hz = (f_base * ratio).clamp(f64::from(MODAL_MIN_HZ), 20_000.0);
+        let raw_amp = if !is_reed {
+            let drv_w = ((k + 1) as f64).powf(-0.78);
+            let rad_w = ratio.powf(tilt_exp);
+            let damp =
+                1.0 + (0.4 + 2.0 * absorb) * 0.18 * (k as f64) + 0.15 * rad * ratio.powf(0.45);
+            (drv_w * rad_w / damp).max(0.0)
+        } else {
+            let mode_sc = 0.78_f64.powi(k as i32);
+            let bright_shelf = 1.0 + 0.9 * bright * (k as f64 / denom_n);
+            let damp =
+                1.0 + (0.4 + 2.0 * absorb) * 0.15 * (k as f64) + 0.12 * rad * ratio.powf(0.45);
+            (mode_sc * bright_shelf / damp).max(0.0)
+        };
+        max_amp = max_amp.max(raw_amp);
+        *slot = ModalModeDescriptor {
+            freq_hz,
+            gain: raw_amp,
+            active: true,
+        };
+    }
+    for slot in out.iter_mut().take(n) {
+        slot.gain = (slot.gain / max_amp).clamp(0.0, 1.0);
+    }
+    (out, n)
+}
 
 #[inline]
 fn sanitize_seed(seed: u64) -> u64 {
@@ -175,6 +234,7 @@ impl FlueJet {
 
     /// Construct a new [`FlueJet`] configured for `sample_rate`.
     pub fn new(sample_rate: f64, config: FlueJetConfig) -> Self {
+        let _ = plate_candidates();
         let mut flue = Self::zeroed(sample_rate);
         flue.configure(config);
         flue
@@ -182,6 +242,7 @@ impl FlueJet {
 
     /// Construct a heap-allocated [`FlueJet`] to keep debug stack frames compact.
     pub fn new_boxed(sample_rate: f64, config: FlueJetConfig) -> Box<Self> {
+        let _ = plate_candidates();
         let mut flue = Box::new(Self::zeroed(sample_rate));
         flue.configure(config);
         flue
@@ -620,6 +681,7 @@ impl BrassReed {
 
     /// Construct a new [`BrassReed`] configured for `sample_rate`.
     pub fn new(sample_rate: f64, config: BrassReedConfig) -> Self {
+        let _ = plate_candidates();
         let mut reed = Self::zeroed(sample_rate);
         reed.configure(config);
         reed
@@ -627,6 +689,7 @@ impl BrassReed {
 
     /// Construct a heap-allocated [`BrassReed`] to keep debug stack frames compact.
     pub fn new_boxed(sample_rate: f64, config: BrassReedConfig) -> Box<Self> {
+        let _ = plate_candidates();
         let mut reed = Box::new(Self::zeroed(sample_rate));
         reed.configure(config);
         reed

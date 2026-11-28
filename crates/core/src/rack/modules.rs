@@ -1,12 +1,12 @@
 //! The 12 orthogonal Eurorack modules (`Vco`, `Aero`, `Sampler`, `Noise`, `Env`, `Lfo`,
-//! `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`), port compatibility, and cable attenuverter SPOTs.
+//! `Filter`, `Vca`, `Drive`, `LoFi`, `Modal`, `Out`), port compatibility, and cable attenuverter SPOTs.
 
 use crate::dsp::env::{EnvMode, ModularEnvParams};
 use crate::mixer::{DriveMode, DrivePatch};
 use crate::rack::params::{ModuleParam, LFO_DIVISIONS};
 use crate::rack::types::{
-    AeroMode, BodyGeometry, FilterMode, InPort, LfoShape, NoiseColor, PitchTracking, ResonatorMode,
-    TriggerMode, Unit, Waveform,
+    AeroMode, BodyGeometry, FilterMode, InPort, LfoShape, NoiseColor, PairTopology, PitchTracking,
+    TriadAxis, TriggerMode, Unit, Waveform,
 };
 use crate::sampler::{
     normalize_slices, parse_filename_midi, ParamDescriptor, SampleData, SampleLoopMode,
@@ -123,14 +123,23 @@ fn default_lofi_bits() -> f32 {
 fn default_lofi_rate() -> f32 {
     16_000.0
 }
-fn default_resonator_decay() -> f32 {
-    900.0
+fn default_modal_atoms() -> u8 {
+    16
 }
-fn default_resonator_brightness() -> f32 {
-    0.65
+fn default_modal_fixed_hz() -> f32 {
+    220.0
 }
-fn default_resonator_position() -> f32 {
+fn default_modal_absorption() -> f32 {
+    0.035
+}
+fn default_modal_radiation() -> f32 {
+    0.12
+}
+fn default_modal_spread() -> f32 {
     0.35
+}
+fn default_modal_strike_drive() -> f32 {
+    0.75
 }
 
 crate::define_choice_enum! {
@@ -147,7 +156,7 @@ crate::define_choice_enum! {
         Drive => ("drive", "Drive", ["drv", "sat", "saturator", "dist"]),
         #[serde(rename = "lofi")]
         LoFi => ("lofi", "Lo-Fi", ["lo_fi", "lfi", "crush", "bitcrush", "bitcrusher"]),
-        Resonator => ("resonator", "Resonator", ["res", "modal", "rings", "plate"]),
+        Modal => ("modal", "Modal", ["mdl", "res", "resonator", "rings", "plate", "body"]),
         Out => ("out", "Out", ["output"]),
     }
 }
@@ -165,7 +174,7 @@ impl ModuleKindTag {
         Self::Vca,
         Self::Drive,
         Self::LoFi,
-        Self::Resonator,
+        Self::Modal,
     ];
 
     pub fn short_badge(self) -> &'static str {
@@ -180,7 +189,7 @@ impl ModuleKindTag {
             Self::Vca => "VCA",
             Self::Drive => "DRV",
             Self::LoFi => "LOFI",
-            Self::Resonator => "RES",
+            Self::Modal => "MODAL",
             Self::Out => "OUT",
         }
     }
@@ -194,7 +203,7 @@ impl ModuleKindTag {
         match self {
             Self::Vco | Self::Aero | Self::Sampler | Self::Noise => 0,
             Self::Env | Self::Lfo => 1,
-            Self::Filter | Self::Drive | Self::LoFi | Self::Resonator => 2,
+            Self::Filter | Self::Drive | Self::LoFi | Self::Modal => 2,
             Self::Vca | Self::Out => 3,
         }
     }
@@ -214,7 +223,7 @@ impl ModuleKindTag {
             Self::Env => &[InPort::TrigIn],
             Self::Filter | Self::Vca | Self::Drive | Self::Out => &[InPort::In, InPort::Cv],
             Self::LoFi => &[InPort::In],
-            Self::Resonator => &[InPort::In, InPort::PitchCv, InPort::Cv],
+            Self::Modal => &[InPort::In, InPort::PitchCv, InPort::TrigIn, InPort::Cv],
         }
     }
 
@@ -345,16 +354,25 @@ impl ModuleKindTag {
                 ModuleParam::SampleRateHz,
                 ModuleParam::Mix,
             ],
-            Self::Resonator => &[
-                ModuleParam::ResonatorMode,
+            Self::Modal => &[
+                ModuleParam::Geometry,
+                ModuleParam::Atoms,
                 ModuleParam::VcoPitchTrack,
                 ModuleParam::Tune,
                 ModuleParam::Fine,
                 ModuleParam::FixedHz,
-                ModuleParam::Structure,
-                ModuleParam::ResonatorDecay,
+                ModuleParam::Absorption,
+                ModuleParam::Radiation,
                 ModuleParam::Brightness,
-                ModuleParam::Position,
+                ModuleParam::Headroom,
+                ModuleParam::Kerr,
+                ModuleParam::PairTopology,
+                ModuleParam::Coupling,
+                ModuleParam::TriadAmount,
+                ModuleParam::TriadAxis,
+                ModuleParam::Spread,
+                ModuleParam::StrikeDrive,
+                ModuleParam::StrikeHardness,
                 ModuleParam::Mix,
             ],
             Self::Out => &[ModuleParam::GainDb, ModuleParam::Pan, ModuleParam::Spread],
@@ -373,7 +391,7 @@ impl ModuleKindTag {
             Self::Vca => ModuleKind::Vca(VcaModule::default()),
             Self::Drive => ModuleKind::Drive(DriveModule::default()),
             Self::LoFi => ModuleKind::LoFi(LoFiModule::default()),
-            Self::Resonator => ModuleKind::Resonator(ResonatorModule::default()),
+            Self::Modal => ModuleKind::Modal(ModalModule::default()),
             Self::Out => ModuleKind::Out(OutModule::default()),
         }
     }
@@ -1121,46 +1139,75 @@ impl Default for LoFiModule {
     }
 }
 
-/// Physical 32-mode modal resonator (`String`, `Bar`, `Membrane`, `Plate`) excited by `In`,
-/// with chromatic or fixed pitch (`PitchCv`), continuous `brightness` modulation (`Cv`),
-/// spatial strike `position`, inharmonic `structure`, and `-60 dB` RT60 `decay_ms`.
+/// Nonlinear 48-mode cubic acoustic body (`Harmonic`, `Stopped`, `Membrane`, `Bar`, `Plate`,
+/// `Cluster`) combining 1-body exact joint free Kerr/Riccati flows, 2-body reciprocal pair
+/// exchange across 5 graph topologies, 3-body lossless SO(3) resonant triads, built-in
+/// raised-cosine mallet `StrikePulse` (`TrigIn` / note trigger), and M/S complex wave drive
+/// (`In`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ResonatorModule {
+pub struct ModalModule {
     #[serde(default)]
-    pub mode: ResonatorMode,
+    pub geometry: BodyGeometry,
+    #[serde(default = "default_modal_atoms")]
+    pub atoms: u8,
     #[serde(default)]
     pub pitch_tracking: PitchTracking,
     #[serde(default)]
     pub tune_semitones: f32,
     #[serde(default)]
     pub fine_cents: f32,
-    #[serde(default = "default_fixed_hz")]
+    #[serde(default = "default_modal_fixed_hz")]
     pub fixed_hz: f32,
+    #[serde(default = "default_modal_absorption")]
+    pub absorption: f32,
+    #[serde(default = "default_modal_radiation")]
+    pub radiation: f32,
     #[serde(default = "default_half")]
-    pub structure: f32,
-    #[serde(default = "default_resonator_decay")]
-    pub decay_ms: f32,
-    #[serde(default = "default_resonator_brightness")]
     pub brightness: f32,
-    #[serde(default = "default_resonator_position")]
-    pub position: f32,
+    #[serde(default)]
+    pub headroom: f32,
+    #[serde(default)]
+    pub kerr_semitones: f32,
+    #[serde(default)]
+    pub pair_topology: PairTopology,
+    #[serde(default)]
+    pub coupling: f32,
+    #[serde(default)]
+    pub triad_amount: f32,
+    #[serde(default)]
+    pub triad_axis: TriadAxis,
+    #[serde(default = "default_modal_spread")]
+    pub spread: f32,
+    #[serde(default = "default_modal_strike_drive")]
+    pub strike_drive: f32,
+    #[serde(default = "default_half")]
+    pub strike_hardness: f32,
     #[serde(default = "default_one")]
     pub mix: f32,
 }
 
-impl Default for ResonatorModule {
+impl Default for ModalModule {
     fn default() -> Self {
         Self {
-            mode: ResonatorMode::String,
+            geometry: BodyGeometry::Harmonic,
+            atoms: 16,
             pitch_tracking: PitchTracking::Chromatic,
             tune_semitones: 0.0,
             fine_cents: 0.0,
-            fixed_hz: 440.0,
-            structure: 0.5,
-            decay_ms: 900.0,
-            brightness: 0.65,
-            position: 0.35,
+            fixed_hz: 220.0,
+            absorption: 0.035,
+            radiation: 0.12,
+            brightness: 0.5,
+            headroom: 0.0,
+            kerr_semitones: 0.0,
+            pair_topology: PairTopology::Star,
+            coupling: 0.0,
+            triad_amount: 0.0,
+            triad_axis: TriadAxis::Sum,
+            spread: 0.35,
+            strike_drive: 0.75,
+            strike_hardness: 0.5,
             mix: 1.0,
         }
     }
@@ -1209,7 +1256,7 @@ pub enum ModuleKind {
     Drive(DriveModule),
     #[serde(rename = "lofi")]
     LoFi(LoFiModule),
-    Resonator(ResonatorModule),
+    Modal(ModalModule),
     Out(OutModule),
 }
 
@@ -1226,7 +1273,7 @@ impl ModuleKind {
             Self::Vca(_) => ModuleKindTag::Vca,
             Self::Drive(_) => ModuleKindTag::Drive,
             Self::LoFi(_) => ModuleKindTag::LoFi,
-            Self::Resonator(_) => ModuleKindTag::Resonator,
+            Self::Modal(_) => ModuleKindTag::Modal,
             Self::Out(_) => ModuleKindTag::Out,
         }
     }
@@ -1386,19 +1433,28 @@ impl ModuleKind {
             (Self::LoFi(m), ModuleParam::Bits) => Some(m.bits),
             (Self::LoFi(m), ModuleParam::SampleRateHz) => Some(m.rate_hz),
             (Self::LoFi(m), ModuleParam::Mix) => Some(m.mix),
-            // Resonator
-            (Self::Resonator(m), ModuleParam::ResonatorMode) => Some(m.mode.to_index() as f32),
-            (Self::Resonator(m), ModuleParam::VcoPitchTrack) => {
+            // Modal
+            (Self::Modal(m), ModuleParam::Geometry) => Some(m.geometry.to_index() as f32),
+            (Self::Modal(m), ModuleParam::Atoms) => Some(f32::from(m.atoms)),
+            (Self::Modal(m), ModuleParam::VcoPitchTrack) => {
                 Some(m.pitch_tracking.to_index() as f32)
             }
-            (Self::Resonator(m), ModuleParam::Tune) => Some(m.tune_semitones),
-            (Self::Resonator(m), ModuleParam::Fine) => Some(m.fine_cents),
-            (Self::Resonator(m), ModuleParam::FixedHz) => Some(m.fixed_hz),
-            (Self::Resonator(m), ModuleParam::Structure) => Some(m.structure),
-            (Self::Resonator(m), ModuleParam::ResonatorDecay) => Some(m.decay_ms),
-            (Self::Resonator(m), ModuleParam::Brightness) => Some(m.brightness),
-            (Self::Resonator(m), ModuleParam::Position) => Some(m.position),
-            (Self::Resonator(m), ModuleParam::Mix) => Some(m.mix),
+            (Self::Modal(m), ModuleParam::Tune) => Some(m.tune_semitones),
+            (Self::Modal(m), ModuleParam::Fine) => Some(m.fine_cents),
+            (Self::Modal(m), ModuleParam::FixedHz) => Some(m.fixed_hz),
+            (Self::Modal(m), ModuleParam::Absorption) => Some(m.absorption),
+            (Self::Modal(m), ModuleParam::Radiation) => Some(m.radiation),
+            (Self::Modal(m), ModuleParam::Brightness) => Some(m.brightness),
+            (Self::Modal(m), ModuleParam::Headroom) => Some(m.headroom),
+            (Self::Modal(m), ModuleParam::Kerr) => Some(m.kerr_semitones),
+            (Self::Modal(m), ModuleParam::PairTopology) => Some(m.pair_topology.to_index() as f32),
+            (Self::Modal(m), ModuleParam::Coupling) => Some(m.coupling),
+            (Self::Modal(m), ModuleParam::TriadAmount) => Some(m.triad_amount),
+            (Self::Modal(m), ModuleParam::TriadAxis) => Some(m.triad_axis.to_index() as f32),
+            (Self::Modal(m), ModuleParam::Spread) => Some(m.spread),
+            (Self::Modal(m), ModuleParam::StrikeDrive) => Some(m.strike_drive),
+            (Self::Modal(m), ModuleParam::StrikeHardness) => Some(m.strike_hardness),
+            (Self::Modal(m), ModuleParam::Mix) => Some(m.mix),
             // Out
             (Self::Out(m), ModuleParam::GainDb) => Some(m.gain_db),
             (Self::Out(m), ModuleParam::Pan) => Some(m.pan),
@@ -1522,21 +1578,34 @@ impl ModuleKind {
             (Self::LoFi(m), ModuleParam::Bits) => m.bits = value,
             (Self::LoFi(m), ModuleParam::SampleRateHz) => m.rate_hz = value,
             (Self::LoFi(m), ModuleParam::Mix) => m.mix = value,
-            // Resonator
-            (Self::Resonator(m), ModuleParam::ResonatorMode) => {
-                m.mode = ResonatorMode::from_index(value.round().max(0.0) as usize)
+            // Modal
+            (Self::Modal(m), ModuleParam::Geometry) => {
+                m.geometry = BodyGeometry::from_index(value.round().max(0.0) as usize)
             }
-            (Self::Resonator(m), ModuleParam::VcoPitchTrack) => {
+            (Self::Modal(m), ModuleParam::Atoms) => m.atoms = value.round() as u8,
+            (Self::Modal(m), ModuleParam::VcoPitchTrack) => {
                 m.pitch_tracking = PitchTracking::from_index(value.round().max(0.0) as usize)
             }
-            (Self::Resonator(m), ModuleParam::Tune) => m.tune_semitones = value,
-            (Self::Resonator(m), ModuleParam::Fine) => m.fine_cents = value,
-            (Self::Resonator(m), ModuleParam::FixedHz) => m.fixed_hz = value,
-            (Self::Resonator(m), ModuleParam::Structure) => m.structure = value,
-            (Self::Resonator(m), ModuleParam::ResonatorDecay) => m.decay_ms = value,
-            (Self::Resonator(m), ModuleParam::Brightness) => m.brightness = value,
-            (Self::Resonator(m), ModuleParam::Position) => m.position = value,
-            (Self::Resonator(m), ModuleParam::Mix) => m.mix = value,
+            (Self::Modal(m), ModuleParam::Tune) => m.tune_semitones = value,
+            (Self::Modal(m), ModuleParam::Fine) => m.fine_cents = value,
+            (Self::Modal(m), ModuleParam::FixedHz) => m.fixed_hz = value,
+            (Self::Modal(m), ModuleParam::Absorption) => m.absorption = value,
+            (Self::Modal(m), ModuleParam::Radiation) => m.radiation = value,
+            (Self::Modal(m), ModuleParam::Brightness) => m.brightness = value,
+            (Self::Modal(m), ModuleParam::Headroom) => m.headroom = value,
+            (Self::Modal(m), ModuleParam::Kerr) => m.kerr_semitones = value,
+            (Self::Modal(m), ModuleParam::PairTopology) => {
+                m.pair_topology = PairTopology::from_index(value.round().max(0.0) as usize)
+            }
+            (Self::Modal(m), ModuleParam::Coupling) => m.coupling = value,
+            (Self::Modal(m), ModuleParam::TriadAmount) => m.triad_amount = value,
+            (Self::Modal(m), ModuleParam::TriadAxis) => {
+                m.triad_axis = TriadAxis::from_index(value.round().max(0.0) as usize)
+            }
+            (Self::Modal(m), ModuleParam::Spread) => m.spread = value,
+            (Self::Modal(m), ModuleParam::StrikeDrive) => m.strike_drive = value,
+            (Self::Modal(m), ModuleParam::StrikeHardness) => m.strike_hardness = value,
+            (Self::Modal(m), ModuleParam::Mix) => m.mix = value,
             // Out
             (Self::Out(m), ModuleParam::GainDb) => m.gain_db = value,
             (Self::Out(m), ModuleParam::Pan) => m.pan = value,
@@ -1710,10 +1779,7 @@ pub const fn cable_amount_range(target_kind: ModuleKindTag, to_port: InPort) -> 
         (ModuleKindTag::Filter, InPort::Cv) => (-6.0, 6.0),
         (ModuleKindTag::Vca, InPort::Cv) => (-2.0, 2.0),
         (
-            ModuleKindTag::Aero
-            | ModuleKindTag::Drive
-            | ModuleKindTag::Resonator
-            | ModuleKindTag::Out,
+            ModuleKindTag::Aero | ModuleKindTag::Drive | ModuleKindTag::Modal | ModuleKindTag::Out,
             InPort::Cv,
         ) => (-1.0, 1.0),
         _ => (-2.0, 2.0),
@@ -1743,7 +1809,7 @@ pub const fn cable_default_amount(target_kind: ModuleKindTag, to_port: InPort) -
         (ModuleKindTag::Filter, InPort::Cv) => 2.0,
         (ModuleKindTag::Vca, InPort::Cv) => 1.0,
         (ModuleKindTag::Aero | ModuleKindTag::Drive | ModuleKindTag::Out, InPort::Cv) => 0.5,
-        (ModuleKindTag::Resonator, InPort::Cv) => 0.35,
+        (ModuleKindTag::Modal, InPort::Cv) => 0.35,
         _ => 1.0,
     }
 }
@@ -1906,7 +1972,16 @@ mod tests {
         assert_choice_contract::<EnvMode>();
         assert_choice_contract::<AeroMode>();
         assert_choice_contract::<BodyGeometry>();
+        assert_choice_contract::<PairTopology>();
+        assert_choice_contract::<TriadAxis>();
         assert_choice_contract::<Waveform>();
+        for &p in &ModuleParam::ALL {
+            assert_eq!(
+                serde_json::to_string(&p).unwrap(),
+                format!("\"{}\"", p.name()),
+                "ModuleParam::{p:?} wire name must match ModuleParam::name()"
+            );
+        }
         assert_choice_contract::<TriggerMode>();
 
         assert_eq!(ModuleKindTag::ALL.len(), 12);
@@ -1945,6 +2020,24 @@ mod tests {
         assert!((vco.reach - 0.92).abs() < 1e-6);
         assert!((vco.shape - 0.5).abs() < 1e-6);
         assert!((vco.chirality - 0.0).abs() < 1e-6);
+
+        assert_eq!(
+            serde_json::to_string(&ModuleKindTag::Modal).unwrap(),
+            "\"modal\""
+        );
+        assert_eq!(ModuleKindTag::parse("modal"), Some(ModuleKindTag::Modal));
+        assert_eq!(ModuleKindTag::parse("plate"), Some(ModuleKindTag::Modal));
+        let modal = ModalModule::default();
+        assert_eq!(modal.geometry, BodyGeometry::Harmonic);
+        assert_eq!(modal.atoms, 16);
+        assert_eq!(modal.pair_topology, PairTopology::Star);
+        assert_eq!(modal.triad_axis, TriadAxis::Sum);
+        let modal_json = serde_json::to_string(&modal).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ModalModule>(&modal_json).unwrap(),
+            modal
+        );
+        assert!(serde_json::from_str::<ModalModule>(r#"{"unknown_field": 1}"#).is_err());
 
         let aero = AeroModule::default();
         assert_eq!(aero.mode, AeroMode::FlueJet);

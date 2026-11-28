@@ -40,7 +40,7 @@ pub const SMOOTH_SETTLE_EPS_F32: f32 = 1e-6;
 pub const SMOOTH_SETTLE_EPS_F64: f64 = 1e-12;
 
 /// Tail silence floor (`-140 dB`, `1e-7`) for idling bypassed time-based effects and
-/// quiet filter/resonator tail detectors.
+/// quiet filter/modal tail detectors.
 pub const TAIL_SILENCE_FLOOR_F32: f32 = 1e-7;
 /// Double-precision tail silence floor (`-140 dB`, `1e-7`).
 pub const TAIL_SILENCE_FLOOR_F64: f64 = 1e-7;

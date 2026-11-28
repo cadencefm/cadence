@@ -554,7 +554,11 @@ impl App {
                 ModuleParam::Geometry => {
                     "harmonic / stopped / membrane / bar / plate / cluster (or index)"
                 }
-                ModuleParam::Atoms => "integer bore modes (1..48)",
+                ModuleParam::Atoms => "integer modes (1..48)",
+                ModuleParam::PairTopology => "star / cascade / bloom / ring / swarm (or index)",
+                ModuleParam::TriadAxis => "diff / sum / manley (or index)",
+                ModuleParam::Headroom => "soft headroom decimal (0..4, e.g. 0.5)",
+                ModuleParam::StrikeDrive => "0..2 or 0%..200% (e.g. 0.75, 75%)",
                 ModuleParam::CubicLimit => "cubic limit (0..10, e.g. 0, 2.5)",
                 ModuleParam::Absorption => "damping decimal (0..0.5, e.g. 0.045)",
                 _ => match param.unit() {

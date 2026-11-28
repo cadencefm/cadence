@@ -5,7 +5,7 @@ use crate::layout::{DeckKind, Target};
 use cadence_core::rack::{
     cable_default_amount, compile_zone_graph, format_cable_amount, parse_cable_amount, InPort,
     ModuleKindTag, PanelPin, PatchCable, RackModule, RackPatch, RackZone, MAX_AEROS_PER_ZONE,
-    MAX_CABLES_PER_ZONE, MAX_MODULES_PER_ZONE, MAX_PANEL_PINS, MAX_RESONATORS_PER_ZONE,
+    MAX_CABLES_PER_ZONE, MAX_MODALS_PER_ZONE, MAX_MODULES_PER_ZONE, MAX_PANEL_PINS,
     PATCHBAY_COLUMNS,
 };
 
@@ -1125,15 +1125,15 @@ impl App {
                 zone.name
             );
         }
-        if kind == ModuleKindTag::Resonator {
-            let res_count = zone
+        if kind == ModuleKindTag::Modal {
+            let modal_count = zone
                 .modules
                 .iter()
-                .filter(|m| m.kind.tag() == ModuleKindTag::Resonator)
+                .filter(|m| m.kind.tag() == ModuleKindTag::Modal)
                 .count();
             ensure!(
-                res_count < MAX_RESONATORS_PER_ZONE,
-                "Zone '{}' already has the maximum {MAX_RESONATORS_PER_ZONE} Resonator modules",
+                modal_count < MAX_MODALS_PER_ZONE,
+                "Zone '{}' already has the maximum {MAX_MODALS_PER_ZONE} Modal modules",
                 zone.name
             );
         }
@@ -1457,10 +1457,10 @@ impl App {
             "add" => {
                 ensure!(
                     args.len() >= 2,
-                    "Usage: :mod add <vco|aero|sampler|noise|env|lfo|filter|vca|drive|lofi|resonator> [NAME]"
+                    "Usage: :mod add <vco|aero|sampler|noise|env|lfo|filter|vca|drive|lofi|modal> [NAME]"
                 );
                 let kind = ModuleKindTag::parse(&args[1]).with_context(|| {
-                    "Unknown module kind · use vco, aero, sampler, noise, env, lfo, filter, vca, drive, lofi, or resonator"
+                    "Unknown module kind · use vco, aero, sampler, noise, env, lfo, filter, vca, drive, lofi, or modal"
                 })?;
                 let name = if args.len() >= 3 {
                     Some(args[2..].join(" "))
@@ -1727,9 +1727,9 @@ mod tests {
     use cadence_core::presets::InstrumentPreset;
     use cadence_core::rack::{
         module_sample_key, AeroMode, AeroModule, BodyGeometry, DriveModule, EnvModule,
-        FilterModule, InPort, LfoModule, LoFiModule, ModuleKind, NoiseModule, OutModule, PanelPin,
-        PatchCable, RackModule, RackPatch, RackTemplate, ResonatorModule, SamplerModule, VcaModule,
-        VcoModule,
+        FilterModule, InPort, LfoModule, LoFiModule, ModalModule, ModuleKind, NoiseModule,
+        OutModule, PanelPin, PatchCable, RackModule, RackPatch, RackTemplate, SamplerModule,
+        VcaModule, VcoModule,
     };
     use cadence_core::runtime::AudioSnapshot;
     use cadence_core::sampler::SampleLoopMode;
@@ -2282,11 +2282,7 @@ mod tests {
             RackModule::new(7, "VCA", ModuleKind::Vca(VcaModule::default())),
             RackModule::new(8, "Drive", ModuleKind::Drive(DriveModule::default())),
             RackModule::new(9, "LoFi", ModuleKind::LoFi(LoFiModule::default())),
-            RackModule::new(
-                10,
-                "Resonator",
-                ModuleKind::Resonator(ResonatorModule::default()),
-            ),
+            RackModule::new(10, "Modal", ModuleKind::Modal(ModalModule::default())),
             RackModule::new(11, "Out", ModuleKind::Out(OutModule::default())),
         ];
         z.cables = vec![
@@ -2386,12 +2382,22 @@ mod tests {
                     );
                     seen[10] = true;
                 }
-                ModuleVisualView::Resonator { modes, .. } => {
+                ModuleVisualView::Modal {
+                    geometry,
+                    atoms,
+                    mode_bars,
+                    ..
+                } => {
+                    assert_eq!(geometry, BodyGeometry::Harmonic);
+                    assert_eq!(atoms, 16);
                     assert!(
-                        !modes.is_empty()
-                            && modes
-                                .iter()
-                                .all(|(x, h, d)| x.is_finite() && h.is_finite() && d.is_finite())
+                        !mode_bars.is_empty()
+                            && mode_bars.iter().all(|(x, a)| {
+                                x.is_finite()
+                                    && a.is_finite()
+                                    && (0.0..=1.0).contains(x)
+                                    && (0.0..=1.0).contains(a)
+                            })
                     );
                     seen[11] = true;
                 }
@@ -2654,7 +2660,7 @@ mod tests {
     }
 
     #[test]
-    fn rack_panel_empty_pins_renames_pin_reorder_cable_repatch_resonator_hotkey_route_and_delete() {
+    fn rack_panel_empty_pins_renames_pin_reorder_cable_repatch_modal_hotkey_route_and_delete() {
         let dir = tempfile::tempdir().unwrap();
         let samples_dir = dir.path().join("samples");
         std::fs::create_dir_all(&samples_dir).unwrap();
@@ -2687,7 +2693,7 @@ mod tests {
         }
 
         // 2. Add Module picker hotkey `2` selects #2 (`Aero`) and `0` selects #10 (`LoFi`) directly;
-        //    searching `/res` adds `Resonator`, and `MAX_AEROS_PER_ZONE` caps Aero modules cleanly!
+        //    searching `/mod` adds `Modal`, and `MAX_AEROS_PER_ZONE` / `MAX_MODALS_PER_ZONE` cap cleanly!
         app.press_keys("a2").unwrap();
         assert!(
             app.instrument(mod_id).unwrap().rack.zones[0]
@@ -2704,13 +2710,13 @@ mod tests {
                 .any(|m| m.kind.tag() == ModuleKindTag::LoFi),
             "Pressing `a` then `0` must add Lo-Fi (#10)"
         );
-        app.press_keys("a/res<Enter><Enter>").unwrap();
+        app.press_keys("a/mod<Enter><Enter>").unwrap();
         assert!(
             app.instrument(mod_id).unwrap().rack.zones[0]
                 .modules
                 .iter()
-                .any(|m| m.kind.tag() == ModuleKindTag::Resonator),
-            "Filtering Add Module picker for `res` must add Resonator"
+                .any(|m| m.kind.tag() == ModuleKindTag::Modal),
+            "Filtering Add Module picker for `mod` must add Modal"
         );
         // Enforce MAX_AEROS_PER_ZONE via `:mod add aero` (already have 1; adding 3 succeeds, 5th fails).
         for idx in 2..=MAX_AEROS_PER_ZONE {
@@ -2726,6 +2732,21 @@ mod tests {
         );
         // Undo extra Aeros so subsequent assertions start clean.
         for _ in 2..=MAX_AEROS_PER_ZONE {
+            app.apply(Action::Undo).unwrap();
+        }
+        // Enforce MAX_MODALS_PER_ZONE via `:mod add modal` (already have 1; adding 3 succeeds, 5th fails).
+        for idx in 2..=MAX_MODALS_PER_ZONE {
+            app.execute_command(&format!("mod add modal Body{idx}"))
+                .unwrap();
+        }
+        let err = app
+            .execute_command("mod add modal OverflowBody")
+            .expect_err("exceeding MAX_MODALS_PER_ZONE must fail cleanly");
+        assert!(
+            format!("{err:#}").contains("Modal"),
+            "cap error must mention Modal, got: {err:#}"
+        );
+        for _ in 2..=MAX_MODALS_PER_ZONE {
             app.apply(Action::Undo).unwrap();
         }
 

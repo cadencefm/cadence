@@ -15,7 +15,7 @@ use std::collections::HashSet;
 pub const MAX_ZONES: usize = 32;
 pub const MAX_CHOKE_GROUPS: u8 = 8;
 pub const MAX_MODULES_PER_ZONE: usize = 24;
-pub const MAX_RESONATORS_PER_ZONE: usize = 4;
+pub const MAX_MODALS_PER_ZONE: usize = 4;
 pub const MAX_AEROS_PER_ZONE: usize = 4;
 pub const MAX_CABLES_PER_ZONE: usize = 64;
 pub const MAX_PANEL_PINS: usize = 16;
@@ -203,14 +203,52 @@ crate::define_choice_enum! {
 }
 
 crate::define_choice_enum! {
-    /// Physical modal resonator geometry for [`crate::rack::ResonatorModule`].
+    /// Graph topology for 2-body reciprocal pair exchange in [`crate::rack::ModalModule`].
     #[derive(Default)]
-    pub enum ResonatorMode {
+    pub enum PairTopology {
         #[default]
-        String => ("string", "String", ["0", "str", "pluck", "wire"]),
-        Bar => ("bar", "Bar", ["1", "marimba", "beam", "chime", "vibe"]),
-        Membrane => ("membrane", "Membrane", ["2", "mem", "drum", "head", "skin"]),
-        Plate => ("plate", "Plate", ["3", "plt", "cymbal", "gong", "bell", "metal"]),
+        Star => ("star", "Star", ["0", "hub"]),
+        Cascade => ("cascade", "Cascade", ["1", "chain", "series"]),
+        Bloom => ("bloom", "Bloom", ["2", "swell"]),
+        Ring => ("ring", "Ring", ["3", "loop"]),
+        Swarm => ("swarm", "Swarm", ["4", "mesh", "chords"]),
+    }
+}
+
+impl PairTopology {
+    /// Convert to the `no_std`-ready primitive enum in `crate::dsp::cubic::modal`.
+    #[inline]
+    pub const fn to_cubic(self) -> crate::dsp::cubic::PairTopology {
+        match self {
+            Self::Star => crate::dsp::cubic::PairTopology::Star,
+            Self::Cascade => crate::dsp::cubic::PairTopology::Cascade,
+            Self::Bloom => crate::dsp::cubic::PairTopology::Bloom,
+            Self::Ring => crate::dsp::cubic::PairTopology::Ring,
+            Self::Swarm => crate::dsp::cubic::PairTopology::Swarm,
+        }
+    }
+}
+
+crate::define_choice_enum! {
+    /// Axis weighting for 3-body lossless SO(3) resonant triads in [`crate::rack::ModalModule`].
+    #[derive(Default)]
+    pub enum TriadAxis {
+        Diff => ("diff", "Diff", ["0", "difference"]),
+        #[default]
+        Sum => ("sum", "Sum", ["1"]),
+        Manley => ("manley", "Manley", ["2", "manley_rowe", "rowe"]),
+    }
+}
+
+impl TriadAxis {
+    /// Convert to the `no_std`-ready primitive enum in `crate::dsp::cubic::modal`.
+    #[inline]
+    pub const fn to_cubic(self) -> crate::dsp::cubic::TriadAxis {
+        match self {
+            Self::Diff => crate::dsp::cubic::TriadAxis::Diff,
+            Self::Sum => crate::dsp::cubic::TriadAxis::Sum,
+            Self::Manley => crate::dsp::cubic::TriadAxis::Manley,
+        }
     }
 }
 
@@ -328,7 +366,7 @@ crate::define_choice_enum! {
         In => ("in", "Audio In", ["audio", "audio_in", "sig"]),
         /// Modulation / control CV (Aero blow drive, Filter cutoff octaves, VCA gain/RingMod, Drive CV, Out CV).
         Cv => ("cv", "CV", ["mod", "cutoff", "gain", "amp"]),
-        /// Pitch modulation in semitones (VCO, Aero, Sampler, Resonator).
+        /// Pitch modulation in semitones (VCO, Aero, Sampler, Modal).
         PitchCv => ("pitch_cv", "Pitch CV", ["pitch", "v_oct", "voct", "freq"]),
         /// Audio-rate through-zero linear FM (VCO).
         FmIn => ("fm_in", "FM In", ["fm", "lin_fm"]),
@@ -964,7 +1002,7 @@ impl RackZone {
 
         let mut mod_ids = HashSet::with_capacity(self.modules.len());
         let mut out_count = 0usize;
-        let mut resonator_count = 0usize;
+        let mut modal_count = 0usize;
         let mut aero_count = 0usize;
         for m in &self.modules {
             m.validate()
@@ -978,8 +1016,8 @@ impl RackZone {
             if matches!(m.kind, ModuleKind::Out(_)) {
                 out_count += 1;
             }
-            if matches!(m.kind, ModuleKind::Resonator(_)) {
-                resonator_count += 1;
+            if matches!(m.kind, ModuleKind::Modal(_)) {
+                modal_count += 1;
             }
             if matches!(m.kind, ModuleKind::Aero(_)) {
                 aero_count += 1;
@@ -991,8 +1029,8 @@ impl RackZone {
             self.name
         );
         ensure!(
-            resonator_count <= MAX_RESONATORS_PER_ZONE,
-            "Zone '{}' exceeds maximum of {MAX_RESONATORS_PER_ZONE} Resonator modules (found {resonator_count})",
+            modal_count <= MAX_MODALS_PER_ZONE,
+            "Zone '{}' exceeds maximum of {MAX_MODALS_PER_ZONE} Modal modules (found {modal_count})",
             self.name
         );
         ensure!(

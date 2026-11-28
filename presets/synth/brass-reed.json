@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "name": "Brass Reed",
+  "category": "Brass",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "Brass Reed",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 60,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Brass Horn",
+            "kind": {
+              "type": "aero",
+              "mode": "brass_reed",
+              "geometry": "harmonic",
+              "atoms": 16,
+              "pitch_tracking": "chromatic",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 440.0,
+              "drive": 0.88,
+              "embouchure": 0.62,
+              "p_beat_pa": 820.0,
+              "brightness": 0.68,
+              "absorption": 0.025,
+              "radiation": 0.14,
+              "kerr_semitones": 0.6,
+              "triad_amount": 0.25,
+              "spread": 0.48,
+              "level": 0.95
+            }
+          },
+          {
+            "id": 2,
+            "name": "Breath LFO",
+            "kind": {
+              "type": "lfo",
+              "shape": "sine",
+              "rate_hz": 4.8,
+              "sync": false,
+              "division_steps": 16.0,
+              "retrigger": false,
+              "bipolar": true
+            }
+          },
+          {
+            "id": 3,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 6.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 1,
+            "to_port": "cv",
+            "amount": 0.07
+          }
+        ]
+      }
+    ],
+    "gain_db": 0.0,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "drive"
+        },
+        "label": "Drive"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "embouchure"
+        },
+        "label": "Embouchure"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "beat_pressure"
+        },
+        "label": "Beat Pa"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "brightness"
+        },
+        "label": "Brightness"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "radiation"
+        },
+        "label": "Radiation"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "triad_amount"
+        },
+        "label": "Triads"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "geometry"
+        },
+        "label": "Geometry"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "spread"
+        },
+        "label": "Spread"
+      }
+    ]
+  }
+}

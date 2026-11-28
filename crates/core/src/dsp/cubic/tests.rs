@@ -936,3 +936,94 @@ fn ambient_modal_room_passivity_iacc_and_second_order_convergence() {
         "AmbientModalRoom expected O(h^2) ratio ~4.0, got {ratio:.3}"
     );
 }
+
+#[test]
+fn modal_bank_sample_rate_quiet_wave_and_strike_and_descriptors() {
+    // 1. modal_mode_descriptors & aero_mode_descriptors respect Nyquist ceiling & normalization.
+    let (m_desc, m_n) =
+        modal_mode_descriptors(BodyGeometry::Plate, 40, 320.0, 0.75, 0.02, 0.12, 48_000.0);
+    assert!((16..=40).contains(&m_n));
+    let m_peak = m_desc[..m_n].iter().map(|d| d.gain).fold(0.0_f64, f64::max);
+    assert!((m_peak - 1.0).abs() < 1e-9);
+    assert!(m_desc[..m_n]
+        .iter()
+        .all(|d| d.active && d.freq_hz <= 0.44 * 48_000.0 + 1e-6));
+
+    for is_reed in [false, true] {
+        let (a_desc, a_n) = aero_mode_descriptors(
+            is_reed,
+            BodyGeometry::Harmonic,
+            16,
+            220.0,
+            0.6,
+            0.04,
+            0.2,
+            48_000.0,
+        );
+        assert_eq!(a_n, 16);
+        let a_peak = a_desc[..a_n].iter().map(|d| d.gain).fold(0.0_f64, f64::max);
+        assert!((a_peak - 1.0).abs() < 1e-9);
+    }
+
+    // 2. ModalBank::set_sample_rate preserves ringing state, step_wave_and_strike excites cleanly,
+    //    and is_quiet detects full decay.
+    let cfg = ModalConfig {
+        fundamental_hz: 240.0,
+        atoms: 16,
+        geometry: BodyGeometry::Membrane,
+        pair_topology: PairTopology::Star,
+        coupling: 0.2,
+        absorption: 0.06,
+        radiation: 0.45,
+        brightness: 0.6,
+        headroom: 0.5,
+        kerr_semitones: -4.0,
+        triad_amount: 0.15,
+        triad_axis: TriadAxis::Sum,
+        spread: 0.4,
+    };
+    let mut bank = ModalBank::new_boxed(48_000.0, cfg);
+    assert!(bank.is_quiet());
+
+    let mut sp = StrikePulse::new(48_000.0);
+    sp.trigger(0.75, 1.0, 0.9);
+    let mut peak = 0.0_f64;
+    for n in 0..256 {
+        let (active, p) = sp.step_midpoint();
+        let phase = TAU * 240.0 * n as f64 / 48_000.0;
+        let [l, r] = bank.step_wave_and_strike(
+            true,
+            0.35 * phase.cos(),
+            0.35 * phase.sin(),
+            active,
+            p,
+            sp.drive(),
+            sp.velocity(),
+            sp.strike_time(),
+        );
+        assert!(l.is_finite() && r.is_finite());
+        peak = peak.max(l.abs().max(r.abs()));
+    }
+    assert!(
+        peak > 0.02,
+        "expected audible combined wave+strike output, got {peak}"
+    );
+    assert!(!bank.is_quiet());
+
+    let e_before = bank.energy();
+    assert!(!bank.set_sample_rate(48_000.0));
+    assert!(bank.set_sample_rate(96_000.0));
+    assert!((bank.energy() - e_before).abs() < 1e-15);
+    bank.configure(cfg);
+
+    let mut settled = false;
+    for _ in 0..96_000 * 3 {
+        let [l, r] = bank.step_wave_and_strike(false, 0.0, 0.0, false, 0.0, 0.0, 0.0, 0.0);
+        assert!(l.is_finite() && r.is_finite());
+        if bank.is_quiet() {
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled, "ModalBank should decay to is_quiet() cleanly");
+}

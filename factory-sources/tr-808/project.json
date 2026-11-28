@@ -3912,7 +3912,7 @@
                   "drive": 0.42,
                   "asymmetry": 0.05,
                   "tone_hz": 18000.0,
-                  "output_db": 0.0,
+                  "output_db": 5.5,
                   "mix": 1.0
                 }
               },

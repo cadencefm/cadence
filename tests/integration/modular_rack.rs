@@ -25,11 +25,11 @@ use cadence_core::music::Step;
 use cadence_core::params::{InstrumentParam, ParamAddress, ValueMode};
 use cadence_core::presets::{InstrumentPreset, PresetCatalog, INSTRUMENT_PRESET_VERSION};
 use cadence_core::rack::{
-    compile_zone_graph, drum_midi, module_sample_key, normalize_cable_amount, DriveMode,
-    DriveModule, EnvModule, FilterMode, FilterModule, InPort, LoFiModule, ModuleKind,
-    ModuleKindTag, NoiseColor, NoiseModule, OutModule, PatchCable, PitchTracking, RackModule,
-    RackPatch, RackZone, ResonatorMode, ResonatorModule, SamplerModule, TriggerMode, VcaModule,
-    VcoModule, VoiceSettings, Waveform,
+    compile_zone_graph, drum_midi, module_sample_key, normalize_cable_amount, BodyGeometry,
+    DriveMode, DriveModule, EnvModule, FilterMode, FilterModule, InPort, LoFiModule, ModalModule,
+    ModuleKind, ModuleKindTag, NoiseColor, NoiseModule, OutModule, PairTopology, PatchCable,
+    PitchTracking, RackModule, RackPatch, RackZone, SamplerModule, TriadAxis, TriggerMode,
+    VcaModule, VcoModule, VoiceSettings, Waveform,
 };
 use cadence_core::sampler::{load_sample_file, SampleData, SampleLibrary};
 use cadence_engine::audio::{render_schedule_f32, render_schedule_pcm};
@@ -1453,15 +1453,15 @@ fn render_kit_round_trip_emits_rack_kit_and_plays_back_with_choke_groups() {
 }
 
 #[test]
-fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
+fn rack_modal_harmonic_and_nonlinear_plate_roundtrip_and_render() {
     let sr = 44_100u32;
 
-    // 1. Chromatic plucked `ResonatorMode::String` (A4 = MIDI 69 -> 440 Hz + 880 Hz harmonics).
-    let string_rack = RackPatch {
+    // 1. Chromatic plucked `BodyGeometry::Harmonic` (A4 = MIDI 69 -> 440 Hz + 880 Hz harmonics).
+    let harmonic_rack = RackPatch {
         kit_name: String::new(),
         zones: vec![RackZone {
             id: 1,
-            name: "Pluck String".into(),
+            name: "Pluck Harmonic".into(),
             low_midi: 0,
             high_midi: 127,
             root_midi: 60,
@@ -1502,17 +1502,26 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
                 RackModule::new(3, "Pick VCA", ModuleKind::Vca(VcaModule::default())),
                 RackModule::new(
                     4,
-                    "String",
-                    ModuleKind::Resonator(ResonatorModule {
-                        mode: ResonatorMode::String,
+                    "Harmonic Body",
+                    ModuleKind::Modal(ModalModule {
+                        geometry: BodyGeometry::Harmonic,
+                        atoms: 16,
                         pitch_tracking: PitchTracking::Chromatic,
                         tune_semitones: 0.0,
                         fine_cents: 0.0,
                         fixed_hz: 440.0,
-                        structure: 0.0,
-                        decay_ms: 900.0,
+                        absorption: 0.035,
+                        radiation: 0.12,
                         brightness: 0.65,
-                        position: 0.25,
+                        headroom: 0.75,
+                        kerr_semitones: 0.0,
+                        pair_topology: PairTopology::Swarm,
+                        coupling: 0.0,
+                        triad_amount: 0.0,
+                        triad_axis: TriadAxis::Sum,
+                        spread: 0.0,
+                        strike_drive: 0.0,
+                        strike_hardness: 0.7,
                         mix: 1.0,
                     }),
                 ),
@@ -1532,8 +1541,8 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
         resonance: 0.0,
         panel_pins: Vec::new(),
     };
-    let str_frames = render_single_hit(string_rack.clone(), 69, 1.0, 8, sr, Vec::new());
-    let mono: Vec<f64> = str_frames[882..12_000]
+    let harmonic_frames = render_single_hit(harmonic_rack.clone(), 69, 1.0, 8, sr, Vec::new());
+    let mono: Vec<f64> = harmonic_frames[882..12_000]
         .iter()
         .map(|f| 0.5 * f64::from(f[0] + f[1]))
         .collect();
@@ -1542,10 +1551,10 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
     let mag_620 = goertzel_magnitude(&mono, f64::from(sr), 620.0);
     assert!(
         mag_440 > mag_620 * 6.0 && mag_880 > mag_620 * 3.0,
-        "String resonator at A4 must ring at 440/880 Hz (440={mag_440:.4}, 880={mag_880:.4}, 620={mag_620:.4})"
+        "Harmonic modal body at A4 must ring at 440/880 Hz (440={mag_440:.4}, 880={mag_880:.4}, 620={mag_620:.4})"
     );
 
-    // 2. Nonlinear `z-1` `Drive(AtomicJet)` feedback `ResonatorMode::Plate` -> `LoFi` cymbal path +
+    // 2. Nonlinear `z-1` `Drive(AtomicJet)` feedback `BodyGeometry::Plate` -> `LoFi` cymbal path +
     //    Project JSON roundtrip.
     let plate_rack = RackPatch {
         kit_name: String::new(),
@@ -1593,16 +1602,25 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
                 RackModule::new(
                     4,
                     "Bronze Plate",
-                    ModuleKind::Resonator(ResonatorModule {
-                        mode: ResonatorMode::Plate,
+                    ModuleKind::Modal(ModalModule {
+                        geometry: BodyGeometry::Plate,
+                        atoms: 28,
                         pitch_tracking: PitchTracking::Fixed,
                         tune_semitones: 0.0,
                         fine_cents: 0.0,
                         fixed_hz: 560.0,
-                        structure: 0.48,
-                        decay_ms: 1_200.0,
-                        brightness: 0.72,
-                        position: 0.58,
+                        absorption: 0.004,
+                        radiation: 0.11,
+                        brightness: 0.65,
+                        headroom: 0.0,
+                        kerr_semitones: 0.0,
+                        pair_topology: PairTopology::Swarm,
+                        coupling: 0.24,
+                        triad_amount: 0.25,
+                        triad_axis: TriadAxis::Manley,
+                        spread: 0.4,
+                        strike_drive: 1.9,
+                        strike_hardness: 0.96,
                         mix: 1.0,
                     }),
                 ),
@@ -1627,7 +1645,14 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
                         mix: 0.75,
                     }),
                 ),
-                RackModule::new(7, "Out", ModuleKind::Out(OutModule::default())),
+                RackModule::new(
+                    7,
+                    "Out",
+                    ModuleKind::Out(OutModule {
+                        gain_db: 4.0,
+                        ..OutModule::default()
+                    }),
+                ),
             ],
             cables: vec![
                 PatchCable::new(1, 1, 3, InPort::In, 1.0),
@@ -1656,10 +1681,10 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
     let tail_rms = rms_mono(&plate_frames[13_230..22_050]);
     assert!(
         early_rms > 0.05 && tail_rms > 0.001 && tail_rms < early_rms,
-        "Plate resonator must strike loudly and decay smoothly past 300 ms (early={early_rms:.4}, tail={tail_rms:.4})"
+        "Plate modal body must strike loudly and decay smoothly past 300 ms (early={early_rms:.4}, tail={tail_rms:.4})"
     );
 
-    // Project JSON roundtrip preserves Resonator params cleanly.
+    // Project JSON roundtrip preserves Modal params cleanly.
     let mut proj = Project::empty();
     proj.mixer
         .channels
@@ -1788,10 +1813,77 @@ fn rack_param_descriptors_and_module_metadata_stay_aligned() {
             ModuleParam::Mix,
         ]
     );
+    assert_eq!(
+        ModuleKindTag::Modal.params(),
+        &[
+            ModuleParam::Geometry,
+            ModuleParam::Atoms,
+            ModuleParam::VcoPitchTrack,
+            ModuleParam::Tune,
+            ModuleParam::Fine,
+            ModuleParam::FixedHz,
+            ModuleParam::Absorption,
+            ModuleParam::Radiation,
+            ModuleParam::Brightness,
+            ModuleParam::Headroom,
+            ModuleParam::Kerr,
+            ModuleParam::PairTopology,
+            ModuleParam::Coupling,
+            ModuleParam::TriadAmount,
+            ModuleParam::TriadAxis,
+            ModuleParam::Spread,
+            ModuleParam::StrikeDrive,
+            ModuleParam::StrikeHardness,
+            ModuleParam::Mix,
+        ]
+    );
 
     for kind in [
         "eq", "filter", "comp", "limiter", "drive", "delay", "chorus", "reverb",
     ] {
         assert!(EffectDevice::is_kind_name(kind));
+    }
+}
+
+#[test]
+fn cubic_showcase_presets_load_validate_and_render_clean_audio() {
+    use cadence_core::presets::InstrumentPreset;
+    let root = crate::common::repo_root();
+    let specs: &[(&str, u8, f32, u64, bool)] = &[
+        ("presets/synth/cubic-303.json", 36, 0.95, 6, false),
+        ("presets/drums/kerr-kick.json", 36, 0.95, 6, false),
+        ("presets/drums/plate-cymbal.json", 44, 0.95, 8, true),
+        ("presets/synth/flue.json", 69, 0.9, 12, true),
+        ("presets/synth/brass-reed.json", 57, 0.9, 12, true),
+        ("presets/synth/szego-pad.json", 60, 0.85, 12, true),
+    ];
+    for &(rel_path, midi, vel, steps, expect_stereo) in specs {
+        let preset = InstrumentPreset::load(&root.join(rel_path))
+            .unwrap_or_else(|e| panic!("failed to load {rel_path}: {e}"));
+        preset
+            .validate()
+            .unwrap_or_else(|e| panic!("failed to validate {rel_path}: {e}"));
+        let frames = render_single_hit(preset.patch, midi, vel, steps, 44_100, Vec::new());
+        let mut peak = 0.0_f32;
+        let mut max_lr_diff = 0.0_f32;
+        for &[l, r] in &frames {
+            assert!(
+                l.is_finite() && r.is_finite(),
+                "{rel_path} emitted non-finite audio"
+            );
+            peak = peak.max(l.abs().max(r.abs()));
+            max_lr_diff = max_lr_diff.max((l - r).abs());
+        }
+        let rms = rms_mono(&frames);
+        assert!(
+            peak > 0.05 && peak < 0.999 && rms > 0.004,
+            "{rel_path} must render audible, unclipped audio (peak={peak:.4}, rms={rms:.4})"
+        );
+        if expect_stereo {
+            assert!(
+                max_lr_diff > 0.01,
+                "{rel_path} should render genuine stereo width (max_lr_diff={max_lr_diff:.4})"
+            );
+        }
     }
 }

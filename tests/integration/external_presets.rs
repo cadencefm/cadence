@@ -682,7 +682,7 @@ fn factory_sources_presets_samples_metadata_and_24khz_kit_audition_are_valid() {
     });
 
     // Live synth kits must match their baked sample kits 1:1 across 44.1 kHz and 48 kHz,
-    // and noise/resonator synth grooves must remain sample-rate invariant up to 96 kHz.
+    // and noise/modal synth grooves must remain sample-rate invariant up to 96 kHz.
     let parity_pairs: &[(&str, &str)] = if cfg!(debug_assertions) {
         &[("tr-808", "tr-808-synth")]
     } else {

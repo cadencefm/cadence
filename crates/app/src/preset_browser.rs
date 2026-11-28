@@ -80,9 +80,12 @@ fn matches_preset_category(item: &PresetBrowserItem, category: &str) -> bool {
                 && cat != "sampler"
                 && patch.zones.len() == 1
                 && patch.zones.first().is_some_and(|z| {
-                    z.modules
-                        .iter()
-                        .any(|m| matches!(m.kind, ModuleKind::Vco(_) | ModuleKind::Aero(_)))
+                    z.modules.iter().any(|m| {
+                        matches!(
+                            m.kind,
+                            ModuleKind::Vco(_) | ModuleKind::Aero(_)
+                        ) || matches!(m.kind, ModuleKind::Modal(ref mdl) if mdl.strike_drive > 0.0)
+                    })
                 }))
         }
         "Sampler" => {
@@ -186,6 +189,9 @@ fn summarize_rack_brief(patch: &RackPatch) -> String {
                 lead = Some(format!("{} {}", a.mode.label(), a.geometry.label()));
                 break;
             }
+            ModuleKind::Modal(m) if lead.is_none() => {
+                lead = Some(format!("Modal {}", m.geometry.label()));
+            }
             _ => {}
         }
     }
@@ -272,6 +278,13 @@ fn describe_rack_details(patch: &RackPatch) -> Vec<String> {
                         format_hz(f.cutoff_hz),
                         f.resonance * 100.0
                     )),
+                    ModuleKind::Modal(mdl) => lines.push(format!(
+                        "{}: {} · {}m · damp {:.3}",
+                        m.name,
+                        mdl.geometry.label(),
+                        mdl.atoms,
+                        mdl.absorption
+                    )),
                     ModuleKind::Sampler(s) => lines.push(format!(
                         "{}: {} · root {}",
                         m.name,
@@ -293,6 +306,7 @@ fn describe_rack_details(patch: &RackPatch) -> Vec<String> {
                         ModuleKind::Sampler(_)
                             | ModuleKind::Vco(_)
                             | ModuleKind::Aero(_)
+                            | ModuleKind::Modal(_)
                             | ModuleKind::Noise(_)
                     )
                 })
@@ -438,7 +452,7 @@ impl App {
             matches!(
                 m.kind,
                 ModuleKind::Vco(_) | ModuleKind::Aero(_) | ModuleKind::Noise(_)
-            )
+            ) || matches!(m.kind, ModuleKind::Modal(ref mdl) if mdl.strike_drive > 0.0)
         });
         let samplers: Vec<u16> = zone
             .modules

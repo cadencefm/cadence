@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "name": "Flue",
+  "category": "Lead",
+  "patch": {
+    "zones": [
+      {
+        "id": 1,
+        "name": "Flue",
+        "low_midi": 0,
+        "high_midi": 127,
+        "root_midi": 60,
+        "low_vel": 0.0,
+        "high_vel": 1.0,
+        "gain_db": 0.0,
+        "pan": 0.0,
+        "voice": {
+          "voice_mode": "poly",
+          "legato": false,
+          "glide_ms": 0.0,
+          "pitch_tracking": "chromatic",
+          "phase_reset": true
+        },
+        "modules": [
+          {
+            "id": 1,
+            "name": "Flue Pipe",
+            "kind": {
+              "type": "aero",
+              "mode": "flue_jet",
+              "geometry": "harmonic",
+              "atoms": 14,
+              "pitch_tracking": "chromatic",
+              "tune_semitones": 0.0,
+              "fine_cents": 0.0,
+              "fixed_hz": 440.0,
+              "drive": 0.74,
+              "embouchure": 0.56,
+              "p_beat_pa": 1500.0,
+              "brightness": 0.52,
+              "absorption": 0.032,
+              "radiation": 0.16,
+              "kerr_semitones": 0.25,
+              "triad_amount": 0.1,
+              "spread": 0.38,
+              "level": 0.88
+            }
+          },
+          {
+            "id": 2,
+            "name": "Breath LFO",
+            "kind": {
+              "type": "lfo",
+              "shape": "sine",
+              "rate_hz": 5.0,
+              "sync": false,
+              "division_steps": 16.0,
+              "retrigger": false,
+              "bipolar": true
+            }
+          },
+          {
+            "id": 3,
+            "name": "Out",
+            "kind": {
+              "type": "out",
+              "gain_db": 0.0,
+              "pan": 0.0,
+              "spread": 0.0
+            }
+          }
+        ],
+        "cables": [
+          {
+            "id": 1,
+            "from_module": 1,
+            "from_port": "out",
+            "to_module": 3,
+            "to_port": "in",
+            "amount": 1.0
+          },
+          {
+            "id": 2,
+            "from_module": 2,
+            "from_port": "out",
+            "to_module": 1,
+            "to_port": "cv",
+            "amount": 0.08
+          }
+        ]
+      }
+    ],
+    "gain_db": 0.0,
+    "pan": 0.0,
+    "tune_semitones": 0.0,
+    "cutoff_hz": 20000.0,
+    "resonance": 0.0,
+    "panel_pins": [
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "drive"
+        },
+        "label": "Drive"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "embouchure"
+        },
+        "label": "Embouchure"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "brightness"
+        },
+        "label": "Brightness"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "radiation"
+        },
+        "label": "Radiation"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "absorption"
+        },
+        "label": "Damping"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "geometry"
+        },
+        "label": "Geometry"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "atoms"
+        },
+        "label": "Modes"
+      },
+      {
+        "target": {
+          "scope": "module",
+          "zone": 1,
+          "module": 1,
+          "param": "spread"
+        },
+        "label": "Spread"
+      }
+    ]
+  }
+}

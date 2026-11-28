@@ -4,7 +4,6 @@
 use crate::dsp::env::EnvMode;
 use crate::dsp::lofi::{LOFI_MAX_BITS, LOFI_MAX_RATE_HZ, LOFI_MIN_BITS, LOFI_MIN_RATE_HZ};
 use crate::dsp::math::{log_to_norm, norm_to_log};
-use crate::dsp::resonator::{RESONATOR_MAX_DECAY_MS, RESONATOR_MIN_DECAY_MS};
 use crate::dsp::saturate::{
     DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ,
 };
@@ -16,8 +15,9 @@ use crate::params::{
 };
 use crate::rack::modules::{ModuleKindTag, OUT_MAX_GAIN_DB, OUT_MIN_GAIN_DB};
 use crate::rack::types::{
-    AeroMode, BodyGeometry, FilterMode, LfoShape, NoiseColor, PitchTracking, RackPatch, RackZone,
-    ResonatorMode, TriggerMode, Unit, UpdatePolicy, VoiceMode, VoiceSettings, Waveform,
+    AeroMode, BodyGeometry, FilterMode, LfoShape, NoiseColor, PairTopology, PitchTracking,
+    RackPatch, RackZone, TriadAxis, TriggerMode, Unit, UpdatePolicy, VoiceMode, VoiceSettings,
+    Waveform,
 };
 use crate::sampler::SampleLoopMode;
 use anyhow::{anyhow, ensure, Context, Result};
@@ -441,6 +441,8 @@ define_choice_kinds!(
     Waveform,
     AeroMode,
     BodyGeometry,
+    PairTopology,
+    TriadAxis,
     PitchTracking,
     SampleLoopMode,
     NoiseColor,
@@ -449,7 +451,6 @@ define_choice_kinds!(
     LfoShape,
     FilterMode,
     DriveMode,
-    ResonatorMode,
 );
 
 #[derive(Clone, Copy)]
@@ -636,21 +637,22 @@ define_module_params! {
     GainDb         => ("gain_db",          "Gain",          Continuous, (Linear OUT_MIN_GAIN_DB, OUT_MAX_GAIN_DB),           Db),
     Pan            => ("pan",              "Pan",           Continuous, (Linear -1.0, 1.0),                                  Pan),
     Spread         => ("spread",           "Spread",        Continuous, (Linear 0.0, 1.0),                                   Percent),
-    // Resonator
-    ResonatorMode  => ("resonator_mode",   "Mode",          OnTrigger,  (Choice ResonatorMode),                              Plain),
-    Structure      => ("structure",        "Structure",     Continuous, (Linear 0.0, 1.0),                                   Percent),
-    ResonatorDecay => ("resonator_decay",  "Decay",         Continuous, (Log RESONATOR_MIN_DECAY_MS, RESONATOR_MAX_DECAY_MS), Ms),
-    Brightness     => ("brightness",       "Brightness",    Continuous, (Linear 0.0, 1.0),                                   Percent),
-    Position       => ("position",         "Position",      Continuous, (Linear 0.0, 1.0),                                   Percent),
-    // Aero (and shared physical modal parameters)
+    // Modal & Aero shared physical body parameters
     AeroMode       => ("aero_mode",        "Mode",          OnTrigger,  (Choice AeroMode),                                   Plain),
     Geometry       => ("geometry",         "Geometry",      OnTrigger,  (Choice BodyGeometry),                               Plain),
     Atoms          => ("atoms",            "Modes",         OnTrigger,  (Int 1, 48),                                         Plain),
     Embouchure     => ("embouchure",       "Embouchure",    Continuous, (Linear 0.0, 1.0),                                   Percent),
-    BeatPressure   => ("p_beat_pa",        "Beat Pa",       Continuous, (Log 200.0, 8_000.0),                                Pascals),
+    BeatPressure   => ("beat_pressure",    "Beat Pa",       Continuous, (Log 200.0, 8_000.0),                                Pascals),
+    Brightness     => ("brightness",       "Brightness",    Continuous, (Linear 0.0, 1.0),                                   Percent),
     Absorption     => ("absorption",       "Damping",       Continuous, (Linear 0.0, 0.5),                                   Decimal),
     Radiation      => ("radiation",        "Radiation",     Continuous, (Linear 0.0, 1.0),                                   Percent),
+    Headroom       => ("headroom",         "Headroom",      Continuous, (Linear 0.0, 4.0),                                   Decimal),
+    PairTopology   => ("pair_topology",    "Topology",      OnTrigger,  (Choice PairTopology),                               Plain),
+    Coupling       => ("coupling",         "Coupling",      Continuous, (Linear 0.0, 1.0),                                   Percent),
     TriadAmount    => ("triad_amount",     "Triads",        Continuous, (Linear 0.0, 1.0),                                   Percent),
+    TriadAxis      => ("triad_axis",       "Triad Axis",    OnTrigger,  (Choice TriadAxis),                                  Plain),
+    StrikeDrive    => ("strike_drive",     "Strike",        Continuous, (Linear 0.0, 2.0),                                   Percent),
+    StrikeHardness => ("strike_hardness",  "Hardness",      Continuous, (Linear 0.0, 1.0),                                   Percent),
 }
 
 macro_rules! match_module_param_aliases {
@@ -865,7 +867,7 @@ impl ModuleParam {
                 FixedHz:       "fixed" | "fixed_hz" | "freq" | "hz",
                 Drive:         "drive" | "pressure" | "blow",
                 Embouchure:    "embouchure" | "emb" | "lip" | "stiffness",
-                BeatPressure:  "beat" | "beat_pa" | "p_beat" | "p_beat_pa",
+                BeatPressure:  "beat" | "beat_pa" | "beat_pressure" | "p_beat" | "p_beat_pa",
                 Brightness:    "bright" | "brightness" | "tone",
                 Absorption:    "absorption" | "absorb" | "damp" | "damping",
                 Radiation:     "radiation" | "rad" | "air",
@@ -942,16 +944,25 @@ impl ModuleParam {
                 SampleRateHz: "rate" | "rate_hz" | "sample_rate" | "sample_rate_hz" | "clock" | "sr",
                 Mix:          "mix" | "wet",
             },
-            Resonator => {
-                ResonatorMode:  "mode" | "resonator_mode" | "type" | "body",
+            Modal => {
+                Geometry:       "geometry" | "geom" | "body" | "mode" | "type",
+                Atoms:          "atoms" | "modes" | "count",
                 VcoPitchTrack:  "track" | "tracking" | "pitch_track" | "pitch_tracking" | "vco_pitch_track",
                 Tune:           "tune" | "semi" | "semitones" | "pitch",
                 Fine:           "fine" | "cents",
                 FixedHz:        "freq" | "hz" | "fixed" | "fixed_hz",
-                Structure:      "structure" | "struc" | "inharm" | "stiffness",
-                ResonatorDecay: "decay" | "decay_ms" | "resonator_decay" | "rt60",
-                Brightness:     "bright" | "brightness" | "damp" | "damping" | "tone",
-                Position:       "pos" | "position" | "strike" | "pluck",
+                Absorption:     "absorption" | "absorb" | "damp" | "damping" | "decay",
+                Radiation:      "radiation" | "rad" | "air",
+                Brightness:     "bright" | "brightness" | "tone",
+                Headroom:       "headroom" | "patm" | "p_atm" | "limit",
+                Kerr:           "kerr" | "bend" | "dispersion",
+                PairTopology:   "topology" | "pair_topology" | "topo" | "pairs",
+                Coupling:       "coupling" | "couple" | "pair_coupling",
+                TriadAmount:    "triads" | "triad" | "triad_amount",
+                TriadAxis:      "triad_axis" | "axis",
+                Spread:         "spread" | "width" | "quad",
+                StrikeDrive:    "strike" | "strike_drive" | "mallet" | "hit",
+                StrikeHardness: "hardness" | "strike_hardness" | "hard",
                 Mix:            "mix" | "wet",
             },
             Out => {

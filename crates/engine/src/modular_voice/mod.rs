@@ -9,25 +9,27 @@ mod nodes;
 use cadence_core::dsp::{
     control_stride_mask, decay_coeff_60db_ms, flush_denormal_f64, fm_depth_from_amount,
     glide_coeff_ms, one_pole_coeff_ms, sanitize_sample, sanitize_sample_rate, smooth_step_f32,
-    smooth_step_f64, stereo_mid_f64, voice_guard_f64, AdsrStage, ModalResonator, CHOKE_MS,
-    FAST_RELEASE_MS, TAIL_SILENCE_FLOOR_F64,
+    smooth_step_f64, stereo_mid_f64, voice_guard_f64, AdsrStage, CHOKE_MS, FAST_RELEASE_MS,
+    TAIL_SILENCE_FLOOR_F64,
 };
 pub use cadence_core::rack::SamplerParams;
 use cadence_core::rack::{
     cable_signal_level, denormalize_cable_amount, module_sample_key, AeroModule, CompiledCable,
     CompiledOp, CompiledZoneGraph, DriveModule, EnvModule, FilterMode, FilterModule, InPort,
-    LfoModule, LoFiModule, ModuleKind, ModuleKindTag, ModuleParam, NoiseModule, OutModule, OutPort,
-    PitchTracking, RackZone, ResonatorModule, SampleLoopMode, TriggerMode, UpdatePolicy, VcaModule,
-    VcoModule, VoiceMode, VoiceSettings, MAX_AEROS_PER_ZONE, MAX_CABLES_PER_ZONE,
-    MAX_MODULES_PER_ZONE, MAX_RESONATORS_PER_ZONE,
+    LfoModule, LoFiModule, ModalModule, ModuleKind, ModuleKindTag, ModuleParam, NoiseModule,
+    OutModule, OutPort, PitchTracking, RackZone, SampleLoopMode, TriggerMode, UpdatePolicy,
+    VcaModule, VcoModule, VoiceMode, VoiceSettings, MAX_AEROS_PER_ZONE, MAX_CABLES_PER_ZONE,
+    MAX_MODALS_PER_ZONE, MAX_MODULES_PER_ZONE,
 };
 #[cfg(test)]
-use cadence_core::rack::{AeroMode, BodyGeometry, LfoShape, ResonatorMode, SamplerModule};
+use cadence_core::rack::{
+    AeroMode, BodyGeometry, LfoShape, PairTopology, SamplerModule, TriadAxis,
+};
 use cadence_core::runtime::{RackActivityTelemetry, SampleBank};
 use cadence_core::sampler::SampleData;
 use nodes::{
-    AeroBankSlot, FilterBankSlot, ModuleNode, NodeInputs, ProcessCtx, TailBanks, TriggerCtx,
-    TriggerState, VoiceLocks,
+    AeroBankSlot, FilterBankSlot, ModalBankSlot, ModuleNode, NodeInputs, ProcessCtx, TailBanks,
+    TriggerCtx, TriggerState, VoiceLocks,
 };
 use std::sync::Arc;
 
@@ -36,13 +38,9 @@ const DEFAULT_TAIL_TIMEOUT_SEC: f64 = 2.0;
 /// Upper fallback cap for naturally decaying self-gated aeroacoustic bore tails (normal tails
 /// retire early as soon as `FlueJet::is_quiet()` / `BrassReed::is_quiet()` triggers).
 const MAX_AERO_TAIL_SEC: f64 = 10.0;
-/// Upper fallback cap for stuck/self-oscillating resonator tails (`28 s` covers bright
-/// modes up to `12 s` RT60 decaying below `-120 dB` with excitation headroom; normal
-/// tails retire early as soon as `ModalResonator::quiet()` triggers).
-const MAX_RESONATOR_TAIL_SEC: f64 = 28.0;
-/// Multiplier from base resonator `decay_ms` to fallback tail timeout (`1.455x` max
-/// brightness stretch × `2.0x` for `-120 dB` quiet threshold + headroom).
-const RESONATOR_TAIL_SAFETY_MULT: f64 = 3.2;
+/// Upper fallback cap for naturally decaying nonlinear modal body tails (normal tails retire
+/// early as soon as `ModalNode::is_quiet()` triggers).
+const MAX_MODAL_TAIL_SEC: f64 = 18.0;
 
 /// Maximum number of inline per-voice P-locks tracked without heap allocation.
 pub const MAX_VOICE_LOCKS: usize = 32;
@@ -95,7 +93,7 @@ pub enum ModuleParams {
     Vca(VcaModule),
     Drive(DriveModule),
     LoFi(LoFiModule),
-    Resonator(ResonatorModule),
+    Modal(ModalModule),
     Out(OutModule),
 }
 
@@ -119,7 +117,7 @@ impl ModuleParams {
             ModuleKind::Vca(m) => Self::Vca(*m),
             ModuleKind::Drive(m) => Self::Drive(*m),
             ModuleKind::LoFi(m) => Self::LoFi(*m),
-            ModuleKind::Resonator(m) => Self::Resonator(*m),
+            ModuleKind::Modal(m) => Self::Modal(*m),
             ModuleKind::Out(m) => Self::Out(*m),
         }
     }
@@ -137,7 +135,7 @@ impl ModuleParams {
             Self::Vca(_) => ModuleKindTag::Vca,
             Self::Drive(_) => ModuleKindTag::Drive,
             Self::LoFi(_) => ModuleKindTag::LoFi,
-            Self::Resonator(_) => ModuleKindTag::Resonator,
+            Self::Modal(_) => ModuleKindTag::Modal,
             Self::Out(_) => ModuleKindTag::Out,
         }
     }
@@ -163,7 +161,7 @@ impl ModuleParams {
             Self::Vca(m) => ModuleKind::Vca(m),
             Self::Drive(m) => ModuleKind::Drive(m),
             Self::LoFi(m) => ModuleKind::LoFi(m),
-            Self::Resonator(m) => ModuleKind::Resonator(m),
+            Self::Modal(m) => ModuleKind::Modal(m),
             Self::Out(m) => ModuleKind::Out(m),
         };
         if !kind.write_normalized(param, norm, total_frames) {
@@ -224,7 +222,6 @@ pub struct ModularVoice {
     control_mask: u32,
     tail_frames: u32,
     tail_elapsed_frames: u32,
-    has_resonator: bool,
 
     // Fallback gate/choke envelope used when a zone has no lifetime Env modules.
     fallback_env: f64,
@@ -233,6 +230,8 @@ pub struct ModularVoice {
     sampler_only: bool,
     sampler_only_one_shot: bool,
     any_sampler_has_trig_in: bool,
+    has_self_struck_modal: bool,
+    any_self_struck_modal_has_trig_in: bool,
     self_gated_only: bool,
 
     // Compiled flat DAG snapshot (zero heap pointers).
@@ -253,14 +252,16 @@ pub struct ModularVoice {
     sampler_slot_count: usize,
     aero_slots: [u8; MAX_AEROS_PER_ZONE],
     aero_slot_count: usize,
+    modal_slots: [u8; MAX_MODALS_PER_ZONE],
+    modal_slot_count: usize,
 
     // Smoothed cable attenuverters and self-contained per-slot module nodes.
     cable_current: [f32; MAX_CABLES_PER_ZONE],
     cable_target: [f32; MAX_CABLES_PER_ZONE],
     nodes: [ModuleNode; MAX_MODULES_PER_ZONE],
-    // Heap-hosted 32-mode physical resonator banks, stereo multi-mode filters, and
+    // Heap-hosted 48-mode nonlinear modal banks, stereo multi-mode filters, and
     // physical aeroacoustic wind banks (pre-allocated once per voice, zero RT allocs).
-    resonator_banks: Box<[ModalResonator]>,
+    modal_banks: Box<[ModalBankSlot]>,
     filter_banks: Box<[FilterBankSlot]>,
     aero_banks: Box<[AeroBankSlot]>,
 
@@ -301,13 +302,14 @@ impl ModularVoice {
             control_mask: control_stride_mask(sr, VOICE_CONTROL_RATE_HZ),
             tail_frames: (sr * DEFAULT_TAIL_TIMEOUT_SEC) as u32,
             tail_elapsed_frames: 0,
-            has_resonator: false,
             fallback_env: 0.0,
             fallback_releasing: false,
             fallback_release_coeff: decay_coeff_60db_ms(FAST_RELEASE_MS, sr),
             sampler_only: false,
             sampler_only_one_shot: false,
             any_sampler_has_trig_in: false,
+            has_self_struck_modal: false,
+            any_self_struck_modal_has_trig_in: false,
             self_gated_only: false,
             ops: [EMPTY_OP; MAX_MODULES_PER_ZONE],
             op_count: 0,
@@ -326,10 +328,14 @@ impl ModularVoice {
             sampler_slot_count: 0,
             aero_slots: [0; MAX_AEROS_PER_ZONE],
             aero_slot_count: 0,
+            modal_slots: [0; MAX_MODALS_PER_ZONE],
+            modal_slot_count: 0,
             cable_current: [0.0; MAX_CABLES_PER_ZONE],
             cable_target: [0.0; MAX_CABLES_PER_ZONE],
             nodes: [ModuleNode::default(); MAX_MODULES_PER_ZONE],
-            resonator_banks: vec![ModalResonator::new(sr); MAX_RESONATORS_PER_ZONE]
+            modal_banks: (0..MAX_MODALS_PER_ZONE)
+                .map(|_| ModalBankSlot::new(sr))
+                .collect::<Vec<_>>()
                 .into_boxed_slice(),
             filter_banks: vec![FilterBankSlot::new(sr); MAX_MODULES_PER_ZONE].into_boxed_slice(),
             aero_banks: (0..MAX_AEROS_PER_ZONE)
@@ -412,6 +418,11 @@ impl ModularVoice {
             for &s in &self.aero_slots[..self.aero_slot_count] {
                 if let Some(ModuleNode::Aero(node)) = self.nodes.get(usize::from(s)) {
                     max_s = max_s.max(node.current_level(&self.aero_banks));
+                }
+            }
+            for &s in &self.modal_slots[..self.modal_slot_count] {
+                if let Some(ModuleNode::Modal(node)) = self.nodes.get(usize::from(s)) {
+                    max_s = max_s.max(node.current_level(&self.modal_banks));
                 }
             }
             return (max_s * self.velocity) as f32;
@@ -645,6 +656,10 @@ impl ModularVoice {
         self.aero_slots[..self.aero_slot_count]
             .copy_from_slice(&graph.aero_slots[..self.aero_slot_count]);
 
+        self.modal_slot_count = graph.modal_slots.len().min(MAX_MODALS_PER_ZONE);
+        self.modal_slots[..self.modal_slot_count]
+            .copy_from_slice(&graph.modal_slots[..self.modal_slot_count]);
+
         same_topology
     }
 
@@ -781,6 +796,8 @@ impl ModularVoice {
         let cable_count = self.cable_count;
         let mut has_continuous_source = false;
         let mut has_non_sampler_source = false;
+        let mut has_self_struck_modal = false;
+        let mut any_self_struck_modal_trig = false;
         let mut all_samplers_one_shot = self.sampler_slot_count > 0;
         let mut any_sampler_trig = false;
         for (s, node) in self.nodes.iter().take(op_count).enumerate() {
@@ -791,6 +808,25 @@ impl ModularVoice {
                 }
                 ModuleNode::Aero(_) => {
                     has_non_sampler_source = true;
+                }
+                ModuleNode::Modal(_) => {
+                    if !slot_has_in_port(
+                        &self.ops[..op_count],
+                        &self.cables[..cable_count],
+                        s,
+                        InPort::In,
+                    ) {
+                        has_self_struck_modal = true;
+                        has_non_sampler_source = true;
+                        if slot_has_in_port(
+                            &self.ops[..op_count],
+                            &self.cables[..cable_count],
+                            s,
+                            InPort::TrigIn,
+                        ) {
+                            any_self_struck_modal_trig = true;
+                        }
+                    }
                 }
                 ModuleNode::Sampler(smp) => {
                     if slot_has_in_port(
@@ -812,8 +848,11 @@ impl ModularVoice {
         self.sampler_only_one_shot =
             self.sampler_only && all_samplers_one_shot && !any_sampler_trig;
         self.any_sampler_has_trig_in = any_sampler_trig;
+        self.has_self_struck_modal = has_self_struck_modal;
+        self.any_self_struck_modal_has_trig_in = any_self_struck_modal_trig;
         self.self_gated_only =
-            (self.sampler_slot_count > 0 || self.aero_slot_count > 0) && !has_continuous_source;
+            (self.sampler_slot_count > 0 || self.aero_slot_count > 0 || has_self_struck_modal)
+                && !has_continuous_source;
 
         self.active = true;
         self.released = false;
@@ -850,8 +889,8 @@ impl ModularVoice {
         let ops = &self.ops[..op_count];
         let cables = &self.cables[..cable_count];
         let mut tstate = TriggerState {
-            resonator_banks: &mut self.resonator_banks,
-            next_res_bank: 0,
+            modal_banks: &mut self.modal_banks,
+            next_modal_bank: 0,
             filter_banks: &mut self.filter_banks,
             aero_banks: &mut self.aero_banks,
             next_aero_bank: 0,
@@ -875,23 +914,19 @@ impl ModularVoice {
                 phase_reset: self.voice_settings.phase_reset,
                 eff_retarget,
                 eff_legato,
+                has_in: slot_has_in_port(ops, cables, s, InPort::In),
                 has_trig_in: slot_has_in_port(ops, cables, s, InPort::TrigIn),
                 has_cv: slot_has_in_port(ops, cables, s, InPort::Cv),
                 acid_vel_amount,
             };
             self.nodes[s].on_trigger(&tctx, &mut tstate);
         }
-        self.has_resonator = tstate.next_res_bank > 0;
         let use_post_gate_only = self.lifetime_env_count > 0
             && !(self.sampler_only && !self.any_sampler_has_trig_in)
             && self.all_env_gates_closed();
-        let max_tail_res_decay_ms = if self.has_resonator {
-            self.max_tail_resonator_decay_ms(use_post_gate_only)
-        } else {
-            0.0
-        };
+        let has_modal_tail = self.has_modal_tail(use_post_gate_only);
         let has_aero_tail = self.has_aero_tail(use_post_gate_only);
-        self.tail_frames = self.compute_tail_frames(max_tail_res_decay_ms, has_aero_tail);
+        self.tail_frames = self.compute_tail_frames(has_modal_tail, has_aero_tail);
     }
 
     /// Retarget an active voice cleanly in-place (preserving glide, phases, filter
@@ -1131,7 +1166,7 @@ impl ModularVoice {
             fallback_env: self.fallback_env,
             bank,
             preview,
-            resonator_banks: &mut self.resonator_banks,
+            modal_banks: &mut self.modal_banks,
             filter_banks: &mut self.filter_banks,
             aero_banks: &mut self.aero_banks,
         };
@@ -1273,38 +1308,35 @@ impl ModularVoice {
     }
 
     #[inline]
-    fn max_tail_resonator_decay_ms(&self, use_post_gate_only: bool) -> f64 {
+    fn has_modal_tail(&self, use_post_gate_only: bool) -> bool {
+        if self.modal_slot_count == 0 {
+            return false;
+        }
         if self.lifetime_env_count == 0 && !self.self_gated_only {
-            // Fallback gate attenuates `Out` directly; no resonator sits post-gate.
-            return 0.0;
+            return false;
         }
-        let mut best = 0.0_f64;
         if use_post_gate_only {
-            for &slot in &self.post_gate_tail_slots[..self.post_gate_tail_count] {
-                if let Some(ModuleNode::Resonator(res)) = self.nodes.get(usize::from(slot)) {
-                    best = best.max(res.max_tail_decay_ms());
-                }
-            }
+            self.post_gate_tail_slots[..self.post_gate_tail_count]
+                .iter()
+                .any(|&slot| {
+                    matches!(
+                        self.nodes.get(usize::from(slot)),
+                        Some(ModuleNode::Modal(_))
+                    )
+                })
         } else {
-            for node in &self.nodes[..self.op_count] {
-                if let ModuleNode::Resonator(res) = node {
-                    best = best.max(res.max_tail_decay_ms());
-                }
-            }
+            true
         }
-        best
     }
 
     #[inline]
-    fn compute_tail_frames(&self, max_res_decay_ms: f64, has_aero_tail: bool) -> u32 {
-        let mut tail_sec = if max_res_decay_ms > 0.0 {
-            (max_res_decay_ms * 0.001 * RESONATOR_TAIL_SAFETY_MULT)
-                .clamp(DEFAULT_TAIL_TIMEOUT_SEC, MAX_RESONATOR_TAIL_SEC)
-        } else {
-            DEFAULT_TAIL_TIMEOUT_SEC
-        };
+    fn compute_tail_frames(&self, has_modal_tail: bool, has_aero_tail: bool) -> u32 {
+        let mut tail_sec = DEFAULT_TAIL_TIMEOUT_SEC;
         if has_aero_tail {
             tail_sec = tail_sec.max(MAX_AERO_TAIL_SEC);
+        }
+        if has_modal_tail {
+            tail_sec = tail_sec.max(MAX_MODAL_TAIL_SEC);
         }
         (self.sample_rate * tail_sec) as u32
     }
@@ -1345,7 +1377,14 @@ impl ModularVoice {
                 samplers_done
             };
             let aero_done = self.aero_slot_count == 0 || self.released;
-            sampler_done && aero_done
+            let modal_done = if !self.has_self_struck_modal {
+                true
+            } else if self.any_self_struck_modal_has_trig_in {
+                self.released
+            } else {
+                true
+            };
+            sampler_done && aero_done && modal_done
         } else {
             self.fallback_releasing && self.fallback_env <= TAIL_SILENCE_FLOOR_F64
         };
@@ -1354,16 +1393,14 @@ impl ModularVoice {
             return;
         }
 
-        if (self.has_resonator || self.aero_slot_count > 0)
+        if (self.modal_slot_count > 0 || self.aero_slot_count > 0)
             && (self.tail_elapsed_frames == 0 || control_tick || self.tail_frames <= 1)
         {
             let use_post_gate_only = envs_done && self.all_env_gates_closed();
-            let max_res = if self.has_resonator {
-                self.max_tail_resonator_decay_ms(use_post_gate_only)
-            } else {
-                0.0
-            };
-            let budget = self.compute_tail_frames(max_res, self.has_aero_tail(use_post_gate_only));
+            let budget = self.compute_tail_frames(
+                self.has_modal_tail(use_post_gate_only),
+                self.has_aero_tail(use_post_gate_only),
+            );
             let needed = budget.saturating_sub(self.tail_elapsed_frames);
             if needed > self.tail_frames {
                 self.tail_frames = needed;
@@ -1380,7 +1417,7 @@ impl ModularVoice {
     #[inline]
     fn tails_quiet(&self, envs_done: bool) -> bool {
         let banks = TailBanks {
-            resonator_banks: &self.resonator_banks,
+            modal_banks: &self.modal_banks,
             filter_banks: &self.filter_banks,
             aero_banks: &self.aero_banks,
         };

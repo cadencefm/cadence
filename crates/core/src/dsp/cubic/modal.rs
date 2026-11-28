@@ -15,6 +15,72 @@ use super::math::{
 /// Maximum number of precomputed 3-wave resonant triads stored in a modal bank.
 pub const MAX_TRIADS: usize = MAX_ATOMS * 3;
 
+/// Minimum base fundamental frequency (Hz) for [`ModalBank`].
+pub const MODAL_MIN_HZ: f32 = 20.0;
+/// Maximum base fundamental frequency (Hz) for [`ModalBank`].
+pub const MODAL_MAX_HZ: f32 = 12_000.0;
+/// Squared amplitude energy floor below which an unexcited [`ModalBank`] tail is quiet
+/// (`sqrt(1e-14) = 1e-7`, aligned with `TAIL_SILENCE_FLOOR_F64`).
+pub const MODAL_SILENCE_ENERGY: f64 = 1e-14;
+
+/// Analytical mode frequency and normalized radiation weight (shared by DSP & UI visualizers).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ModalModeDescriptor {
+    /// Resonant frequency of this mode (Hz).
+    pub freq_hz: f64,
+    /// Peak-normalized visual amplitude weight in `[0.0, 1.0]`.
+    pub gain: f64,
+    /// True when this mode sits below the active Nyquist safety ceiling (`0.44 * sr`).
+    pub active: bool,
+}
+
+/// Pure SPOT computation of active physical modal frequencies and peak-normalized visual
+/// weights for [`ModalBank`], matching [`ModalBank::configure`]'s exact eigenfrequency ratios,
+/// `0.44 * sr` Nyquist ceiling, and brightness tilt exponent `-1.45 + 2.55 * brightness`.
+pub fn modal_mode_descriptors(
+    geometry: BodyGeometry,
+    atoms: usize,
+    base_hz: f64,
+    brightness: f64,
+    absorption: f64,
+    radiation: f64,
+    sample_rate: f64,
+) -> ([ModalModeDescriptor; MAX_ATOMS], usize) {
+    let sr = sanitize_sample_rate(sample_rate);
+    let f_base =
+        sanitize_fundamental(base_hz, sr).clamp(f64::from(MODAL_MIN_HZ), f64::from(MODAL_MAX_HZ));
+    let req_n = atoms.clamp(1, MAX_ATOMS);
+    let mut n = req_n;
+    while n > 1 && f_base * body_ratio(geometry, n - 1, req_n) > 0.44 * sr {
+        n -= 1;
+    }
+
+    let bright = finite_or(brightness, 0.5).clamp(0.0, 1.0);
+    let absorb = finite_or(absorption, 0.035).clamp(0.0, 0.5);
+    let rad = finite_or(radiation, 0.12).clamp(0.0, 1.0);
+    let tilt_exp = -1.45 + 2.55 * bright;
+
+    let mut out = [ModalModeDescriptor::default(); MAX_ATOMS];
+    let mut max_amp = 1e-9_f64;
+    for (k, slot) in out.iter_mut().take(n).enumerate() {
+        let ratio = body_ratio(geometry, k, req_n);
+        let freq_hz = (f_base * ratio).clamp(f64::from(MODAL_MIN_HZ), 20_000.0);
+        let rad_w = ratio.powf(tilt_exp);
+        let damp = 1.0 + (0.35 + 2.2 * absorb) * 0.12 * (k as f64) + 0.12 * rad * ratio.powf(0.32);
+        let amp = (rad_w / damp).max(0.0);
+        max_amp = max_amp.max(amp);
+        *slot = ModalModeDescriptor {
+            freq_hz,
+            gain: amp,
+            active: true,
+        };
+    }
+    for slot in out.iter_mut().take(n) {
+        slot.gain = (slot.gain / max_amp).clamp(0.0, 1.0);
+    }
+    (out, n)
+}
+
 /// Circular membrane eigenfrequency ratios (Bessel `J_m` zero ratios, first 16 modes).
 pub const BESSEL_RATIOS: [f64; 16] = [
     1.0, 1.593, 2.136, 2.296, 2.653, 2.917, 3.156, 3.501, 3.600, 3.890, 4.150, 4.490, 4.810, 5.120,
@@ -869,6 +935,7 @@ impl ModalBank {
 
     /// Construct a new [`ModalBank`] configured for `sample_rate`.
     pub fn new(sample_rate: f64, config: ModalConfig) -> Self {
+        let _ = plate_candidates();
         let mut bank = Self::zeroed(sample_rate);
         bank.configure(config);
         bank
@@ -876,6 +943,7 @@ impl ModalBank {
 
     /// Construct a heap-allocated [`ModalBank`] to keep debug stack frames compact.
     pub fn new_boxed(sample_rate: f64, config: ModalConfig) -> Box<Self> {
+        let _ = plate_candidates();
         let mut bank = Box::new(Self::zeroed(sample_rate));
         bank.configure(config);
         bank
@@ -963,8 +1031,11 @@ impl ModalBank {
 
         let r_norm = r_sq.sqrt();
         let r_inv = if r_norm > 0.0 { 1.0 / r_norm } else { 1.0 };
-        let hit_norm = hit_sq.sqrt();
-        let hit_inv = if hit_norm > 0.0 { 1.0 / hit_norm } else { 1.0 };
+        let hit_inv = if hit_sq > 0.0 {
+            (n as f64 / hit_sq).sqrt()
+        } else {
+            1.0
+        };
         for k in 0..n {
             self.read[k] *= r_inv;
             self.hit_w[k] *= hit_inv;
@@ -1007,6 +1078,26 @@ impl ModalBank {
         }
     }
 
+    /// Configured sample rate in Hz.
+    #[inline]
+    pub fn sample_rate(&self) -> f64 {
+        self.sample_rate
+    }
+
+    /// Update sample rate without clearing ringing modal states; returns `true` if the
+    /// sanitized sample rate changed (signaling the caller to call [`Self::configure`]).
+    #[inline]
+    pub fn set_sample_rate(&mut self, sample_rate: f64) -> bool {
+        let sr = sanitize_sample_rate(sample_rate);
+        if sr.to_bits() == self.sample_rate.to_bits() {
+            return false;
+        }
+        self.sample_rate = sr;
+        self.h_full = 1.0 / sr;
+        self.h_half = 0.5 * self.h_full;
+        true
+    }
+
     /// Clear all modal oscillation state and palindromic parity to clean silence while
     /// preserving the active configuration.
     pub fn reset(&mut self) {
@@ -1021,6 +1112,12 @@ impl ModalBank {
     #[inline]
     pub fn active_modes(&self) -> usize {
         self.n
+    }
+
+    /// True when total squared modal energy has decayed below [`MODAL_SILENCE_ENERGY`].
+    #[inline]
+    pub fn is_quiet(&self) -> bool {
+        self.energy() < MODAL_SILENCE_ENERGY
     }
 
     #[inline]
@@ -1283,6 +1380,63 @@ impl ModalBank {
         self.drive_port_pass(in_re, in_im, 0.5, false);
         self.triads.apply_pass(&self.x, &mut self.y, n, true, false);
         self.triads.apply_pass(&self.x, &mut self.y, n, true, true);
+        self.drive_port_pass(in_re, in_im, 0.5, true);
+        self.couple(true, 0.5);
+        for k in (0..n).rev() {
+            self.joint_free_step(k, false, 0.0);
+        }
+        self.step_idx = self.step_idx.wrapping_add(1);
+        self.read_stereo()
+    }
+
+    /// Unified symmetric Strang `O(h^2)` step supporting simultaneous M/S complex wave
+    /// excitation (`(in_re, in_im)`) and layered mallet strike impulse (`strike_pulse`).
+    ///
+    /// Dispatches to [`Self::step_free_decay`], [`Self::step_strike`], or [`Self::step_wave`]
+    /// when only one or neither excitation channel is active.
+    #[allow(clippy::too_many_arguments)]
+    pub fn step_wave_and_strike(
+        &mut self,
+        wave_active: bool,
+        in_re: f64,
+        in_im: f64,
+        strike_active: bool,
+        strike_pulse: f64,
+        strike_drive: f64,
+        velocity: f64,
+        strike_time: f64,
+    ) -> [f64; 2] {
+        let strike_ok = strike_active
+            && strike_time.is_finite()
+            && strike_time > 0.0
+            && strike_drive.is_finite()
+            && strike_drive > 0.0;
+        if !wave_active && !strike_ok {
+            return self.step_free_decay();
+        }
+        if !wave_active {
+            return self.step_strike(true, strike_pulse, strike_drive, velocity, strike_time);
+        }
+        if !strike_ok {
+            return self.step_wave(true, in_re, in_im);
+        }
+
+        let n = self.n;
+        let half_imp =
+            0.5 * strike_pulse * strike_drive * velocity * (2.0 / strike_time) * self.h_full;
+        for k in 0..n {
+            self.joint_free_step(k, false, 0.0);
+        }
+        self.couple(false, 0.5);
+        self.drive_port_pass(in_re, in_im, 0.5, false);
+        for k in 0..n {
+            self.y[k] += half_imp * self.hit_w[k];
+        }
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, false);
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, true);
+        for k in (0..n).rev() {
+            self.y[k] += half_imp * self.hit_w[k];
+        }
         self.drive_port_pass(in_re, in_im, 0.5, true);
         self.couple(true, 0.5);
         for k in (0..n).rev() {

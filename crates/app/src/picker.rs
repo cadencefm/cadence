@@ -212,7 +212,9 @@ pub(crate) fn module_kind_description(tag: ModuleKindTag) -> &'static str {
         ModuleKindTag::Vca => "Voltage-controlled amplifier / RingMod",
         ModuleKindTag::Drive => "Cubic 1x waveshaper · Atomic Jet / Shock Port",
         ModuleKindTag::LoFi => "Bitcrusher & sample-rate reducer",
-        ModuleKindTag::Resonator => "Modal physical resonator · String/Bar/Membrane/Plate",
+        ModuleKindTag::Modal => {
+            "48-mode cubic acoustic body · Plate/Bar/Membrane/Harmonic · Kerr/Triads/Strike"
+        }
         ModuleKindTag::Out => "Voice output stage",
     }
 }

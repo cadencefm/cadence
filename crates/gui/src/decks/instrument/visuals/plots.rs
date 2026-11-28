@@ -1,4 +1,4 @@
-//! Pure GPU curve, envelope, sampler peak, modal resonator, and Out telemetry plot painters
+//! Pure GPU curve, envelope, sampler peak, modal spectrum, and Out telemetry plot painters
 //! composed by `decks::instrument::visuals`.
 use super::super::{draw_badge_header, draw_card_panel};
 use crate::decks::vis::{draw_log_freq_grid as vis_log_freq_grid, draw_zero_db_line};
@@ -112,59 +112,7 @@ pub(super) fn draw_filter_plot(
     dl.pop_clip();
 }
 
-pub(super) fn draw_resonator_plot(
-    dl: &mut DisplayList,
-    plot: Rect,
-    modes: &[(f32, f32, f32)],
-    accent: Color,
-    theme: &Theme,
-) {
-    if plot.is_empty() {
-        return;
-    }
-    dl.push_clip(plot);
-    draw_log_freq_grid(dl, plot, theme);
-    let baseline = plot.bottom() - 4.0;
-    let usable_h = (plot.h - 10.0).max(4.0);
-    dl.fill(
-        Rect::new(plot.x, baseline, plot.w, 1.0),
-        theme.border.grid_beat,
-    );
-
-    let mut env_pts: Vec<(f32, f32)> = Vec::with_capacity(modes.len());
-    for &(freq_norm, amp_norm, decay_norm) in modes {
-        let x = plot.x + plot.w * freq_norm.clamp(0.0, 1.0);
-        let h = (amp_norm.clamp(0.0, 1.0) * usable_h).max(2.0);
-        let top_y = baseline - h;
-        let stem_color = accent.mix(
-            theme.accent.warning_key,
-            (1.0 - decay_norm).clamp(0.0, 1.0) * 0.45,
-        );
-        dl.fill(
-            Rect::new(x - 1.0, top_y, 2.0, h),
-            stem_color.with_alpha(0.82),
-        );
-        dl.rounded_glow(
-            Rect::new(x - 2.2, top_y - 2.2, 4.4, 4.4),
-            stem_color,
-            2.2,
-            0.35,
-        );
-        env_pts.push((x, top_y));
-    }
-    if env_pts.len() >= 2 {
-        dl.polyline(
-            &env_pts,
-            1.1,
-            accent.with_alpha(0.45),
-            theme.glow.scope * 0.35,
-            Some((baseline, 0.08)),
-        );
-    }
-    dl.pop_clip();
-}
-
-pub(super) fn draw_aero_bore_plot(
+pub(super) fn draw_modal_spectrum_plot(
     dl: &mut DisplayList,
     plot: Rect,
     mode_bars: &[(f32, f32)],
@@ -187,8 +135,17 @@ pub(super) fn draw_aero_bore_plot(
 
     if !mode_bars.is_empty() {
         let count = mode_bars.len();
-        let bar_w = (plot.w / (count.max(8) as f32 * 2.8)).clamp(2.4, 6.0);
+        let (density_scale, max_bar_w) = if count > 24 {
+            (4.2, 2.8)
+        } else if count > 16 {
+            (3.4, 3.8)
+        } else {
+            (2.8, 5.5)
+        };
+        let bar_w = (plot.w / (count.max(8) as f32 * density_scale)).clamp(1.5, max_bar_w);
         let half_w = bar_w * 0.5;
+        let cap_r = (bar_w * 0.55).clamp(1.2, 2.2);
+        let cap_d = cap_r * 2.0;
         let damp_norm = (absorption / 0.5).clamp(0.0, 1.0);
         let bright_norm = brightness.clamp(0.0, 1.0);
         let high_col = accent.mix(
@@ -208,18 +165,19 @@ pub(super) fn draw_aero_bore_plot(
             let bar_col = accent.mix(high_col, t);
             dl.rounded(
                 Rect::new(x - half_w, top_y, bar_w, h),
-                bar_col.with_alpha(0.76),
+                bar_col.with_alpha(0.78),
                 (bar_w * 0.35).min(1.5),
             );
             dl.rounded_glow(
-                Rect::new(x - 2.2, top_y - 2.2, 4.4, 4.4),
+                Rect::new(x - cap_r, top_y - cap_r, cap_d, cap_d),
                 bar_col,
-                2.2,
+                cap_r,
                 0.35,
             );
             env_pts.push((x, top_y));
         }
         if env_pts.len() >= 2 {
+            env_pts.sort_by(|a, b| a.0.total_cmp(&b.0));
             dl.polyline(
                 &env_pts,
                 1.15,

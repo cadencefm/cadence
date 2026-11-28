@@ -7,9 +7,9 @@ mod env;
 mod filter;
 mod lfo;
 mod lofi;
+mod modal;
 mod noise;
 mod out;
-mod resonator;
 mod sampler;
 mod vca;
 mod vco;
@@ -20,18 +20,21 @@ pub(super) use env::EnvNode;
 pub(super) use filter::FilterNode;
 pub(super) use lfo::LfoNode;
 pub(super) use lofi::LoFiNode;
+pub(super) use modal::ModalNode;
 pub(super) use noise::NoiseNode;
 pub(super) use out::OutNode;
-pub(super) use resonator::ResonatorNode;
 pub(super) use sampler::SamplerNode;
 pub(super) use vca::VcaNode;
 pub(super) use vco::VcoNode;
 
 use super::{ModuleParams, VoiceLockKey};
-use cadence_core::dsp::cubic::{BrassReed, BrassReedConfig, FlueJet, FlueJetConfig};
+use cadence_core::dsp::cubic::{
+    plate_candidates, BrassReed, BrassReedConfig, FlueJet, FlueJetConfig, ModalBank, ModalConfig,
+    StrikePulse,
+};
 use cadence_core::dsp::{
     midi_to_hz, sanitize_clamp_f64, sanitize_sample_rate, semitones_to_ratio_f64, stereo_mid_f64,
-    ModalResonator, MultiModeFilter,
+    MultiModeFilter,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking};
 use cadence_core::runtime::SampleBank;
@@ -124,10 +127,51 @@ impl FilterBankSlot {
     }
 }
 
+/// Heap-hosted physical 48-mode nonlinear modal bank pairing [`ModalBank`] and its
+/// raised-cosine mallet [`StrikePulse`] for zero-allocation real-time triggering,
+/// sample-rate updates, and legato pitch gliding.
+#[derive(Debug)]
+pub(super) struct ModalBankSlot {
+    pub bank: Box<ModalBank>,
+    pub strike: StrikePulse,
+}
+
+impl ModalBankSlot {
+    pub(super) fn new(sample_rate: f64) -> Self {
+        // Warm the static Kirchhoff plate ratio table off the audio thread so the first
+        // `BodyGeometry::Plate` trigger never lazily allocates during real-time processing.
+        let _ = plate_candidates();
+        let sr = sanitize_sample_rate(sample_rate);
+        Self {
+            bank: ModalBank::new_boxed(sr, ModalConfig::default()),
+            strike: StrikePulse::new(sr),
+        }
+    }
+
+    /// Update sample rate in place with zero heap allocation while preserving ringing modal state.
+    /// Returns `true` when the sanitized sample rate changed.
+    #[inline]
+    pub(super) fn sync_sample_rate(&mut self, sample_rate: f64) -> bool {
+        let sr = sanitize_sample_rate(sample_rate);
+        self.strike.set_sample_rate(sr);
+        self.bank.set_sample_rate(sr)
+    }
+
+    /// Reset modal bank and strike pulse cleanly for a fresh trigger at `sample_rate`.
+    #[inline]
+    pub(super) fn reset_for_rate(&mut self, sample_rate: f64) {
+        let sr = sanitize_sample_rate(sample_rate);
+        self.bank.set_sample_rate(sr);
+        self.strike.set_sample_rate(sr);
+        self.bank.reset();
+        self.strike.reset();
+    }
+}
+
 /// Read-only view of the voice's heap-hosted stateful node pools for tail-silence checks.
 #[derive(Clone, Copy)]
 pub(super) struct TailBanks<'a> {
-    pub resonator_banks: &'a [ModalResonator],
+    pub modal_banks: &'a [ModalBankSlot],
     pub filter_banks: &'a [FilterBankSlot],
     pub aero_banks: &'a [AeroBankSlot],
 }
@@ -230,6 +274,7 @@ pub(super) struct TriggerCtx {
     pub phase_reset: bool,
     pub eff_retarget: bool,
     pub eff_legato: bool,
+    pub has_in: bool,
     pub has_trig_in: bool,
     pub has_cv: bool,
     pub acid_vel_amount: Option<f32>,
@@ -237,8 +282,8 @@ pub(super) struct TriggerCtx {
 
 /// Shared mutable trigger-allocation state carried across module slots during `finalize_trigger`.
 pub(super) struct TriggerState<'a> {
-    pub resonator_banks: &'a mut [ModalResonator],
-    pub next_res_bank: usize,
+    pub modal_banks: &'a mut [ModalBankSlot],
+    pub next_modal_bank: usize,
     pub filter_banks: &'a mut [FilterBankSlot],
     pub aero_banks: &'a mut [AeroBankSlot],
     pub next_aero_bank: usize,
@@ -277,7 +322,7 @@ pub(super) struct ProcessCtx<'a> {
     pub fallback_env: f64,
     pub bank: &'a SampleBank,
     pub preview: Option<&'a Arc<SampleData>>,
-    pub resonator_banks: &'a mut [ModalResonator],
+    pub modal_banks: &'a mut [ModalBankSlot],
     pub filter_banks: &'a mut [FilterBankSlot],
     pub aero_banks: &'a mut [AeroBankSlot],
 }
@@ -357,7 +402,7 @@ pub(super) enum ModuleNode {
     Vca(VcaNode),
     Drive(DriveNode),
     LoFi(LoFiNode),
-    Resonator(ResonatorNode),
+    Modal(ModalNode),
     Out(OutNode),
 }
 
@@ -381,7 +426,7 @@ macro_rules! dispatch_module_node {
             ModuleNode::Vca($inner) => $body,
             ModuleNode::Drive($inner) => $body,
             ModuleNode::LoFi($inner) => $body,
-            ModuleNode::Resonator($inner) => $body,
+            ModuleNode::Modal($inner) => $body,
             ModuleNode::Out($inner) => $body,
         }
     };
@@ -401,7 +446,7 @@ impl ModuleNode {
             ModuleKind::Vca(m) => Self::Vca(VcaNode::new(*m)),
             ModuleKind::Drive(m) => Self::Drive(DriveNode::new(*m, sample_rate)),
             ModuleKind::LoFi(m) => Self::LoFi(LoFiNode::new(*m, sample_rate)),
-            ModuleKind::Resonator(m) => Self::Resonator(ResonatorNode::new(*m)),
+            ModuleKind::Modal(m) => Self::Modal(ModalNode::new(*m, sample_rate)),
             ModuleKind::Out(m) => Self::Out(OutNode::new(*m, sample_rate)),
         }
     }
@@ -421,7 +466,7 @@ impl ModuleNode {
             (Self::Vca(n), ModuleKind::Vca(m)) => n.target = *m,
             (Self::Drive(n), ModuleKind::Drive(m)) => n.target = *m,
             (Self::LoFi(n), ModuleKind::LoFi(m)) => n.target = *m,
-            (Self::Resonator(n), ModuleKind::Resonator(m)) => n.target = *m,
+            (Self::Modal(n), ModuleKind::Modal(m)) => n.target = *m,
             (Self::Out(n), ModuleKind::Out(m)) => n.target = *m,
             (slot, other) => *slot = Self::from_kind(other, sample_rate),
         }

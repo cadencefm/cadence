@@ -1,20 +1,19 @@
 //! Pre-sampled DSP visualization builders for each Rack module kind and the pinned overview.
-use super::{sanitize_wave, ModuleVisualView, RACK_ENV_POINTS};
+use super::{sanitize_wave, ModuleVisualView, PinnedSpectrumView, RACK_ENV_POINTS};
 use crate::App;
-use cadence_core::dsp::cubic::modal::body_ratio;
-use cadence_core::dsp::cubic::MAX_ATOMS;
 use cadence_core::dsp::{
-    drive_transfer_sample, eval_modular_env_curve, filter_magnitude_db, filter_mix_magnitude_db,
-    fm_depth_from_amount, ideal_waveform, lfo_shape_sample, lofi_transfer_sample, log_to_norm,
-    midi_to_hz, norm_to_log, phase_wrap, resonator_mode_descriptors, sanitize_sample_rate,
-    semitones_to_ratio_f64, unison_detune_ratio, NYQUIST_SAFE_RATIO,
+    aero_mode_descriptors, drive_transfer_sample, eval_modular_env_curve, filter_magnitude_db,
+    filter_mix_magnitude_db, fm_depth_from_amount, ideal_waveform, lfo_shape_sample,
+    lofi_transfer_sample, log_to_norm, midi_to_hz, modal_mode_descriptors, norm_to_log, phase_wrap,
+    sanitize_sample_rate, semitones_to_ratio_f64, unison_detune_ratio, ModalModeDescriptor,
+    MODAL_MAX_HZ, MODAL_MIN_HZ, NYQUIST_SAFE_RATIO,
 };
 use cadence_core::material::Id;
 use cadence_core::params::{format_hz, InstrumentParam, RackParam};
 use cadence_core::rack::{
     module_sample_key, AeroMode, AeroModule, DriveModule, EnvMode, EnvModule, FilterMode,
-    FilterModule, InPort, LfoModule, LfoShape, LoFiModule, ModuleKind, ModuleKindTag, NoiseColor,
-    NoiseModule, OutModule, PitchTracking, RackModule, RackPatch, RackZone, ResonatorModule,
+    FilterModule, InPort, LfoModule, LfoShape, LoFiModule, ModalModule, ModuleKind, ModuleKindTag,
+    NoiseColor, NoiseModule, OutModule, PitchTracking, RackModule, RackPatch, RackZone,
     SamplerModule, VcaModule, VcoModule,
 };
 use cadence_core::runtime::AudioSnapshot;
@@ -38,6 +37,7 @@ pub(super) fn empty_pinned_overview(live: &[f32]) -> ModuleVisualView {
         pin_count: 0,
         osc_label: None,
         osc_curve: Vec::new(),
+        spectrum: None,
         filter_label: None,
         filter_curve: Vec::new(),
         filter_cutoff_norm: 1.0,
@@ -210,8 +210,8 @@ impl App {
             (ModuleKind::LoFi(_), ModuleKind::LoFi(l)) => {
                 build_lofi_visual(base_mod, l, live_waveform)
             }
-            (ModuleKind::Resonator(_), ModuleKind::Resonator(r)) => {
-                build_resonator_visual(&ctx, base_mod, r, live_waveform)
+            (ModuleKind::Modal(_), ModuleKind::Modal(m)) => {
+                build_modal_visual(&ctx, base_mod, m, live_waveform)
             }
             (ModuleKind::Out(_), ModuleKind::Out(o)) => {
                 build_out_visual(&ctx, base_mod, o, live_waveform)
@@ -296,6 +296,70 @@ impl App {
                 (Some(lbl), curve)
             })
             .unwrap_or((None, Vec::new()));
+
+        let has_sampler = ctx
+            .zone
+            .modules
+            .iter()
+            .any(|m| matches!(m.kind, ModuleKind::Sampler(_)));
+        let spectrum = if osc_label.is_none() && !has_sampler {
+            ctx.zone
+                .modules
+                .iter()
+                .find(|m| matches!(m.kind, ModuleKind::Aero(_)))
+                .or_else(|| {
+                    ctx.zone
+                        .modules
+                        .iter()
+                        .find(|m| matches!(m.kind, ModuleKind::Modal(_)))
+                })
+                .and_then(|m| {
+                    let (eff, _) = self.live_effective_module(
+                        ctx.inst_id,
+                        ctx.rack,
+                        ctx.zone.id,
+                        m,
+                        ctx.query_time,
+                    );
+                    match &eff.kind {
+                        ModuleKind::Aero(a) => {
+                            let (base_hz, mode_bars) = aero_mode_bars(ctx, a);
+                            Some(PinnedSpectrumView {
+                                label: format!(
+                                    "{} · {} · {} · {}",
+                                    m.name,
+                                    a.mode.label(),
+                                    a.geometry.label(),
+                                    format_hz(base_hz as f32)
+                                ),
+                                kind: ModuleKindTag::Aero,
+                                brightness: a.brightness,
+                                absorption: a.absorption,
+                                mode_bars,
+                            })
+                        }
+                        ModuleKind::Modal(mdl) => {
+                            let (base_hz, mode_bars) = modal_mode_bars(ctx, mdl);
+                            Some(PinnedSpectrumView {
+                                label: format!(
+                                    "{} · {} · {}m · {}",
+                                    m.name,
+                                    mdl.geometry.label(),
+                                    mdl.atoms,
+                                    format_hz(base_hz as f32)
+                                ),
+                                kind: ModuleKindTag::Modal,
+                                brightness: mdl.brightness,
+                                absorption: mdl.absorption,
+                                mode_bars,
+                            })
+                        }
+                        _ => None,
+                    }
+                })
+        } else {
+            None
+        };
 
         let (filter_label, filter_curve, filter_cutoff_norm, filter_mod_cutoff_norm) =
             if let Some(fm) = ctx
@@ -418,6 +482,7 @@ impl App {
             pin_count: ctx.rack.panel_pins.len(),
             osc_label,
             osc_curve,
+            spectrum,
             filter_label,
             filter_curve,
             filter_cutoff_norm,
@@ -547,64 +612,84 @@ impl App {
     }
 }
 
+fn modal_base_hz(
+    pitch_tracking: PitchTracking,
+    fixed_hz: f32,
+    tune_semitones: f32,
+    fine_cents: f32,
+    root_midi: u8,
+) -> f64 {
+    let semi = f64::from(tune_semitones) + f64::from(fine_cents) * 0.01;
+    let min_hz = f64::from(MODAL_MIN_HZ);
+    let max_hz = f64::from(MODAL_MAX_HZ);
+    match pitch_tracking {
+        PitchTracking::Fixed => (f64::from(fixed_hz.max(MODAL_MIN_HZ))
+            * semitones_to_ratio_f64(semi))
+        .clamp(min_hz, max_hz),
+        PitchTracking::Chromatic => midi_to_hz(f64::from(root_midi) + semi).clamp(min_hz, max_hz),
+    }
+}
+
+fn descriptors_to_mode_bars(descs: &[ModalModeDescriptor], count: usize) -> Vec<(f32, f32)> {
+    descs
+        .iter()
+        .take(count)
+        .filter(|d| d.active && d.gain > 0.0)
+        .map(|d| {
+            let x = log_to_norm(d.freq_hz as f32, MODAL_MIN_HZ, 20_000.0);
+            (x, d.gain.clamp(0.0, 1.0) as f32)
+        })
+        .collect()
+}
+
+fn aero_mode_bars(ctx: &VisualCtx<'_>, a: &AeroModule) -> (f64, Vec<(f32, f32)>) {
+    let base_hz = modal_base_hz(
+        a.pitch_tracking,
+        a.fixed_hz,
+        a.tune_semitones,
+        a.fine_cents,
+        ctx.zone.root_midi,
+    );
+    let (descs, n) = aero_mode_descriptors(
+        a.mode == AeroMode::BrassReed,
+        a.geometry.to_cubic(),
+        usize::from(a.atoms),
+        base_hz,
+        f64::from(a.brightness),
+        f64::from(a.absorption),
+        f64::from(a.radiation),
+        ctx.sr,
+    );
+    (base_hz, descriptors_to_mode_bars(&descs, n))
+}
+
+fn modal_mode_bars(ctx: &VisualCtx<'_>, m: &ModalModule) -> (f64, Vec<(f32, f32)>) {
+    let base_hz = modal_base_hz(
+        m.pitch_tracking,
+        m.fixed_hz,
+        m.tune_semitones,
+        m.fine_cents,
+        ctx.zone.root_midi,
+    );
+    let (descs, n) = modal_mode_descriptors(
+        m.geometry.to_cubic(),
+        usize::from(m.atoms),
+        base_hz,
+        f64::from(m.brightness),
+        f64::from(m.absorption),
+        f64::from(m.radiation),
+        ctx.sr,
+    );
+    (base_hz, descriptors_to_mode_bars(&descs, n))
+}
+
 fn build_aero_visual(
     ctx: &VisualCtx<'_>,
     base_mod: &RackModule,
     a: &AeroModule,
     live_waveform: Vec<f32>,
 ) -> ModuleVisualView {
-    let semi = f64::from(a.tune_semitones) + f64::from(a.fine_cents) * 0.01;
-    let base_hz = match a.pitch_tracking {
-        PitchTracking::Fixed => {
-            (f64::from(a.fixed_hz.max(20.0)) * semitones_to_ratio_f64(semi)).clamp(20.0, 12_000.0)
-        }
-        PitchTracking::Chromatic => {
-            midi_to_hz(f64::from(ctx.zone.root_midi) + semi).clamp(20.0, 12_000.0)
-        }
-    };
-    let geom = a.geometry.to_cubic();
-    let req_n = usize::from(a.atoms).clamp(1, MAX_ATOMS);
-    let mut n = req_n;
-    while n > 1 && base_hz * body_ratio(geom, n - 1, req_n) > 0.44 * ctx.sr {
-        n -= 1;
-    }
-    let brightness = f64::from(a.brightness.clamp(0.0, 1.0));
-    let absorption = f64::from(a.absorption.clamp(0.0, 0.5));
-    let radiation = f64::from(a.radiation.clamp(0.0, 1.0));
-    let tilt_exp = -1.45 + 2.55 * brightness;
-    let denom_n = n.saturating_sub(1).max(1) as f64;
-    let mut raw_modes = Vec::with_capacity(n);
-    let mut max_amp = 1e-9_f64;
-    for k in 0..n {
-        let ratio = body_ratio(geom, k, req_n);
-        let freq_hz = (base_hz * ratio).clamp(20.0, 20_000.0) as f32;
-        let freq_norm = log_to_norm(freq_hz, 20.0, 20_000.0);
-        let raw_amp = match a.mode {
-            AeroMode::FlueJet => {
-                let drv_w = ((k + 1) as f64).powf(-0.78);
-                let rad_w = ratio.powf(tilt_exp);
-                let damp = 1.0
-                    + (0.4 + 2.0 * absorption) * 0.18 * (k as f64)
-                    + 0.15 * radiation * ratio.powf(0.45);
-                (drv_w * rad_w / damp).max(0.0)
-            }
-            AeroMode::BrassReed => {
-                let mode_sc = 0.78_f64.powi(k as i32);
-                let bright_shelf = 1.0 + 0.9 * brightness * (k as f64 / denom_n);
-                let damp = 1.0
-                    + (0.4 + 2.0 * absorption) * 0.15 * (k as f64)
-                    + 0.12 * radiation * ratio.powf(0.45);
-                (mode_sc * bright_shelf / damp).max(0.0)
-            }
-        };
-        max_amp = max_amp.max(raw_amp);
-        raw_modes.push((freq_norm, raw_amp));
-    }
-    let mode_bars = raw_modes
-        .into_iter()
-        .map(|(x, raw)| (x, (raw / max_amp).clamp(0.0, 1.0) as f32))
-        .collect();
-
+    let (base_hz, mode_bars) = aero_mode_bars(ctx, a);
     ModuleVisualView::Aero {
         module_id: base_mod.id,
         name: base_mod.name.clone(),
@@ -798,6 +883,7 @@ fn build_vca_visual(
                     | ModuleKind::Aero(_)
                     | ModuleKind::Sampler(_)
                     | ModuleKind::Noise(_)
+                    | ModuleKind::Modal(_)
             )
         })
     });
@@ -886,60 +972,33 @@ fn build_lofi_visual(
     }
 }
 
-fn build_resonator_visual(
+fn build_modal_visual(
     ctx: &VisualCtx<'_>,
     base_mod: &RackModule,
-    r: &ResonatorModule,
+    m: &ModalModule,
     live_waveform: Vec<f32>,
 ) -> ModuleVisualView {
-    let semi = f64::from(r.tune_semitones) + f64::from(r.fine_cents) * 0.01;
-    let base_hz = match r.pitch_tracking {
-        PitchTracking::Fixed => {
-            (f64::from(r.fixed_hz.max(20.0)) * semitones_to_ratio_f64(semi)).clamp(20.0, 12_000.0)
-        }
-        PitchTracking::Chromatic => {
-            midi_to_hz(f64::from(ctx.zone.root_midi) + semi).clamp(20.0, 12_000.0)
-        }
-    };
-    let descs = resonator_mode_descriptors(
-        r.mode,
-        base_hz,
-        r.structure,
-        r.decay_ms,
-        r.brightness,
-        r.position,
-        ctx.sr,
-    );
-    let max_gain = descs
-        .iter()
-        .filter(|d| d.active)
-        .map(|d| d.gain)
-        .fold(1e-6_f64, f64::max);
-    let max_decay = descs
-        .iter()
-        .filter(|d| d.active)
-        .map(|d| d.decay_s)
-        .fold(1e-3_f64, f64::max);
-    let modes = descs
-        .iter()
-        .filter(|d| d.active && d.gain > 0.0)
-        .map(|d| {
-            let x = log_to_norm(d.freq_hz as f32, 20.0, 20_000.0);
-            let h = (d.gain / max_gain).clamp(0.0, 1.0) as f32;
-            let dec = (d.decay_s / max_decay).clamp(0.0, 1.0) as f32;
-            (x, h, dec)
-        })
-        .collect();
-    ModuleVisualView::Resonator {
+    let (base_hz, mode_bars) = modal_mode_bars(ctx, m);
+    ModuleVisualView::Modal {
         module_id: base_mod.id,
         name: base_mod.name.clone(),
-        mode_label: r.mode.label(),
+        geometry: m.geometry,
+        atoms: m.atoms,
         base_hz: base_hz as f32,
-        decay_ms: r.decay_ms,
-        brightness: r.brightness,
-        position: r.position,
-        mix: r.mix,
-        modes,
+        absorption: m.absorption,
+        radiation: m.radiation,
+        brightness: m.brightness,
+        headroom: m.headroom,
+        kerr_semitones: m.kerr_semitones,
+        pair_topology: m.pair_topology,
+        coupling: m.coupling,
+        triad_amount: m.triad_amount,
+        triad_axis: m.triad_axis,
+        spread: m.spread,
+        strike_drive: m.strike_drive,
+        strike_hardness: m.strike_hardness,
+        mix: m.mix,
+        mode_bars,
         live_waveform,
     }
 }

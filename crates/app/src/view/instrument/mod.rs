@@ -8,8 +8,8 @@ use cadence_core::material::Id;
 use cadence_core::mixer::{ChannelRef, DriveMode};
 use cadence_core::params::{format_hz, format_pan, InstrumentParam, ParamAddress};
 use cadence_core::rack::{
-    AeroMode, BodyGeometry, EnvMode, InPort, ModuleKind, ModuleKindTag, PitchTracking, RackModule,
-    RackPatch, TriggerMode, Waveform,
+    AeroMode, BodyGeometry, EnvMode, InPort, ModuleKind, ModuleKindTag, PairTopology,
+    PitchTracking, RackModule, RackPatch, TriadAxis, TriggerMode, Waveform,
 };
 use cadence_core::runtime::AudioSnapshot;
 use cadence_core::sampler::SampleLoopMode;
@@ -78,6 +78,17 @@ pub struct RackModulePillView {
     pub active: bool,
 }
 
+/// Modal spectrum summary card displayed on `Quick` (`PinnedOverview`) when a zone
+/// uses standalone `Aero` or `Modal` synthesis without a `Vco` or `Sampler`.
+#[derive(Clone, Debug)]
+pub struct PinnedSpectrumView {
+    pub label: String,
+    pub kind: ModuleKindTag,
+    pub brightness: f32,
+    pub absorption: f32,
+    pub mode_bars: Vec<(f32, f32)>,
+}
+
 /// Pre-sampled DSP visualization for the active `Panel` module (or `Quick` pinned overview).
 #[derive(Clone, Debug)]
 pub enum ModuleVisualView {
@@ -85,6 +96,7 @@ pub enum ModuleVisualView {
         pin_count: usize,
         osc_label: Option<String>,
         osc_curve: Vec<f32>,
+        spectrum: Option<PinnedSpectrumView>,
         filter_label: Option<String>,
         filter_curve: Vec<f32>,
         filter_cutoff_norm: f32,
@@ -126,7 +138,7 @@ pub enum ModuleVisualView {
         kerr_semitones: f32,
         triad_amount: f32,
         spread: f32,
-        /// `(freq_norm, amp_norm)` bore partials derived via `body_ratio` and `brightness`/`absorption`.
+        /// `(freq_norm, amp_norm)` bore partials derived strictly via `aero_mode_descriptors`.
         mode_bars: Vec<(f32, f32)>,
         live_waveform: Vec<f32>,
     },
@@ -224,17 +236,27 @@ pub enum ModuleVisualView {
         transfer_curve: Vec<f32>,
         live_waveform: Vec<f32>,
     },
-    Resonator {
+    Modal {
         module_id: u16,
         name: String,
-        mode_label: &'static str,
+        geometry: BodyGeometry,
+        atoms: u8,
         base_hz: f32,
-        decay_ms: f32,
+        absorption: f32,
+        radiation: f32,
         brightness: f32,
-        position: f32,
+        headroom: f32,
+        kerr_semitones: f32,
+        pair_topology: PairTopology,
+        coupling: f32,
+        triad_amount: f32,
+        triad_axis: TriadAxis,
+        spread: f32,
+        strike_drive: f32,
+        strike_hardness: f32,
         mix: f32,
-        /// `(freq_norm, amp_norm, decay_norm)` stems derived strictly via `resonator_mode_descriptors`.
-        modes: Vec<(f32, f32, f32)>,
+        /// `(freq_norm, amp_norm)` modal partials derived strictly via `modal_mode_descriptors`.
+        mode_bars: Vec<(f32, f32)>,
         live_waveform: Vec<f32>,
     },
     Out {
@@ -498,11 +520,21 @@ pub(super) fn module_card_detail(module: &RackModule) -> String {
         ModuleKind::Vca(v) => format!("gain {:.0}% · bias {:.0}%", v.gain * 100.0, v.bias * 100.0),
         ModuleKind::Drive(d) => format!("{} · {:.0}%", d.mode.label(), d.drive * 100.0),
         ModuleKind::LoFi(l) => format!("{:.0}b · {}", l.bits, format_hz(l.rate_hz)),
-        ModuleKind::Resonator(r) => {
-            if r.pitch_tracking == PitchTracking::Fixed {
-                format!("{} · {}", r.mode.label(), format_hz(r.fixed_hz))
+        ModuleKind::Modal(m) => {
+            if m.pitch_tracking == PitchTracking::Fixed {
+                format!(
+                    "{} · {}m · {}",
+                    m.geometry.label(),
+                    m.atoms,
+                    format_hz(m.fixed_hz)
+                )
             } else {
-                format!("{} · {:.0}ms", r.mode.label(), r.decay_ms)
+                format!(
+                    "{} · {}m · d{:.2}",
+                    m.geometry.label(),
+                    m.atoms,
+                    m.absorption
+                )
             }
         }
         ModuleKind::Out(o) => format!("{:+.1} dB · {}", o.gain_db, format_pan(o.pan)),

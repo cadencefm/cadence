@@ -205,11 +205,11 @@
             "name": "CP Crack",
             "kind": {
               "type": "drive",
-              "mode": "shock_port",
-              "drive": 0.1,
+              "mode": "atomic_jet",
+              "drive": 0.55,
               "asymmetry": 0.0,
               "tone_hz": 18000.0,
-              "output_db": 5.5,
+              "output_db": 2.0,
               "mix": 1.0
             }
           },

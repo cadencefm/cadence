@@ -535,22 +535,21 @@ fn loop_clear_inline_mini_tabbed_help_and_settings_modal() {
 
 #[test]
 fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
-    use cadence_core::dsp::cubic::modal::body_ratio;
     use cadence_core::dsp::{
-        drive_transfer_sample, eval_modular_env_curve, filter_mix_magnitude_db, ideal_waveform,
-        lfo_shape_sample, lofi_transfer_sample, log_to_norm, norm_to_log, phase_wrap,
-        resonator_mode_descriptors,
+        aero_mode_descriptors, drive_transfer_sample, eval_modular_env_curve,
+        filter_mix_magnitude_db, ideal_waveform, lfo_shape_sample, lofi_transfer_sample,
+        log_to_norm, modal_mode_descriptors, norm_to_log, phase_wrap, MODAL_MIN_HZ,
     };
     use cadence_core::material::Edit;
     use cadence_core::rack::{
         AeroMode, AeroModule, BodyGeometry, DriveModule, EnvMode, EnvModule, FilterMode,
-        FilterModule, InPort, LfoModule, LfoShape, LoFiModule, ModuleKind, PatchCable,
-        PitchTracking, RackModule, RackPatch, ResonatorMode, ResonatorModule, TriggerMode,
+        FilterModule, InPort, LfoModule, LfoShape, LoFiModule, ModalModule, ModuleKind,
+        PairTopology, PatchCable, PitchTracking, RackModule, RackPatch, TriadAxis, TriggerMode,
         VcoModule, Waveform,
     };
 
     // Build a Rack with VCO A (MobiusJet), VCO B (BareCubic), Aero (BrassReed), Filter (DiodeLadder),
-    // Env (Capacitor + Additive), LFO (Triangle), Drive, LoFi, and Resonator.
+    // Env (Capacitor + Additive), LFO (Triangle), Drive, LoFi, and Modal (Plate + Manley + Kerr + Strike).
     let mut rack = RackPatch::default_synth();
     let z = &mut rack.zones[0];
     z.modules.clear();
@@ -625,16 +624,25 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         rate_hz: 8_000.0,
         mix: 1.0,
     };
-    let res = ResonatorModule {
-        mode: ResonatorMode::Plate,
+    let modal = ModalModule {
+        geometry: BodyGeometry::Plate,
+        atoms: 24,
         pitch_tracking: PitchTracking::Fixed,
         fixed_hz: 520.0,
-        structure: 0.5,
-        decay_ms: 1_200.0,
+        absorption: 0.045,
+        radiation: 0.22,
         brightness: 0.72,
-        position: 0.58,
+        headroom: 0.65,
+        kerr_semitones: -2.5,
+        pair_topology: PairTopology::Swarm,
+        coupling: 0.35,
+        triad_amount: 0.55,
+        triad_axis: TriadAxis::Manley,
+        spread: 0.48,
+        strike_drive: 0.90,
+        strike_hardness: 0.62,
         mix: 0.85,
-        ..ResonatorModule::default()
+        ..ModalModule::default()
     };
     z.modules = vec![
         RackModule::new(1, "VCO A", ModuleKind::Vco(vco_a)),
@@ -645,7 +653,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         RackModule::new(10, "Tri LFO", ModuleKind::Lfo(lfo)),
         RackModule::new(5, "Drive", ModuleKind::Drive(drive)),
         RackModule::new(6, "LoFi", ModuleKind::LoFi(lofi)),
-        RackModule::new(8, "Plate Res", ModuleKind::Resonator(res)),
+        RackModule::new(8, "Bronze Plate", ModuleKind::Modal(modal)),
         RackModule::new(7, "Out", ModuleKind::Out(Default::default())),
     ];
     z.cables = vec![
@@ -723,7 +731,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         other => panic!("expected Vco visual, got {other:?}"),
     }
 
-    // 1b. Aero BrassReed projects exact Stopped body_ratio positions and normalized modal bars.
+    // 1b. Aero BrassReed matches cadence_core::dsp::aero_mode_descriptors with zero drift.
     match get_visual(&mut app, 9) {
         ModuleVisualView::Aero {
             mode,
@@ -741,13 +749,31 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
             assert!((p_beat_pa - 2_100.0).abs() < 1e-3);
             assert!((kerr_semitones - 2.5).abs() < 1e-5);
             assert!((triad_amount - 0.40).abs() < 1e-5);
-            assert_eq!(mode_bars.len(), 10);
-            for (k, &(x, a)) in mode_bars.iter().enumerate() {
-                let hz =
-                    (220.0 * body_ratio(geometry.to_cubic(), k, 10)).clamp(20.0, 20_000.0) as f32;
-                let expected_x = log_to_norm(hz, 20.0, 20_000.0);
-                assert!((x - expected_x).abs() < 1e-5);
-                assert!((0.0..=1.0).contains(&a));
+            let (descs, n) = aero_mode_descriptors(
+                true,
+                aero.geometry.to_cubic(),
+                usize::from(aero.atoms),
+                f64::from(aero.fixed_hz),
+                f64::from(aero.brightness),
+                f64::from(aero.absorption),
+                f64::from(aero.radiation),
+                48_000.0,
+            );
+            let expected: Vec<(f32, f32)> = descs
+                .iter()
+                .take(n)
+                .filter(|d| d.active && d.gain > 0.0)
+                .map(|d| {
+                    (
+                        log_to_norm(d.freq_hz as f32, MODAL_MIN_HZ, 20_000.0),
+                        d.gain as f32,
+                    )
+                })
+                .collect();
+            assert_eq!(mode_bars.len(), expected.len());
+            for (k, (&(x, a), &(ex, ea))) in mode_bars.iter().zip(expected.iter()).enumerate() {
+                assert!((x - ex).abs() < 1e-5, "Aero freq_norm drift at k={k}");
+                assert!((a - ea).abs() < 1e-5, "Aero gain drift at k={k}");
             }
             assert!(
                 mode_bars.iter().any(|&(_, a)| (a - 1.0).abs() < 1e-5),
@@ -843,30 +869,146 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         other => panic!("expected LoFi visual, got {other:?}"),
     }
     match get_visual(&mut app, 8) {
-        ModuleVisualView::Resonator {
-            mode_label,
+        ModuleVisualView::Modal {
+            geometry,
+            atoms,
             base_hz,
-            modes,
+            absorption,
+            radiation,
+            brightness,
+            headroom,
+            kerr_semitones,
+            pair_topology,
+            coupling,
+            triad_amount,
+            triad_axis,
+            spread,
+            strike_drive,
+            strike_hardness,
+            mix,
+            mode_bars,
             ..
         } => {
-            assert_eq!(mode_label, "Plate");
+            assert_eq!(geometry, BodyGeometry::Plate);
+            assert_eq!(atoms, 24);
             assert!((base_hz - 520.0).abs() < 1e-3);
-            let descs = resonator_mode_descriptors(
-                res.mode,
-                f64::from(res.fixed_hz),
-                res.structure,
-                res.decay_ms,
-                res.brightness,
-                res.position,
+            assert!((absorption - 0.045).abs() < 1e-5);
+            assert!((radiation - 0.22).abs() < 1e-5);
+            assert!((brightness - 0.72).abs() < 1e-5);
+            assert!((headroom - 0.65).abs() < 1e-5);
+            assert!((kerr_semitones - (-2.5)).abs() < 1e-5);
+            assert_eq!(pair_topology, PairTopology::Swarm);
+            assert!((coupling - 0.35).abs() < 1e-5);
+            assert!((triad_amount - 0.55).abs() < 1e-5);
+            assert_eq!(triad_axis, TriadAxis::Manley);
+            assert!((spread - 0.48).abs() < 1e-5);
+            assert!((strike_drive - 0.90).abs() < 1e-5);
+            assert!((strike_hardness - 0.62).abs() < 1e-5);
+            assert!((mix - 0.85).abs() < 1e-5);
+            let (descs, n) = modal_mode_descriptors(
+                modal.geometry.to_cubic(),
+                usize::from(modal.atoms),
+                f64::from(modal.fixed_hz),
+                f64::from(modal.brightness),
+                f64::from(modal.absorption),
+                f64::from(modal.radiation),
                 48_000.0,
             );
-            let active_count = descs.iter().filter(|d| d.active && d.gain > 0.0).count();
-            assert_eq!(modes.len(), active_count);
-            assert!(modes.iter().all(|(x, h, d)| {
-                (0.0..=1.0).contains(x) && (0.0..=1.0).contains(h) && (0.0..=1.0).contains(d)
-            }));
+            let expected: Vec<(f32, f32)> = descs
+                .iter()
+                .take(n)
+                .filter(|d| d.active && d.gain > 0.0)
+                .map(|d| {
+                    (
+                        log_to_norm(d.freq_hz as f32, MODAL_MIN_HZ, 20_000.0),
+                        d.gain as f32,
+                    )
+                })
+                .collect();
+            assert_eq!(mode_bars.len(), expected.len());
+            for (k, (&(x, a), &(ex, ea))) in mode_bars.iter().zip(expected.iter()).enumerate() {
+                assert!((x - ex).abs() < 1e-5, "Modal freq_norm drift at k={k}");
+                assert!((a - ea).abs() < 1e-5, "Modal gain drift at k={k}");
+            }
+            assert!(
+                mode_bars.iter().any(|&(_, a)| (a - 1.0).abs() < 1e-5),
+                "Modal mode bars must normalize tallest partial to 1.0"
+            );
         }
-        other => panic!("expected Resonator visual, got {other:?}"),
+        other => panic!("expected Modal visual, got {other:?}"),
+    }
+
+    // 4b. Standalone Aero and standalone Modal zones populate PinnedOverview::spectrum (no blank Quick tab).
+    for (name, module, expected_tag) in [
+        (
+            "Flue Pipe",
+            RackModule::new(1, "Flue Pipe", ModuleKind::Aero(AeroModule::default())),
+            cadence_core::rack::ModuleKindTag::Aero,
+        ),
+        (
+            "Kerr Kick",
+            RackModule::new(
+                1,
+                "Kerr Kick",
+                ModuleKind::Modal(ModalModule {
+                    geometry: BodyGeometry::Membrane,
+                    atoms: 16,
+                    pitch_tracking: PitchTracking::Fixed,
+                    fixed_hz: 58.0,
+                    kerr_semitones: 6.0,
+                    strike_drive: 1.4,
+                    ..ModalModule::default()
+                }),
+            ),
+            cadence_core::rack::ModuleKindTag::Modal,
+        ),
+    ] {
+        let mut solo_rack = RackPatch::default_synth();
+        solo_rack.panel_pins.clear();
+        solo_rack.zones[0].modules = vec![
+            module,
+            RackModule::new(2, "Out", ModuleKind::Out(Default::default())),
+        ];
+        solo_rack.zones[0].cables = vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)];
+        let mut p = Project::demo();
+        p.apply(Edit::UpdateRackPatch {
+            id: inst_id,
+            rack: solo_rack,
+        })
+        .unwrap();
+        let mut solo_app = App::new_in_memory(p, "solo-quick.json".into()).unwrap();
+        solo_app.open_instrument(inst_id).unwrap();
+        solo_app.rack_ui.panel_slot = 0;
+        let vis = match solo_app
+            .frame_view(&snap, "silent")
+            .decks
+            .into_iter()
+            .find_map(|d| match d.view {
+                DeckView::Instrument(i) => Some(i.visual),
+                _ => None,
+            })
+            .unwrap()
+        {
+            InstrumentVisualView::Rack(r) => r.visual,
+            other => panic!("expected Rack visual, got {other:?}"),
+        };
+        match vis {
+            ModuleVisualView::PinnedOverview {
+                osc_label,
+                spectrum: Some(spec),
+                ..
+            } => {
+                assert!(osc_label.is_none());
+                assert_eq!(spec.kind, expected_tag);
+                assert!(
+                    spec.label.contains(name),
+                    "PinnedOverview spectrum label must name '{name}', got: {}",
+                    spec.label
+                );
+                assert!(!spec.mode_bars.is_empty());
+            }
+            other => panic!("expected PinnedOverview with spectrum for {name}, got {other:?}"),
+        }
     }
 
     // 5. Patched FM (`VCO B -> VCO A.FmIn`) distinguishes 48st (16:1) vs 36st (8:1) and -36st vs -24st,

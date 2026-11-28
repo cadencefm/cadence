@@ -1,11 +1,11 @@
 //! GPU visualizers for all `ModuleVisualView` variants (`PinnedOverview`, `Vco`, `Aero`,
-//! `Sampler`, `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`).
+//! `Sampler`, `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Modal`, `Out`).
 mod plots;
 
 use self::plots::{
-    draw_aero_bore_plot, draw_bipolar_transfer_plot, draw_env_plot, draw_filter_plot,
-    draw_noise_band_plot, draw_out_summary_card, draw_resonator_plot, draw_sampler_plot,
-    draw_vca_transfer_plot, draw_wave_plot, OutSummarySpec, SamplerPlotSpec,
+    draw_bipolar_transfer_plot, draw_env_plot, draw_filter_plot, draw_modal_spectrum_plot,
+    draw_noise_band_plot, draw_out_summary_card, draw_sampler_plot, draw_vca_transfer_plot,
+    draw_wave_plot, OutSummarySpec, SamplerPlotSpec,
 };
 use super::{
     draw_badge_header, draw_card_panel, draw_live_scope_card, draw_simple_card_header,
@@ -16,7 +16,9 @@ use crate::theme::{Color, Theme};
 use cadence_app::view::ModuleVisualView;
 use cadence_core::mixer::DriveMode;
 use cadence_core::params::{format_hz, format_pan};
-use cadence_core::rack::{AeroMode, BodyGeometry, EnvMode, ModuleKindTag, TriggerMode, Waveform};
+use cadence_core::rack::{
+    AeroMode, BodyGeometry, EnvMode, ModuleKindTag, PairTopology, TriadAxis, TriggerMode, Waveform,
+};
 use cadence_core::sampler::SampleLoopMode;
 
 pub(super) fn draw_module_visual(
@@ -40,8 +42,37 @@ pub(super) fn draw_module_visual(
         ModuleVisualView::Vca { .. } => draw_vca_visual(dl, area, visual, theme),
         ModuleVisualView::Drive { .. } => draw_drive_visual(dl, area, visual, theme),
         ModuleVisualView::LoFi { .. } => draw_lofi_visual(dl, area, visual, theme),
-        ModuleVisualView::Resonator { .. } => draw_resonator_visual(dl, area, visual, theme),
+        ModuleVisualView::Modal { .. } => draw_modal_visual(dl, area, visual, theme),
         ModuleVisualView::Out { .. } => draw_out_visual(dl, area, visual, theme),
+    }
+}
+
+fn body_geometry_badge(geometry: BodyGeometry) -> &'static str {
+    match geometry {
+        BodyGeometry::Harmonic => "HARMONIC",
+        BodyGeometry::Stopped => "STOPPED",
+        BodyGeometry::Membrane => "MEMBRANE",
+        BodyGeometry::Bar => "BAR",
+        BodyGeometry::Plate => "PLATE",
+        BodyGeometry::Cluster => "CLUSTER",
+    }
+}
+
+fn pair_topology_badge(topology: PairTopology) -> &'static str {
+    match topology {
+        PairTopology::Star => "STAR",
+        PairTopology::Cascade => "CASCADE",
+        PairTopology::Bloom => "BLOOM",
+        PairTopology::Ring => "RING",
+        PairTopology::Swarm => "SWARM",
+    }
+}
+
+fn triad_axis_badge(axis: TriadAxis) -> &'static str {
+    match axis {
+        TriadAxis::Diff => "DIFF",
+        TriadAxis::Sum => "SUM",
+        TriadAxis::Manley => "MANLEY",
     }
 }
 
@@ -84,6 +115,7 @@ fn draw_pinned_overview(
         pin_count,
         osc_label,
         osc_curve,
+        spectrum,
         filter_label,
         filter_curve,
         filter_cutoff_norm,
@@ -99,6 +131,7 @@ fn draw_pinned_overview(
     #[derive(Clone, Copy)]
     enum Slot {
         Osc,
+        Spectrum,
         Filter,
         Env,
         Scope,
@@ -106,6 +139,8 @@ fn draw_pinned_overview(
     let mut slots = Vec::with_capacity(4);
     if osc_label.is_some() && osc_curve.len() >= 2 {
         slots.push(Slot::Osc);
+    } else if spectrum.as_ref().is_some_and(|s| !s.mode_bars.is_empty()) {
+        slots.push(Slot::Spectrum);
     }
     if filter_label.is_some() && filter_curve.len() >= 2 {
         slots.push(Slot::Filter);
@@ -143,6 +178,23 @@ fn draw_pinned_overview(
                     true,
                     theme,
                 );
+            }
+            Slot::Spectrum => {
+                if let Some(spec) = spectrum {
+                    let accent = module_tag_accent(spec.kind, theme);
+                    let inner = draw_card_panel(dl, rect, theme);
+                    let (hdr, plot) = inner.split_top(16.0);
+                    draw_simple_card_header(dl, hdr, &spec.label, None, accent, theme);
+                    draw_modal_spectrum_plot(
+                        dl,
+                        plot,
+                        &spec.mode_bars,
+                        spec.brightness,
+                        spec.absorption,
+                        accent,
+                        theme,
+                    );
+                }
             }
             Slot::Filter => {
                 let inner = draw_card_panel(dl, rect, theme);
@@ -295,14 +347,7 @@ fn draw_aero_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView,
             AeroMode::FlueJet => ("FLUE JET", base_accent),
             AeroMode::BrassReed => ("BRASS REED", theme.accent.warning_key),
         };
-        let geom_badge = match *geometry {
-            BodyGeometry::Harmonic => "HARMONIC",
-            BodyGeometry::Stopped => "STOPPED",
-            BodyGeometry::Membrane => "MEMBRANE",
-            BodyGeometry::Bar => "BAR",
-            BodyGeometry::Plate => "PLATE",
-            BodyGeometry::Cluster => "CLUSTER",
-        };
+        let geom_badge = body_geometry_badge(*geometry);
         let beat_txt = format!("BEAT {p_beat_pa:.0}Pa");
         let kerr_txt = format!("KERR {kerr_semitones:+.1}st");
         let triad_txt = format!("TRIAD {:.0}%", triad_amount * 100.0);
@@ -326,7 +371,7 @@ fn draw_aero_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView,
             drive * 100.0
         );
         draw_badge_header(dl, hdr, &badges, name, Some(&right), mode_accent, theme);
-        draw_aero_bore_plot(
+        draw_modal_spectrum_plot(
             dl,
             plot,
             mode_bars,
@@ -652,20 +697,22 @@ fn draw_lofi_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView,
     });
 }
 
-fn draw_resonator_visual(
-    dl: &mut DisplayList,
-    area: Rect,
-    visual: &ModuleVisualView,
-    theme: &Theme,
-) {
-    let ModuleVisualView::Resonator {
+fn draw_modal_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, theme: &Theme) {
+    let ModuleVisualView::Modal {
         name,
-        mode_label,
+        geometry,
+        atoms,
         base_hz,
-        decay_ms,
+        absorption,
+        radiation,
         brightness,
-        mix,
-        modes,
+        kerr_semitones,
+        pair_topology,
+        coupling,
+        triad_amount,
+        triad_axis,
+        strike_drive,
+        mode_bars,
         live_waveform,
         ..
     } = visual
@@ -674,25 +721,35 @@ fn draw_resonator_visual(
     };
 
     draw_module_card_with_scope(dl, area, live_waveform, theme, |dl, hdr, plot| {
-        let accent = module_tag_accent(ModuleKindTag::Resonator, theme);
-        let freq_txt = format_hz(*base_hz);
-        let dec_txt = if *decay_ms >= 1000.0 {
-            format!("{:.2}s", decay_ms * 0.001)
-        } else {
-            format!("{decay_ms:.0}ms")
-        };
-        let bri_txt = format!("BRI {:.0}%", brightness * 100.0);
-        let mix_txt = format!("MIX {:.0}%", mix * 100.0);
-        let badges = [
-            ("RES", accent),
-            (*mode_label, theme.accent.focus),
-            (freq_txt.as_str(), theme.accent.routing),
-            (dec_txt.as_str(), theme.accent.playhead),
-            (bri_txt.as_str(), theme.accent.warning_key),
-            (mix_txt.as_str(), theme.text.secondary),
+        let accent = module_tag_accent(ModuleKindTag::Modal, theme);
+        let atoms_txt = format!("{atoms}M");
+        let kerr_txt = format!("KERR {kerr_semitones:+.1}st");
+        let triad_txt = format!("TRI {}", triad_axis_badge(*triad_axis));
+        let mut badges: Vec<(&str, Color)> = vec![
+            ("MODAL", accent),
+            (body_geometry_badge(*geometry), theme.accent.focus),
+            (atoms_txt.as_str(), theme.accent.routing),
         ];
-        draw_badge_header(dl, hdr, &badges, name, None, accent, theme);
-        draw_resonator_plot(dl, plot, modes, accent, theme);
+        if *coupling > 0.005 {
+            badges.push((pair_topology_badge(*pair_topology), theme.accent.edit));
+        }
+        if kerr_semitones.abs() > 0.05 {
+            badges.push((kerr_txt.as_str(), theme.accent.modulation));
+        }
+        if *triad_amount > 0.005 {
+            badges.push((triad_txt.as_str(), theme.accent.playhead));
+        }
+        if *strike_drive > 0.005 {
+            badges.push(("STRIKE", theme.accent.warning_key));
+        }
+        let right = format!(
+            "{} · damp {:.3} · rad {:.0}%",
+            format_hz(*base_hz),
+            absorption,
+            radiation * 100.0
+        );
+        draw_badge_header(dl, hdr, &badges, name, Some(&right), accent, theme);
+        draw_modal_spectrum_plot(dl, plot, mode_bars, *brightness, *absorption, accent, theme);
     });
 }
 

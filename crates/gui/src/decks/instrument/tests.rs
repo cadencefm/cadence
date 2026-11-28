@@ -3,11 +3,12 @@ use crate::display::{DisplayList, Rect};
 use crate::theme::Theme;
 use cadence_app::view::{
     InstrumentDeckView, InstrumentVisualView, ModuleVisualView, PatchbayCableKind,
-    PatchbayCableView, PatchbayColumnView, PatchbayDeckView, PatchbayNodeView, RackDeckView,
-    RackModulePillView, RackTab, RackZoneView, UiModeKind,
+    PatchbayCableView, PatchbayColumnView, PatchbayDeckView, PatchbayNodeView, PinnedSpectrumView,
+    RackDeckView, RackModulePillView, RackTab, RackZoneView, UiModeKind,
 };
 use cadence_core::rack::{
-    AeroMode, BodyGeometry, EnvMode, InPort, ModuleKindTag, TriggerMode, Waveform,
+    AeroMode, BodyGeometry, EnvMode, InPort, ModuleKindTag, PairTopology, TriadAxis, TriggerMode,
+    Waveform,
 };
 use cadence_core::sampler::SampleLoopMode;
 
@@ -44,21 +45,43 @@ fn base_rack_view(tab: RackTab, visual: ModuleVisualView) -> InstrumentDeckView 
             },
             PatchbayColumnView {
                 title: "PROCESSORS",
-                nodes: vec![PatchbayNodeView {
-                    module_id: 2,
-                    col: 2,
-                    row: 0,
-                    name: "Filter".into(),
-                    badge: "FLT",
-                    detail: "LP12 · 1.2kHz".into(),
-                    kind: ModuleKindTag::Filter,
-                    activity: 0.62,
-                    hot: false,
-                    selected: false,
-                    in_path: true,
-                    incoming_ports: vec![InPort::In, InPort::Cv],
-                    has_output: true,
-                }],
+                nodes: vec![
+                    PatchbayNodeView {
+                        module_id: 2,
+                        col: 2,
+                        row: 0,
+                        name: "Filter".into(),
+                        badge: "FLT",
+                        detail: "LP12 · 1.2kHz".into(),
+                        kind: ModuleKindTag::Filter,
+                        activity: 0.62,
+                        hot: false,
+                        selected: false,
+                        in_path: true,
+                        incoming_ports: vec![InPort::In, InPort::Cv],
+                        has_output: true,
+                    },
+                    PatchbayNodeView {
+                        module_id: 4,
+                        col: 2,
+                        row: 1,
+                        name: "Bronze Plate".into(),
+                        badge: "MODAL",
+                        detail: "Plate · 32m · 520 Hz".into(),
+                        kind: ModuleKindTag::Modal,
+                        activity: 0.58,
+                        hot: false,
+                        selected: false,
+                        in_path: true,
+                        incoming_ports: vec![
+                            InPort::In,
+                            InPort::PitchCv,
+                            InPort::TrigIn,
+                            InPort::Cv,
+                        ],
+                        has_output: true,
+                    },
+                ],
             },
             PatchbayColumnView {
                 title: "VCA / OUT",
@@ -228,12 +251,34 @@ fn all_module_visuals_and_three_tabs_emit_balanced_display_lists() {
             pin_count: 6,
             osc_label: Some("VCO 1 · Mobius Jet".into()),
             osc_curve: wave.clone(),
+            spectrum: None,
             filter_label: Some("Filter · LP12 · 1.2 kHz".into()),
             filter_curve: vec![0.0; 32],
             filter_cutoff_norm: 0.55,
             filter_mod_cutoff_norm: Some(0.75),
             env_label: Some("Amp Env · 4/180/60%/220".into()),
             env_curve: vec![(0.0, 0.0), (0.1, 1.0), (0.5, 0.6), (1.0, 0.0)],
+            live_waveform: wave.clone(),
+        },
+        ModuleVisualView::PinnedOverview {
+            pin_count: 4,
+            osc_label: None,
+            osc_curve: Vec::new(),
+            spectrum: Some(PinnedSpectrumView {
+                label: "Bronze Plate · Plate · 32m · 520 Hz".into(),
+                kind: ModuleKindTag::Modal,
+                brightness: 0.74,
+                absorption: 0.045,
+                mode_bars: (0..32)
+                    .map(|i| (0.18 + i as f32 * 0.024, (1.0 - i as f32 * 0.022).max(0.12)))
+                    .collect(),
+            }),
+            filter_label: Some("RACK FILTER · 18.5 kHz".into()),
+            filter_curve: vec![0.0; 32],
+            filter_cutoff_norm: 0.96,
+            filter_mod_cutoff_norm: None,
+            env_label: None,
+            env_curve: Vec::new(),
             live_waveform: wave.clone(),
         },
         ModuleVisualView::Vco {
@@ -360,17 +405,27 @@ fn all_module_visuals_and_three_tabs_emit_balanced_display_lists() {
             transfer_curve: wave.clone(),
             live_waveform: wave.clone(),
         },
-        ModuleVisualView::Resonator {
+        ModuleVisualView::Modal {
             module_id: 11,
-            name: "Plate Res".into(),
-            mode_label: "Plate",
-            base_hz: 535.0,
-            decay_ms: 1350.0,
-            brightness: 0.9,
-            position: 0.65,
-            mix: 1.0,
-            modes: (0..16)
-                .map(|i| (0.2 + i as f32 * 0.045, 0.35 + (i % 5) as f32 * 0.14, 0.8))
+            name: "Bronze Plate".into(),
+            geometry: BodyGeometry::Plate,
+            atoms: 48,
+            base_hz: 520.0,
+            absorption: 0.045,
+            radiation: 0.22,
+            brightness: 0.74,
+            headroom: 0.65,
+            kerr_semitones: -2.5,
+            pair_topology: PairTopology::Swarm,
+            coupling: 0.35,
+            triad_amount: 0.55,
+            triad_axis: TriadAxis::Manley,
+            spread: 0.48,
+            strike_drive: 0.90,
+            strike_hardness: 0.65,
+            mix: 0.85,
+            mode_bars: (0..48)
+                .map(|i| (0.15 + i as f32 * 0.017, (0.95 - i as f32 * 0.015).max(0.10)))
                 .collect(),
             live_waveform: wave.clone(),
         },
@@ -682,6 +737,91 @@ fn all_module_visuals_and_three_tabs_emit_balanced_display_lists() {
         }
         if mode == AeroMode::BrassReed {
             assert!(dl_aero.base.texts.iter().any(|t| t.text == "BEAT 2000Pa"));
+        }
+    }
+
+    // Modal header pills & readout remain crisp and non-overlapping at both 1440x900 and 1100x720.
+    for (w, h) in [(1440.0_f32, 900.0_f32), (1100.0_f32, 720.0_f32)] {
+        let mut dl_modal = DisplayList::new(w, h, 1.0);
+        let modal_view = base_rack_view(
+            RackTab::Panel,
+            ModuleVisualView::Modal {
+                module_id: 12,
+                name: "Bronze Plate".into(),
+                geometry: BodyGeometry::Plate,
+                atoms: 32,
+                base_hz: 520.0,
+                absorption: 0.045,
+                radiation: 0.22,
+                brightness: 0.74,
+                headroom: 0.65,
+                kerr_semitones: -2.5,
+                pair_topology: PairTopology::Swarm,
+                coupling: 0.35,
+                triad_amount: 0.55,
+                triad_axis: TriadAxis::Manley,
+                spread: 0.48,
+                strike_drive: 0.90,
+                strike_hardness: 0.65,
+                mix: 0.85,
+                mode_bars: (0..32)
+                    .map(|i| (0.16 + i as f32 * 0.025, (1.0 - i as f32 * 0.024).max(0.10)))
+                    .collect(),
+                live_waveform: sample_wave(),
+            },
+        );
+        draw_instrument(
+            &mut dl_modal,
+            Rect::new(0.0, 0.0, w, h),
+            &modal_view,
+            true,
+            UiModeKind::Normal,
+            &theme,
+        );
+        assert_eq!(dl_modal.current_clip(), dl_modal.viewport);
+        for expected in [
+            "MODAL",
+            "PLATE",
+            "32M",
+            "SWARM",
+            "KERR -2.5st",
+            "TRI MANLEY",
+            "STRIKE",
+            "Bronze Plate",
+            "520 Hz · damp 0.045 · rad 22%",
+        ] {
+            assert!(
+                dl_modal.base.texts.iter().any(|t| t.text == expected),
+                "Modal visual at {w}x{h} must emit '{expected}'"
+            );
+        }
+        // Verify zero horizontal overlap among all Modal header texts on the same header row.
+        let modal_badge = dl_modal
+            .base
+            .texts
+            .iter()
+            .find(|t| t.text == "MODAL")
+            .expect("MODAL badge");
+        let hdr_y = modal_badge.rect.y;
+        let mut hdr_rects: Vec<(f32, f32, &str)> = dl_modal
+            .base
+            .texts
+            .iter()
+            .filter(|t| (t.rect.y - hdr_y).abs() <= 4.0 && t.rect.x >= modal_badge.rect.x - 1.0)
+            .map(|t| (t.rect.x, t.rect.right(), t.text.as_str()))
+            .collect();
+        hdr_rects.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for pair in hdr_rects.windows(2) {
+            assert!(
+                pair[0].1 <= pair[1].0 + 0.5,
+                "Modal header overlap at {w}x{h}: '{}' ({:.1}..{:.1}) overlaps '{}' ({:.1}..{:.1})",
+                pair[0].2,
+                pair[0].0,
+                pair[0].1,
+                pair[1].2,
+                pair[1].0,
+                pair[1].1
+            );
         }
     }
 }

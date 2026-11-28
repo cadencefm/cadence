@@ -1624,7 +1624,7 @@ mod tests {
         });
         project.macros.push(MacroControl {
             index: 2,
-            name: "Resonator".into(),
+            name: "ResoSweep".into(),
             value: 0.85,
             bindings: vec![MacroBinding::new(
                 ParamAddress::Effect {
@@ -1691,7 +1691,7 @@ mod tests {
         assert!(links.iter().any(|l| l.display == "CutoffSweep"));
         assert!(links
             .iter()
-            .any(|l| l.label.contains("M3 Resonator") && l.label.contains("Resonance")));
+            .any(|l| l.label.contains("M3 ResoSweep") && l.label.contains("Resonance")));
 
         // Pressing Enter on the Macro link jumps straight to gk on Macro slot M3 (index 2) binding 0.
         let macro_row = app

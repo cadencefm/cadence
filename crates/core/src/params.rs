@@ -1005,7 +1005,8 @@ mod tests {
         assert_choice_contract::<crate::rack::BodyGeometry>();
         assert_choice_contract::<crate::rack::EnvMode>();
         assert_choice_contract::<crate::rack::FilterMode>();
-        assert_choice_contract::<crate::rack::ResonatorMode>();
+        assert_choice_contract::<crate::rack::PairTopology>();
+        assert_choice_contract::<crate::rack::TriadAxis>();
         assert_choice_contract::<crate::rack::LfoShape>();
         assert_choice_contract::<crate::rack::VoiceMode>();
         assert_choice_contract::<crate::rack::PitchTracking>();

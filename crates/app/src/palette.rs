@@ -517,6 +517,9 @@ impl App {
                     cadence_core::rack::ModuleKindTag::Env => {
                         "envelope adsr hold decay capacitor additive c13"
                     }
+                    cadence_core::rack::ModuleKindTag::Modal => {
+                        "modal acoustic body plate bar membrane harmonic stopped cluster kerr triad pair strike mallet"
+                    }
                     _ => "",
                 };
                 push(

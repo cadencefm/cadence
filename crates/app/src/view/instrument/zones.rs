@@ -41,6 +41,12 @@ pub(super) fn build_rack_zone_views(rack: &RackPatch, selected_zone: usize) -> V
             } else if z
                 .modules
                 .iter()
+                .any(|m| matches!(m.kind, ModuleKind::Modal(_)))
+            {
+                "MODAL"
+            } else if z
+                .modules
+                .iter()
                 .any(|m| matches!(m.kind, ModuleKind::Noise(_)))
             {
                 "NOISE"

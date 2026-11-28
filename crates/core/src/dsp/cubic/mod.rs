@@ -16,7 +16,9 @@ pub mod room;
 #[cfg(test)]
 mod tests;
 
-pub use aero::{BrassReed, BrassReedConfig, FlueJet, FlueJetConfig, ReedEnergyLedger};
+pub use aero::{
+    aero_mode_descriptors, BrassReed, BrassReedConfig, FlueJet, FlueJetConfig, ReedEnergyLedger,
+};
 pub use exciter::{
     apply_chirality, bare_cubic_exciter, dipole_analytic, hardy_saw_exciter, mobius_exciter,
     mobius_exciter_coeffs, mobius_pwm, pitch_guard_rho, poisson_analytic,
@@ -34,9 +36,10 @@ pub use math::{
     ZeroHzCapacitor, AIR_RHO, DEFAULT_RNG_SEED, MAX_ATOMS, NOMINAL_CHEST_PA, SQRT3, TAU,
 };
 pub use modal::{
-    body_ratio, build_resonant_triads, pair_exchange, plate_candidates, triad_rodrigues_pass,
-    BodyGeometry, ModalBank, ModalConfig, PairTopology, ResonantTriads, TriadAxis, BAR_RATIOS,
-    BESSEL_RATIOS, CLUSTER_RATIOS, MAX_TRIADS,
+    body_ratio, build_resonant_triads, modal_mode_descriptors, pair_exchange, plate_candidates,
+    triad_rodrigues_pass, BodyGeometry, ModalBank, ModalConfig, ModalModeDescriptor, PairTopology,
+    ResonantTriads, TriadAxis, BAR_RATIOS, BESSEL_RATIOS, CLUSTER_RATIOS, MAX_TRIADS, MODAL_MAX_HZ,
+    MODAL_MIN_HZ, MODAL_SILENCE_ENERGY,
 };
 pub use room::{
     AmbientModalRoom, ROOM_F_MAX, ROOM_F_MIN, ROOM_F_SPLIT, ROOM_HALF, ROOM_MODES, ROOM_PATM,

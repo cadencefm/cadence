@@ -182,14 +182,23 @@ fn shared_enums_roundtrip_serde_slug_label_and_parse_aliases() {
     assert_eq!(EnvMode::parse("c13"), Some(EnvMode::Capacitor));
     assert_eq!(EnvMode::parse("303"), Some(EnvMode::Capacitor));
 
-    for (i, &rm) in ResonatorMode::ALL.iter().enumerate() {
-        assert_eq!(rm.to_index(), i);
-        assert_eq!(ResonatorMode::from_index(i), rm);
-        let json = serde_json::to_string(&rm).unwrap();
-        assert_eq!(json, format!("\"{}\"", rm.slug()));
-        assert_eq!(serde_json::from_str::<ResonatorMode>(&json).unwrap(), rm);
-        assert_eq!(ResonatorMode::parse(rm.slug()), Some(rm));
-        assert_eq!(ResonatorMode::parse(rm.label()), Some(rm));
+    for (i, &pt) in PairTopology::ALL.iter().enumerate() {
+        assert_eq!(pt.to_index(), i);
+        assert_eq!(PairTopology::from_index(i), pt);
+        let json = serde_json::to_string(&pt).unwrap();
+        assert_eq!(json, format!("\"{}\"", pt.slug()));
+        assert_eq!(serde_json::from_str::<PairTopology>(&json).unwrap(), pt);
+        assert_eq!(PairTopology::parse(pt.slug()), Some(pt));
+        assert_eq!(PairTopology::parse(pt.label()), Some(pt));
+    }
+    for (i, &ta) in TriadAxis::ALL.iter().enumerate() {
+        assert_eq!(ta.to_index(), i);
+        assert_eq!(TriadAxis::from_index(i), ta);
+        let json = serde_json::to_string(&ta).unwrap();
+        assert_eq!(json, format!("\"{}\"", ta.slug()));
+        assert_eq!(serde_json::from_str::<TriadAxis>(&json).unwrap(), ta);
+        assert_eq!(TriadAxis::parse(ta.slug()), Some(ta));
+        assert_eq!(TriadAxis::parse(ta.label()), Some(ta));
     }
     for (i, &s) in LfoShape::ALL.iter().enumerate() {
         assert_eq!(LfoShape::from_index(i), s);
@@ -394,39 +403,42 @@ fn validation_rejects_port_mismatches_missing_or_duplicate_out_and_bad_pins() {
         .push(PatchCable::new(99, 4, 7, InPort::Cv, 0.5));
     assert!(bad_lofi.validate().is_err());
 
-    // Resonator accepts In / PitchCv / Cv, rejects FmIn, and caps at MAX_RESONATORS_PER_ZONE.
-    let mut res_ok = RackPatch::default_synth();
-    res_ok.zones[0].modules.push(RackModule::new(
+    // Modal accepts In / PitchCv / TrigIn / Cv, rejects FmIn, and caps at MAX_MODALS_PER_ZONE.
+    let mut modal_ok = RackPatch::default_synth();
+    modal_ok.zones[0].modules.push(RackModule::new(
         7,
         "Plate",
-        ModuleKind::Resonator(ResonatorModule::default()),
+        ModuleKind::Modal(ModalModule::default()),
     ));
-    res_ok.zones[0]
+    modal_ok.zones[0]
         .cables
         .push(PatchCable::new(90, 1, 7, InPort::In, 1.0));
-    res_ok.zones[0]
+    modal_ok.zones[0]
         .cables
         .push(PatchCable::new(91, 4, 7, InPort::Cv, 0.35));
-    res_ok.zones[0]
+    modal_ok.zones[0]
         .cables
         .push(PatchCable::new(92, 4, 7, InPort::PitchCv, 12.0));
-    assert!(res_ok.validate().is_ok());
-
-    let mut bad_res_port = res_ok.clone();
-    bad_res_port.zones[0]
+    modal_ok.zones[0]
         .cables
-        .push(PatchCable::new(93, 1, 7, InPort::FmIn, 0.5));
-    assert!(bad_res_port.validate().is_err());
+        .push(PatchCable::new(93, 4, 7, InPort::TrigIn, 1.0));
+    assert!(modal_ok.validate().is_ok());
 
-    let mut too_many_res = RackPatch::default_synth();
-    for k in 0..=MAX_RESONATORS_PER_ZONE {
-        too_many_res.zones[0].modules.push(RackModule::new(
+    let mut bad_modal_port = modal_ok.clone();
+    bad_modal_port.zones[0]
+        .cables
+        .push(PatchCable::new(94, 1, 7, InPort::FmIn, 0.5));
+    assert!(bad_modal_port.validate().is_err());
+
+    let mut too_many_modals = RackPatch::default_synth();
+    for k in 0..=MAX_MODALS_PER_ZONE {
+        too_many_modals.zones[0].modules.push(RackModule::new(
             (20 + k) as u16,
-            format!("Res {k}"),
-            ModuleKind::Resonator(ResonatorModule::default()),
+            format!("Modal {k}"),
+            ModuleKind::Modal(ModalModule::default()),
         ));
     }
-    assert!(too_many_res.validate().is_err());
+    assert!(too_many_modals.validate().is_err());
 
     // Aero accepts PitchCv / TrigIn / Cv, rejects In / FmIn / PwCv, and caps at MAX_AEROS_PER_ZONE.
     let mut aero_ok = RackPatch::default_synth();
@@ -682,11 +694,11 @@ fn compiled_post_gate_tail_slots_track_frontier_env_gated_vcas() {
     assert_eq!(g_chain.env_gated_vcas.as_ref(), &[vca2_slot]);
     assert_eq!(g_chain.post_gate_tail_slots.as_ref(), &[g_chain.out_slot]);
 
-    // 3. Diamond with ungated parallel branch retains shared upstream Resonator in post_gate_tail_slots.
+    // 3. Diamond with ungated parallel branch retains shared upstream Modal in post_gate_tail_slots.
     let z_diamond = make_zone(
         vec![
             RackModule::new(1, "Vco", ModuleKind::Vco(VcoModule::default())),
-            RackModule::new(2, "Res", ModuleKind::Resonator(ResonatorModule::default())),
+            RackModule::new(2, "Modal", ModuleKind::Modal(ModalModule::default())),
             RackModule::new(3, "Vca", ModuleKind::Vca(VcaModule::default())),
             RackModule::new(4, "Flt", ModuleKind::Filter(FilterModule::default())),
             RackModule::new(5, "Env", ModuleKind::Env(EnvModule::default())),
@@ -702,16 +714,17 @@ fn compiled_post_gate_tail_slots_track_frontier_env_gated_vcas() {
         ],
     );
     let g_dia = compile_zone_graph(&z_diamond).unwrap();
-    let res_slot = g_dia.slot_for_module(2).unwrap() as u8;
+    let modal_slot = g_dia.slot_for_module(2).unwrap() as u8;
     let flt_slot = g_dia.slot_for_module(4).unwrap() as u8;
-    assert!(g_dia.post_gate_tail_slots.contains(&res_slot));
+    assert_eq!(g_dia.modal_slots.as_ref(), &[modal_slot]);
+    assert!(g_dia.post_gate_tail_slots.contains(&modal_slot));
     assert!(g_dia.post_gate_tail_slots.contains(&flt_slot));
 
     // 4. VCA driven by both Env and LFO on Cv is NOT strictly env-gated.
     let z_mixed = make_zone(
         vec![
             RackModule::new(1, "Vco", ModuleKind::Vco(VcoModule::default())),
-            RackModule::new(2, "Res", ModuleKind::Resonator(ResonatorModule::default())),
+            RackModule::new(2, "Modal", ModuleKind::Modal(ModalModule::default())),
             RackModule::new(3, "Vca", ModuleKind::Vca(VcaModule::default())),
             RackModule::new(4, "Env", ModuleKind::Env(EnvModule::default())),
             RackModule::new(5, "Lfo", ModuleKind::Lfo(LfoModule::default())),
@@ -726,9 +739,9 @@ fn compiled_post_gate_tail_slots_track_frontier_env_gated_vcas() {
         ],
     );
     let g_mixed = compile_zone_graph(&z_mixed).unwrap();
-    let res_slot_m = g_mixed.slot_for_module(2).unwrap() as u8;
+    let modal_slot_m = g_mixed.slot_for_module(2).unwrap() as u8;
     assert!(g_mixed.env_gated_vcas.is_empty());
-    assert!(g_mixed.post_gate_tail_slots.contains(&res_slot_m));
+    assert!(g_mixed.post_gate_tail_slots.contains(&modal_slot_m));
 }
 
 #[test]

@@ -14,9 +14,9 @@ use cadence_core::params::{InstrumentParam, ValueMode};
 use cadence_core::presets::PresetCatalog;
 use cadence_core::rack::{
     AeroMode, AeroModule, BodyGeometry, DriveModule, EnvModule, FilterMode, FilterModule, InPort,
-    LfoModule, LfoShape, LoFiModule, ModuleKind, ModuleParam, NoiseColor, NoiseModule, OutModule,
-    PanelPin, PatchCable, PitchTracking, RackModule, RackPatch, RackZone, ResonatorMode,
-    ResonatorModule, SamplerModule, TriggerMode, VcaModule, VcoModule, VoiceSettings, Waveform,
+    LfoModule, LfoShape, LoFiModule, ModalModule, ModuleKind, ModuleParam, NoiseColor, NoiseModule,
+    OutModule, PairTopology, PanelPin, PatchCable, PitchTracking, RackModule, RackPatch, RackZone,
+    SamplerModule, TriadAxis, TriggerMode, VcaModule, VcoModule, VoiceSettings, Waveform,
 };
 use cadence_core::runtime::MidiMessage;
 use cadence_core::sampler::{SampleLibrary, SampleLoopMode};
@@ -205,17 +205,26 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
             RackModule::new(
                 12,
                 "Bronze Plate",
-                ModuleKind::Resonator(ResonatorModule {
-                    mode: ResonatorMode::Plate,
+                ModuleKind::Modal(ModalModule {
+                    geometry: BodyGeometry::Plate,
+                    atoms: 32,
                     pitch_tracking: PitchTracking::Fixed,
                     tune_semitones: 0.0,
                     fine_cents: 0.0,
                     fixed_hz: 520.0,
-                    structure: 0.48,
-                    decay_ms: 1_250.0,
+                    absorption: 0.045,
+                    radiation: 0.22,
                     brightness: 0.74,
-                    position: 0.58,
-                    mix: 0.80,
+                    headroom: 0.65,
+                    kerr_semitones: -2.5,
+                    pair_topology: PairTopology::Swarm,
+                    coupling: 0.35,
+                    triad_amount: 0.55,
+                    triad_axis: TriadAxis::Manley,
+                    spread: 0.48,
+                    strike_drive: 0.90,
+                    strike_hardness: 0.65,
+                    mix: 0.85,
                 }),
             ),
             RackModule::new(
@@ -245,6 +254,9 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
             PatchCable::new(15, 13, 7, InPort::In, 0.55),
             PatchCable::new(16, 14, 7, InPort::In, 0.50),
             PatchCable::new(17, 5, 13, InPort::Cv, 0.60),
+            PatchCable::new(18, 6, 12, InPort::PitchCv, 1.5),
+            PatchCable::new(19, 6, 12, InPort::TrigIn, 1.0),
+            PatchCable::new(20, 5, 12, InPort::Cv, 0.55),
             // Cycle back-edge rendered as dashed `z-1` feedback cable
             PatchCable::new(13, 8, 1, InPort::FmIn, -0.32),
         ],
@@ -428,7 +440,7 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
         assert_ne!(px_pinned_dark, px_pinned_light);
 
         // 2. All 12 module faceplates render distinctly (including cubic VCO, Flue/Brass Aero,
-        //    Capacitor+Additive Env, and Resonator) in Dark and Light themes where highlighted.
+        //    Capacitor+Additive Env, and Modal Plate+Manley+Kerr+Strike) in Dark and Light themes where highlighted.
         let module_cases: &[(&str, &str, Option<&str>)] = &[
             (
                 "VCO 1",
@@ -457,7 +469,11 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
             ("Shock Drive", "rack-09-panel-drive.png", None),
             ("Crush LoFi", "rack-10-panel-lofi.png", None),
             ("Ring VCA", "rack-11-panel-vca-ringmod.png", None),
-            ("Bronze Plate", "rack-12-panel-resonator.png", None),
+            (
+                "Bronze Plate",
+                "rack-12-panel-modal-dark.png",
+                Some("rack-12b-panel-modal-light.png"),
+            ),
             ("Out", "rack-13-panel-out.png", None),
         ];
         let mut prev_px = px_pinned_dark;
@@ -517,6 +533,31 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
                 });
                 assert!(is_brass, "Brass Horn must project BrassReed Aero visual");
             }
+            if mod_name == "Bronze Plate" {
+                let is_modal = fv.decks.iter().any(|d| match &d.view {
+                    DeckView::Instrument(iv) => match &iv.visual {
+                        InstrumentVisualView::Rack(r) => matches!(
+                            &r.visual,
+                            ModuleVisualView::Modal {
+                                geometry: BodyGeometry::Plate,
+                                atoms: 32,
+                                pair_topology: PairTopology::Swarm,
+                                triad_axis: TriadAxis::Manley,
+                                kerr_semitones,
+                                strike_drive,
+                                mode_bars,
+                                ..
+                            } if *kerr_semitones < 0.0 && *strike_drive > 0.0 && !mode_bars.is_empty()
+                        ),
+                        _ => false,
+                    },
+                    _ => false,
+                });
+                assert!(
+                    is_modal,
+                    "Bronze Plate must project Plate+Manley+Kerr+Strike Modal visual"
+                );
+            }
             let px = render_checked(gpu, file, &fv, &dark, 0.20);
             assert_ne!(px, prev_px, "{file} must render distinctly from previous");
             if let Some(lf) = light_file {
@@ -545,7 +586,7 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
             }
             for (i, peak) in [
                 0.84_f32, 0.66, 0.42, 0.75, 0.58, 0.88, 0.72, 0.61, 0.52, 0.79, 0.64, 0.70, 0.68,
-                0.73, 0.77, 0.81, 0.59,
+                0.73, 0.77, 0.81, 0.59, 0.55, 0.68, 0.62,
             ]
             .into_iter()
             .enumerate()
@@ -623,6 +664,101 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
             &midi_app.frame_view(&snap, STATUS),
             &dark,
             0.25,
+        );
+    });
+
+    // 5. Compact 1100x720 Modal faceplate (zero pill/readout overlap) + standalone Modal Quick overview.
+    with_gpu(1100, 720, |gpu| {
+        let dark = Theme::cadence_dark();
+        let (mut project, demo_path) = load_demo_project();
+        let inst0_id = project.instruments[0].id;
+        project.instruments[0].name = "Eurorack Lead".into();
+        project.instruments[0].rack = build_full_modular_rack("samples/brass-pad.wav");
+        let snap = build_snapshot(&project, 16);
+        let lib = SampleLibrary::from_roots(&[], Some(&demo_path));
+        let mut app = App::new_with_library(project, demo_path.clone(), lib).expect("init app");
+        app.apply(Action::SelectInstrument {
+            instrument: inst0_id,
+        })
+        .unwrap();
+        app.press_keys("zz").unwrap();
+        app.rack_ui.tab = RackTab::Panel;
+        let slot = app
+            .frame_view(&snap, STATUS)
+            .decks
+            .iter()
+            .find_map(|d| match &d.view {
+                DeckView::Instrument(iv) => match &iv.visual {
+                    InstrumentVisualView::Rack(r) => {
+                        r.modules.iter().position(|p| p.label == "Bronze Plate")
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("Bronze Plate pill");
+        app.rack_ui.panel_slot = slot;
+        let fv_compact = app.frame_view(&snap, STATUS);
+        render_checked(
+            gpu,
+            "rack-12c-panel-modal-1100x720-dark.png",
+            &fv_compact,
+            &dark,
+            0.20,
+        );
+
+        // Standalone Modal Quick-tab preview (no Vco/Sampler) renders its physical modal spectrum cleanly.
+        let mut solo_proj = app.project().clone();
+        let mut solo_rack = RackPatch::default_synth();
+        solo_rack.panel_pins.clear();
+        solo_rack.zones[0].modules = vec![
+            RackModule::new(
+                1,
+                "Kerr Plate",
+                ModuleKind::Modal(ModalModule {
+                    geometry: BodyGeometry::Plate,
+                    atoms: 32,
+                    pitch_tracking: PitchTracking::Fixed,
+                    fixed_hz: 520.0,
+                    absorption: 0.045,
+                    radiation: 0.22,
+                    brightness: 0.74,
+                    headroom: 0.65,
+                    kerr_semitones: -2.5,
+                    pair_topology: PairTopology::Swarm,
+                    coupling: 0.35,
+                    triad_amount: 0.55,
+                    triad_axis: TriadAxis::Manley,
+                    spread: 0.48,
+                    strike_drive: 0.90,
+                    strike_hardness: 0.65,
+                    mix: 0.85,
+                    ..ModalModule::default()
+                }),
+            ),
+            RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+        ];
+        solo_rack.zones[0].cables = vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)];
+        solo_proj.instruments[0].name = "Plate Cymbal".into();
+        solo_proj.instruments[0].rack = solo_rack;
+        let solo_snap = build_snapshot(&solo_proj, 16);
+        let solo_lib = SampleLibrary::from_roots(&[], Some(&demo_path));
+        let mut solo_app = App::new_with_library(solo_proj, demo_path, solo_lib).unwrap();
+        solo_app
+            .apply(Action::SelectInstrument {
+                instrument: inst0_id,
+            })
+            .unwrap();
+        solo_app.press_keys("zz").unwrap();
+        solo_app.rack_ui.tab = RackTab::Panel;
+        solo_app.rack_ui.panel_slot = 0;
+        let fv_solo = solo_app.frame_view(&solo_snap, STATUS);
+        render_checked(
+            gpu,
+            "rack-12d-quick-modal-standalone-dark.png",
+            &fv_solo,
+            &dark,
+            0.20,
         );
     });
 }
