@@ -1761,7 +1761,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -1769,7 +1771,7 @@
                 "name": "OpAmp Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.04,
                   "asymmetry": 0.18,
                   "tone_hz": 4800.0,
@@ -2100,7 +2102,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -2114,7 +2118,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -2148,7 +2154,7 @@
                 "name": "808 Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.22,
                   "asymmetry": 0.1,
                   "tone_hz": 11500.0,
@@ -2514,7 +2520,7 @@
                 "name": "808 Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.22,
                   "asymmetry": 0.14,
                   "tone_hz": 6500.0,
@@ -2848,7 +2854,7 @@
                 "name": "808 Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.22,
                   "asymmetry": 0.14,
                   "tone_hz": 6500.0,
@@ -3182,7 +3188,7 @@
                 "name": "808 Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.14,
                   "asymmetry": 0.03,
                   "tone_hz": 6500.0,
@@ -3499,7 +3505,7 @@
                 "name": "Diode Clip",
                 "kind": {
                   "type": "drive",
-                  "mode": "hard_clip",
+                  "mode": "shock_port",
                   "drive": 0.62,
                   "asymmetry": -0.3,
                   "tone_hz": 13500.0,
@@ -3518,7 +3524,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -3822,7 +3830,7 @@
                 "name": "Schmitt Mix",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.42,
                   "asymmetry": 0.05,
                   "tone_hz": 18000.0,
@@ -3841,7 +3849,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -3855,7 +3865,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -3869,7 +3881,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 0.45
+                  "mix": 0.45,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -4135,7 +4149,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -4149,7 +4165,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -4209,7 +4227,7 @@
                 "name": "808 Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.08,
                   "asymmetry": 0.0,
                   "tone_hz": 5500.0,
@@ -4446,7 +4464,7 @@
                 "name": "Mixer Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.08,
                   "asymmetry": 0.1,
                   "tone_hz": 15000.0,
@@ -4465,7 +4483,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -4479,7 +4499,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -4493,7 +4515,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -4876,7 +4900,7 @@
                 "name": "Schmitt Mix",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.24,
                   "asymmetry": 0.06,
                   "tone_hz": 17500.0,
@@ -4895,7 +4919,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -4909,7 +4935,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -4923,7 +4951,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -4963,7 +4993,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -5003,7 +5035,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -5430,7 +5464,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -5444,7 +5480,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -5458,7 +5496,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 0.78
+                  "mix": 0.78,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -5872,7 +5912,7 @@
                 "name": "808 Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.08,
                   "asymmetry": 0.03,
                   "tone_hz": 6500.0,
@@ -6206,7 +6246,7 @@
                 "name": "808 Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.08,
                   "asymmetry": 0.03,
                   "tone_hz": 6500.0,
@@ -6540,7 +6580,7 @@
                 "name": "808 Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.08,
                   "asymmetry": 0.03,
                   "tone_hz": 6500.0,
@@ -6813,7 +6853,7 @@
                 "name": "Warm Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.14,
                   "asymmetry": 0.0,
                   "tone_hz": 8500.0,
@@ -6982,7 +7022,9 @@
                   "drive": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
-                  "mix": 1.0
+                  "mix": 1.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0
                 }
               },
               {
@@ -7016,7 +7058,7 @@
                 "name": "808 Tape",
                 "kind": {
                   "type": "drive",
-                  "mode": "tape",
+                  "mode": "atomic_jet",
                   "drive": 0.2,
                   "asymmetry": 0.0,
                   "tone_hz": 17500.0,

@@ -30,6 +30,7 @@ pub enum ParameterUnit {
     DriveMode,
     CompressionRatio,
     Octaves,
+    Semitones,
     FilterPattern,
     QFactor,
 }
@@ -104,7 +105,7 @@ define_effect_params! {
     Size       => ("size",        "Size",       0.0,    1.0,                                Ratio,            lin, ["room"]),
     Decay      => ("decay",       "Decay",      0.2,    12.0,                               Seconds,          lin),
     Damping    => ("damping",     "Damping",    500.0,  18000.0,                            Hertz,            log),
-    Predelay   => ("predelay",    "Predelay",   0.0,    120.0,                              Milliseconds,     lin),
+    Diffusion  => ("diffusion",   "Diffusion",  0.0,    1.0,                                Ratio,            lin, ["diff"]),
     Width      => ("width",       "Width",      0.0,    1.0,                                Ratio,            lin),
     Hpf        => ("hpf",         "HPF",        20.0,   600.0,                              Hertz,            log),
     Low        => ("low",         "Low",        -12.0,  12.0,                               Decibels,         lin),
@@ -133,6 +134,8 @@ define_effect_params! {
     DelayMode  => ("delay_mode",  "Mode",       0.0,    (DelayMode::ALL.len() - 1) as f32,  DelayMode,        lin, ["delaymode"]),
     DriveMode  => ("drive_mode",  "Mode",       0.0,    (DriveMode::ALL.len() - 1) as f32,  DriveMode,        lin, ["drivemode"]),
     Asymmetry  => ("asymmetry",   "Asym",       -1.0,   1.0,                                BipolarRatio,     lin, ["asym", "bias", "symmetry", "sym"]),
+    Kerr       => ("kerr",        "Kerr",       -12.0,  12.0,                               Semitones,        lin, ["bend", "dispersion"]),
+    Spread     => ("spread",      "Spread",     0.0,    1.0,                                Ratio,            lin, ["quad"]),
 }
 
 impl EffectParam {
@@ -141,7 +144,7 @@ impl EffectParam {
         Self::Size,
         Self::Decay,
         Self::Damping,
-        Self::Predelay,
+        Self::Diffusion,
         Self::Mix,
         Self::Width,
     ];
@@ -162,11 +165,13 @@ impl EffectParam {
         Self::Output,
         Self::Mix,
     ];
-    pub const FILTER: [Self; 8] = [
+    pub const FILTER: [Self; 10] = [
         Self::FilterMode,
         Self::Cutoff,
         Self::Resonance,
         Self::Drive,
+        Self::Kerr,
+        Self::Spread,
         Self::Mix,
         Self::EnvPattern,
         Self::EnvAmount,
@@ -284,6 +289,13 @@ impl EffectParam {
                     format!("{v:+.2} oct")
                 }
             }
+            ParameterUnit::Semitones => {
+                if v.abs() < 0.05 {
+                    "0.0 st".into()
+                } else {
+                    format!("{v:+.1} st")
+                }
+            }
             ParameterUnit::FilterPattern => {
                 let idx = v.round().clamp(0.0, (FILTER_ENV_PATTERN_COUNT - 1) as f32) as u8;
                 filter_env_preset_name(idx)
@@ -342,13 +354,13 @@ impl EffectParam {
             ParameterUnit::Decibels => parse_db(&raw)?,
             ParameterUnit::FilterMode => parse_choice_index::<FilterMode>(
                 &raw,
-                "Filter mode expects lp / bp / hp / acid / lp6",
+                "Filter mode expects lp12 / lp18 / lp24 / diode / bp / hp / lp6",
             )?,
             ParameterUnit::DelayMode => {
                 parse_choice_index::<DelayMode>(&raw, "Delay mode expects ping_pong / stereo")?
             }
             ParameterUnit::DriveMode => {
-                parse_choice_index::<DriveMode>(&raw, "Drive mode expects tape / hard_clip / fold")?
+                parse_choice_index::<DriveMode>(&raw, "Drive mode expects atomic_jet / shock_port")?
             }
             ParameterUnit::CompressionRatio => {
                 raw.strip_suffix(":1").unwrap_or(&raw).trim().parse()?
@@ -359,6 +371,18 @@ impl EffectParam {
                 } else {
                     raw.strip_suffix("oct")
                         .or_else(|| raw.strip_suffix("octaves"))
+                        .unwrap_or(&raw)
+                        .trim()
+                        .parse()?
+                }
+            }
+            ParameterUnit::Semitones => {
+                if matches!(raw.as_str(), "off" | "none") {
+                    0.0
+                } else {
+                    raw.strip_suffix("st")
+                        .or_else(|| raw.strip_suffix("semi"))
+                        .or_else(|| raw.strip_suffix("semitones"))
                         .unwrap_or(&raw)
                         .trim()
                         .parse()?

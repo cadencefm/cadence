@@ -25,7 +25,10 @@ use cadence_core::rack::{
 use cadence_core::rack::{LfoShape, ResonatorMode, SamplerModule};
 use cadence_core::runtime::{RackActivityTelemetry, SampleBank};
 use cadence_core::sampler::SampleData;
-use nodes::{ModuleNode, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks};
+use nodes::{
+    FilterBankSlot, ModuleNode, NodeInputs, ProcessCtx, TailBanks, TriggerCtx, TriggerState,
+    VoiceLocks,
+};
 use std::sync::Arc;
 
 const VOICE_CONTROL_RATE_HZ: f64 = 3_000.0;
@@ -245,8 +248,10 @@ pub struct ModularVoice {
     cable_current: [f32; MAX_CABLES_PER_ZONE],
     cable_target: [f32; MAX_CABLES_PER_ZONE],
     nodes: [ModuleNode; MAX_MODULES_PER_ZONE],
-    // Heap-hosted 32-mode physical resonator banks (pre-allocated once per voice, zero RT allocs).
+    // Heap-hosted 32-mode physical resonator banks and stereo multi-mode filters
+    // (pre-allocated once per voice, zero RT allocs).
     resonator_banks: Box<[ModalResonator]>,
+    filter_banks: Box<[FilterBankSlot]>,
 
     // Stereo audio/CV slot buffers (`prev_slots` serves `z⁻¹` feedback edges).
     slots: [[f64; 2]; MAX_MODULES_PER_ZONE],
@@ -312,6 +317,7 @@ impl ModularVoice {
             nodes: [ModuleNode::default(); MAX_MODULES_PER_ZONE],
             resonator_banks: vec![ModalResonator::new(sr); MAX_RESONATORS_PER_ZONE]
                 .into_boxed_slice(),
+            filter_banks: vec![FilterBankSlot::new(sr); MAX_MODULES_PER_ZONE].into_boxed_slice(),
             slots: [[0.0; 2]; MAX_MODULES_PER_ZONE],
             prev_slots: [[0.0; 2]; MAX_MODULES_PER_ZONE],
             locked_keys: [None; MAX_VOICE_LOCKS],
@@ -807,6 +813,7 @@ impl ModularVoice {
         let mut tstate = TriggerState {
             resonator_banks: &mut self.resonator_banks,
             next_res_bank: 0,
+            filter_banks: &mut self.filter_banks,
         };
         for s in 0..op_count {
             let acid_vel_amount = if ops[s].kind == ModuleKindTag::Env {
@@ -815,6 +822,7 @@ impl ModularVoice {
                 None
             };
             let tctx = TriggerCtx {
+                slot: s as u8,
                 sample_rate: sr,
                 bpm: self.bpm,
                 mod_id: ops[s].module_id,
@@ -1083,6 +1091,7 @@ impl ModularVoice {
             bank,
             preview,
             resonator_banks: &mut self.resonator_banks,
+            filter_banks: &mut self.filter_banks,
         };
 
         for s in 0..op_count {
@@ -1300,12 +1309,16 @@ impl ModularVoice {
 
     #[inline]
     fn tails_quiet(&self, envs_done: bool) -> bool {
+        let banks = TailBanks {
+            resonator_banks: &self.resonator_banks,
+            filter_banks: &self.filter_banks,
+        };
         if self.lifetime_env_count == 0 && !self.sampler_only {
             let out_idx = usize::from(self.out_slot).min(self.op_count.saturating_sub(1));
             return self
                 .nodes
                 .get(out_idx)
-                .is_none_or(|node| node.is_tail_quiet(&self.resonator_banks));
+                .is_none_or(|node| node.is_tail_quiet(banks));
         }
         if envs_done && self.all_env_gates_closed() {
             self.post_gate_tail_slots[..self.post_gate_tail_count]
@@ -1313,12 +1326,12 @@ impl ModularVoice {
                 .all(|&s| {
                     self.nodes
                         .get(usize::from(s))
-                        .is_none_or(|node| node.is_tail_quiet(&self.resonator_banks))
+                        .is_none_or(|node| node.is_tail_quiet(banks))
                 })
         } else {
             self.nodes[..self.op_count]
                 .iter()
-                .all(|node| node.is_tail_quiet(&self.resonator_banks))
+                .all(|node| node.is_tail_quiet(banks))
         }
     }
 }
@@ -1338,7 +1351,7 @@ fn slot_has_in_port(
     cables[start..end].iter().any(|c| c.to_port == port)
 }
 
-/// Find the highest `vel_amount` of any `AcidLowPass` `Filter` driven on `Cv` by `env_slot`.
+/// Find the highest `vel_amount` of any `DiodeLadder` `Filter` driven on `Cv` by `env_slot`.
 fn acid_filter_vel_amount_for_env(
     cables: &[CompiledCable],
     nodes: &[ModuleNode],
@@ -1348,7 +1361,7 @@ fn acid_filter_vel_amount_for_env(
     for c in cables {
         if c.from_slot == env_slot && c.to_port == InPort::Cv {
             if let Some(ModuleNode::Filter(flt)) = nodes.get(usize::from(c.to_slot)) {
-                if flt.target.mode == FilterMode::AcidLowPass && flt.target.vel_amount > 0.0 {
+                if flt.target.mode == FilterMode::DiodeLadder && flt.target.vel_amount > 0.0 {
                     best =
                         Some(best.map_or(flt.target.vel_amount, |b| b.max(flt.target.vel_amount)));
                 }

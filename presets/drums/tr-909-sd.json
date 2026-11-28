@@ -84,6 +84,8 @@
               "cutoff_hz": 900.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -176,6 +178,8 @@
               "cutoff_hz": 1400.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -270,6 +274,8 @@
               "cutoff_hz": 115.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -280,7 +286,7 @@
             "name": "SD Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.24,
               "asymmetry": 0.0,
               "tone_hz": 9200.0,
@@ -297,6 +303,8 @@
               "cutoff_hz": 2800.0,
               "resonance": 0.306,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0

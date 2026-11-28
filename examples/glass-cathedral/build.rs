@@ -4,7 +4,7 @@
 //! Demonstrates polymetric 5/7/11/16 phasing, `SeededValues`, `RangeFold`, `Reverse`,
 //! `Every`, `TimeScale` triplets (`3/2`), `Arp(Random)`, `Chance`, inline `Mini` chimes,
 //! 4 playable Project Macros (`M1..M4`), automated `Send` swells, and lush
-//! `Chorus` + `Delay` + `Reverb` + `Eq` + studio `Drive(Tape)` / `Compressor` / `Limiter` mastering.
+//! `Chorus` + `Delay` + `Reverb` + `Eq` + studio `Drive(AtomicJet)` / `Compressor` / `Limiter` mastering.
 //!
 //! Run from the repository root:
 //! ```bash
@@ -153,10 +153,12 @@ fn cathedral_pad_rack() -> RackPatch {
                 PAD_FILTER_MOD,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 1250.0,
                     resonance: 0.20,
                     drive: 0.05,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.35,
                     vel_amount: 0.0,
                     mix: 1.0,
@@ -271,7 +273,7 @@ fn glass_marimba_rack() -> RackPatch {
                 MARIMBA_FILTER_MOD,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 2300.0,
                     resonance: 0.17,
                     drive: 0.05,
@@ -401,7 +403,7 @@ fn crystal_chime_rack() -> RackPatch {
                 CHIME_FILTER_MOD,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 2100.0,
                     resonance: 0.14,
                     drive: 0.05,
@@ -544,7 +546,7 @@ fn cello_bass_rack() -> RackPatch {
                 CELLO_FILTER_MOD,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 580.0,
                     resonance: 0.14,
                     drive: 0.14,
@@ -645,7 +647,7 @@ fn soft_pulse_rack() -> RackPatch {
                 3,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 4200.0,
                     resonance: 0.12,
                     drive: 0.05,
@@ -847,7 +849,7 @@ fn build_glass_cathedral() -> Result<Project> {
                 size: 0.92,
                 decay_seconds: 5.8,
                 damping_hz: 3200.0,
-                predelay_ms: 28.0,
+                diffusion: 0.72,
                 width: 0.96,
                 mix: 1.0,
             }),
@@ -998,7 +1000,7 @@ fn build_glass_cathedral() -> Result<Project> {
                     ids.next(),
                     "Tape Warmth",
                     EffectKind::Drive(DrivePatch {
-                        mode: DriveMode::Tape,
+                        mode: DriveMode::AtomicJet,
                         drive: 0.14,
                         asymmetry: 0.0,
                         tone_hz: 12_000.0,

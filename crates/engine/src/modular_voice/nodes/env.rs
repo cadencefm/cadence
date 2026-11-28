@@ -93,7 +93,7 @@ impl VoiceModule for EnvNode {
         let mut dsp_params = target.to_dsp_params();
         if let Some(vel_amt) = ctx.acid_vel_amount {
             dsp_params.decay_ms = acid_filter_decay_ms(
-                FilterMode::AcidLowPass,
+                FilterMode::DiodeLadder,
                 dsp_params.decay_ms,
                 vel_amt,
                 ctx.vel,

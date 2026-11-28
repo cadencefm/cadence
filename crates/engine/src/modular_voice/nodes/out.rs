@@ -7,14 +7,13 @@
 //! stereo power (`L² + R² == 1.0`) across `[-1.0, 1.0]` for both mono and stereo voices.
 
 use super::{
-    write_copy_module_normalized, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks,
-    VoiceModule,
+    write_copy_module_normalized, NodeInputs, ProcessCtx, TailBanks, TriggerCtx, TriggerState,
+    VoiceLocks, VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
     db_to_lin_f64, pan_mono_equal_power_f64, sanitize_clamp_f32, sanitize_clamp_f64,
     smooth_step_f32, stereo_ms_decode_f64, stereo_ms_encode_f64, voice_guard_f64, DcBlocker,
-    ModalResonator,
 };
 use cadence_core::rack::{
     ModuleKind, ModuleKindTag, ModuleParam, OutModule, OUT_MAX_GAIN_DB, OUT_MIN_GAIN_DB,
@@ -167,7 +166,7 @@ impl VoiceModule for OutNode {
     }
 
     #[inline]
-    fn is_tail_quiet(&self, _resonator_banks: &[ModalResonator]) -> bool {
+    fn is_tail_quiet(&self, _banks: TailBanks<'_>) -> bool {
         self.dc_blocker.quiet()
     }
 }

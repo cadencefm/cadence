@@ -160,7 +160,7 @@
             "name": "Club Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.26,
               "asymmetry": 0.08,
               "tone_hz": 8600.0,
@@ -177,6 +177,8 @@
               "cutoff_hz": 30.0,
               "resonance": 0.05,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0

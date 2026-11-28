@@ -529,7 +529,7 @@ impl RbsSong {
                 let active_at_0 = ch_init_dist[c] != 0 && init_dist[0] != 0;
                 let drive0 = rbs_dist_drive(amt0, shp0);
                 drv.kind = EffectKind::Drive(DrivePatch {
-                    mode: DriveMode::HardClip,
+                    mode: DriveMode::ShockPort,
                     drive: drive0,
                     asymmetry: 0.0,
                     tone_hz: rbs_dist_tone_hz(shp0),

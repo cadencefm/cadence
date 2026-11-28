@@ -234,7 +234,7 @@ fn feedback_z1_self_fm_and_resonant_drive_loop_remain_stable_and_finite() {
                 2,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 1_200.0,
                     resonance: 0.95,
                     drive: 0.6,
@@ -245,7 +245,7 @@ fn feedback_z1_self_fm_and_resonant_drive_loop_remain_stable_and_finite() {
                 3,
                 "Drive",
                 ModuleKind::Drive(DriveModule {
-                    mode: DriveMode::Fold,
+                    mode: DriveMode::ShockPort,
                     drive: 0.9,
                     asymmetry: 0.4,
                     output_db: 6.0,
@@ -429,7 +429,7 @@ fn post_filter_noise_bypasses_lowpass_and_outlives_tonal_envelope_and_pink_tilts
                 2,
                 "LP",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 200.0,
                     ..FilterModule::default()
                 }),
@@ -588,7 +588,7 @@ fn sampler_in_rack_supports_pitch_cv_filter_and_trig_in_retrigger() {
                 3,
                 "LP",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 12_000.0,
                     ..FilterModule::default()
                 }),
@@ -835,8 +835,8 @@ fn multi_burst_predelay_env_and_lofi_quantizer_and_drive_asymmetry() {
         "4 kHz sample-rate hold must generate 3700 Hz alias image: {lofi_alias}"
     );
 
-    // 3. Drive module with HardClip + positive asymmetry (moderate drive so positive rail clips
-    // asymmetrically against the unclipped negative half-cycle) generates strong 2nd harmonic & zero DC!
+    // 3. Drive module with ShockPort + positive asymmetry (moderate drive so positive rail
+    // contracts asymmetrically against the linear negative half-cycle) generates strong 2nd harmonic & zero DC!
     let drv_zone = build_zone(
         vec![
             RackModule::new(
@@ -854,8 +854,8 @@ fn multi_burst_predelay_env_and_lofi_quantizer_and_drive_asymmetry() {
                 2,
                 "Drive",
                 ModuleKind::Drive(DriveModule {
-                    mode: DriveMode::HardClip,
-                    drive: 0.25,
+                    mode: DriveMode::ShockPort,
+                    drive: 0.8,
                     asymmetry: 0.85,
                     tone_hz: 16_000.0,
                     output_db: 0.0,
@@ -893,7 +893,7 @@ fn multi_burst_predelay_env_and_lofi_quantizer_and_drive_asymmetry() {
     let h2_sym = dft_power(&sym_buf, 400.0, sr);
     assert!(
         h2 > h1 * 0.005 && h2 > h2_sym * 1000.0,
-        "asymmetric HardClip must create strong 2nd harmonic vs symmetric: h1={h1}, h2={h2}, h2_sym={h2_sym}"
+        "asymmetric ShockPort must create strong 2nd harmonic vs symmetric: h1={h1}, h2={h2}, h2_sym={h2_sym}"
     );
     assert!(
         (dc / 4800.0).abs() < 2e-3,
@@ -1083,7 +1083,7 @@ fn acid_303_accent_boosts_cutoff_and_snaps_filter_env_decay() {
         env_acc < env_norm * 0.5,
         "Acid accent must snap Filter Env decay shorter: norm={env_norm:.4} vs acc={env_acc:.4}"
     );
-    assert!(acid_filter_decay_ms(FilterMode::AcidLowPass, 260.0, 2.2, 0.98) < 150.0);
+    assert!(acid_filter_decay_ms(FilterMode::DiodeLadder, 260.0, 2.2, 0.98) < 150.0);
 }
 
 #[test]
@@ -1355,7 +1355,7 @@ fn resonator_string_and_nonlinear_feedback_plate_ring_out_and_are_zero_alloc() {
                 5,
                 "Plate NL",
                 ModuleKind::Drive(DriveModule {
-                    mode: DriveMode::Tape,
+                    mode: DriveMode::AtomicJet,
                     drive: 0.75,
                     tone_hz: 15_000.0,
                     ..DriveModule::default()
@@ -1408,7 +1408,7 @@ fn voice_retirement_ignores_upstream_stateful_nodes_and_preserves_post_vca_tails
                 2,
                 "LPF",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 2400.0,
                     resonance: 0.4,
                     drive: 0.25,
@@ -1429,7 +1429,7 @@ fn voice_retirement_ignores_upstream_stateful_nodes_and_preserves_post_vca_tails
                 4,
                 "Drv",
                 ModuleKind::Drive(DriveModule {
-                    mode: DriveMode::Tape,
+                    mode: DriveMode::AtomicJet,
                     drive: 0.45,
                     asymmetry: 0.15,
                     ..DriveModule::default()
@@ -1925,8 +1925,8 @@ fn voice_retirement_preserves_sampler_env_predelay_lfo_chopped_quiet_and_legato_
 #[test]
 fn drive_node_parallel_mix_stays_phase_aligned_across_sample_rates() {
     let bank: SampleBank = Vec::new();
-    // High-frequency sine VCO (MIDI 119 ~= 7902 Hz, right in the old comb-notch band at 44.1/48 kHz)
-    // through DriveNode(drive=0.0, mix=0.5, tone_hz=18000 Hz) must stay flat without a comb notch.
+    // High-frequency sine VCO (MIDI 119 ~= 7902 Hz) through DriveNode(drive=0.0, mix=0.5,
+    // tone_hz=18000 Hz) must stay flat without a comb notch.
     let dry_zone = build_zone(
         vec![
             RackModule::new(
@@ -1955,7 +1955,7 @@ fn drive_node_parallel_mix_stays_phase_aligned_across_sample_rates() {
                 2,
                 "ParDrive",
                 ModuleKind::Drive(DriveModule {
-                    mode: DriveMode::Tape,
+                    mode: DriveMode::AtomicJet,
                     drive: 0.0,
                     asymmetry: 0.0,
                     tone_hz: 18_000.0,
@@ -2008,7 +2008,7 @@ fn control_stride_and_filter_cv_subrate_scale_across_sample_rates() {
                 2,
                 "LPF",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 1_200.0,
                     resonance: 0.35,
                     mix: 0.75,
@@ -3077,7 +3077,7 @@ fn synthetic_rack_zone_for_module_kind(tag: ModuleKindTag) -> RackZone {
                     2,
                     "Filter",
                     ModuleKind::Filter(FilterModule {
-                        mode: FilterMode::AcidLowPass,
+                        mode: FilterMode::DiodeLadder,
                         cutoff_hz: 700.0,
                         resonance: 0.65,
                         drive: 0.4,
@@ -3136,7 +3136,7 @@ fn synthetic_rack_zone_for_module_kind(tag: ModuleKindTag) -> RackZone {
                     2,
                     "Drive",
                     ModuleKind::Drive(DriveModule {
-                        mode: DriveMode::Fold,
+                        mode: DriveMode::ShockPort,
                         drive: 0.72,
                         asymmetry: 0.4,
                         tone_hz: 6_500.0,
@@ -3320,7 +3320,7 @@ fn all_module_kinds_and_modes_satisfy_render_block_parity_and_zero_alloc() {
                 3,
                 "Drive",
                 ModuleKind::Drive(DriveModule {
-                    mode: DriveMode::Tape,
+                    mode: DriveMode::AtomicJet,
                     drive: 0.7,
                     ..DriveModule::default()
                 }),
@@ -3558,4 +3558,585 @@ fn all_post_vca_tail_topologies_ring_out_and_retire_cleanly() {
             );
         }
     }
+}
+
+#[test]
+fn filter_node_supports_cubic_poles_diode_kerr_spread_and_click_free_mode_switch() {
+    use cadence_core::dsp::{filter_magnitude_db, lin_to_db_f64};
+    let sr = 48_000.0;
+    let bank: SampleBank = Vec::new();
+
+    let make_filter_zone = |freq_hz: f32, vco_wave: Waveform, level: f32, flt: FilterModule| {
+        let mut zone = build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "VCO",
+                    ModuleKind::Vco(VcoModule {
+                        waveform: vco_wave,
+                        pitch_tracking: PitchTracking::Fixed,
+                        fixed_hz: freq_hz,
+                        level,
+                        ..VcoModule::default()
+                    }),
+                ),
+                RackModule::new(2, "Filter", ModuleKind::Filter(flt)),
+                RackModule::new(3, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 2, 3, InPort::In, 1.0),
+            ],
+        );
+        zone.voice.voice_mode = VoiceMode::Mono;
+        zone.voice.legato = true;
+        zone
+    };
+
+    // 1. ImLpf2 / ImLpf3 / ImLpf4 realize exact -12 / -18 / -24 dB/oct Butterworth stopband slopes
+    //    matching `cadence_core::dsp::filter_magnitude_db` at 2 octaves above cutoff.
+    let dry_zone = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "VCO",
+                ModuleKind::Vco(VcoModule {
+                    waveform: Waveform::Sine,
+                    pitch_tracking: PitchTracking::Fixed,
+                    fixed_hz: 1_600.0,
+                    level: 0.7,
+                    ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+    );
+    let g_dry = compile_zone_graph(&dry_zone).unwrap();
+    let mut v_dry = ModularVoice::new_boxed(&spec(&dry_zone, &g_dry, sr, 120.0), start(60, None));
+    let warmup = 4_800usize;
+    let measure = 4_800usize;
+    let mut dry_sq = 0.0_f64;
+    for i in 0..(warmup + measure) {
+        let y = v_dry.next_frame(&bank, None);
+        if i >= warmup {
+            dry_sq += f64::from(y[0]).powi(2);
+        }
+    }
+    let dry_rms = (dry_sq / measure as f64).sqrt();
+
+    let mut mode_rms = [0.0_f64; 3];
+    for (idx, mode) in [FilterMode::ImLpf2, FilterMode::ImLpf3, FilterMode::ImLpf4]
+        .into_iter()
+        .enumerate()
+    {
+        let z = make_filter_zone(
+            1_600.0,
+            Waveform::Sine,
+            0.7,
+            FilterModule {
+                mode,
+                cutoff_hz: 400.0,
+                resonance: 0.0,
+                drive: 0.0,
+                kerr_semitones: 0.0,
+                spread: 0.0,
+                ..FilterModule::default()
+            },
+        );
+        let g = compile_zone_graph(&z).unwrap();
+        let mut v = ModularVoice::new_boxed(&spec(&z, &g, sr, 120.0), start(60, None));
+        let mut out_sq = 0.0_f64;
+        for i in 0..(warmup + measure) {
+            let y = v.next_frame(&bank, None);
+            assert!(y[0].is_finite() && y[1].is_finite());
+            if i >= warmup {
+                out_sq += f64::from(y[0]).powi(2);
+            }
+        }
+        let rms = (out_sq / measure as f64).sqrt();
+        mode_rms[idx] = rms;
+        let measured_db = lin_to_db_f64(rms / dry_rms);
+        let expected_db = filter_magnitude_db(mode, 400.0, 0.0, 1_600.0, sr);
+        assert!(
+            (measured_db - expected_db).abs() < 0.75,
+            "{mode:?}: measured {measured_db:.2} dB vs analytical {expected_db:.2} dB"
+        );
+    }
+    assert!(
+        mode_rms[2] < mode_rms[1] * 0.35 && mode_rms[1] < mode_rms[0] * 0.35,
+        "ImLpf4 < ImLpf3 < ImLpf2 stopband RMS violated: {mode_rms:?}"
+    );
+
+    // 2. DiodeLadder driven resonant sweep stays bounded and DC-free.
+    let z_diode = make_filter_zone(
+        180.0,
+        Waveform::Saw,
+        0.8,
+        FilterModule {
+            mode: FilterMode::DiodeLadder,
+            cutoff_hz: 650.0,
+            resonance: 0.72,
+            drive: 0.65,
+            ..FilterModule::default()
+        },
+    );
+    let g_diode = compile_zone_graph(&z_diode).unwrap();
+    let mut v_diode =
+        ModularVoice::new_boxed(&spec(&z_diode, &g_diode, sr, 120.0), start(60, None));
+    let mut diode_peak = 0.0_f32;
+    let mut diode_dc = 0.0_f64;
+    for i in 0..(warmup + measure) {
+        let y = v_diode.next_frame(&bank, None);
+        assert!(y[0].is_finite() && y[1].is_finite());
+        diode_peak = diode_peak.max(y[0].abs()).max(y[1].abs());
+        if i >= warmup {
+            diode_dc += f64::from(y[0]);
+        }
+    }
+    assert!(
+        diode_peak > 0.15 && diode_peak < VOICE_GUARD_CEILING as f32,
+        "DiodeLadder peak out of range: {diode_peak}"
+    );
+    assert!(
+        (diode_dc / measure as f64).abs() < 2e-3,
+        "DiodeLadder DC offset too high: {}",
+        diode_dc / measure as f64
+    );
+
+    // 3. State-Kerr dispersion (`kerr_semitones` in -12..+12) bends resonant peak pitch and
+    //    responds cleanly to continuous updates & P-locks.
+    let capture_kerr = |kerr_semitones: f32| -> Vec<f64> {
+        let z = make_filter_zone(
+            700.0,
+            Waveform::Sine,
+            0.85,
+            FilterModule {
+                mode: FilterMode::ImLpf2,
+                cutoff_hz: 700.0,
+                resonance: 0.78,
+                drive: 0.1,
+                kerr_semitones,
+                spread: 0.0,
+                ..FilterModule::default()
+            },
+        );
+        let g = compile_zone_graph(&z).unwrap();
+        let mut v = ModularVoice::new_boxed(&spec(&z, &g, sr, 120.0), start(60, None));
+        let mut out = Vec::with_capacity(measure);
+        for i in 0..(warmup + measure) {
+            let y = v.next_frame(&bank, None);
+            assert!(y[0].is_finite() && y[1].is_finite());
+            if i >= warmup {
+                out.push(f64::from(y[0]));
+            }
+        }
+        out
+    };
+    let k_neg = capture_kerr(-12.0);
+    let k_zero = capture_kerr(0.0);
+    let k_pos = capture_kerr(12.0);
+    let l2_diff = |a: &[f64], b: &[f64]| -> f64 {
+        (a.iter()
+            .zip(b.iter())
+            .map(|(x, y)| (x - y).powi(2))
+            .sum::<f64>()
+            / a.len() as f64)
+            .sqrt()
+    };
+    let diff_neg = l2_diff(&k_neg, &k_zero);
+    let diff_pos = l2_diff(&k_pos, &k_zero);
+    let diff_span = l2_diff(&k_neg, &k_pos);
+    assert!(
+        diff_neg > 0.05 && diff_pos > 0.05 && diff_span > 0.1,
+        "State-Kerr must audibly bend resonant response: neg={diff_neg:.4}, pos={diff_pos:.4}, span={diff_span:.4}"
+    );
+
+    // 4. Quadrature M/S `spread` widens stereo cleanly without Mid-channel comb notches,
+    //    and continuous updates smooth both `kerr_semitones` and `spread` while honoring locks.
+    let measure_spread = |spread: f32| -> (f64, f64, f64) {
+        let z = make_filter_zone(
+            450.0,
+            Waveform::Sine,
+            0.7,
+            FilterModule {
+                mode: FilterMode::ImLpf2,
+                cutoff_hz: 900.0,
+                resonance: 0.35,
+                drive: 0.0,
+                kerr_semitones: 0.0,
+                spread,
+                ..FilterModule::default()
+            },
+        );
+        let g = compile_zone_graph(&z).unwrap();
+        let mut v = ModularVoice::new_boxed(&spec(&z, &g, sr, 120.0), start(60, None));
+        let mut mid_sq = 0.0_f64;
+        let mut side_sq = 0.0_f64;
+        let mut max_diff = 0.0_f64;
+        for i in 0..(warmup + measure) {
+            let y = v.next_frame(&bank, None);
+            assert!(y[0].is_finite() && y[1].is_finite());
+            if i >= warmup {
+                let l = f64::from(y[0]);
+                let r = f64::from(y[1]);
+                let mid = 0.5 * (l + r);
+                let side = 0.5 * (l - r);
+                mid_sq += mid * mid;
+                side_sq += side * side;
+                max_diff = max_diff.max((l - r).abs());
+            }
+        }
+        (
+            (mid_sq / measure as f64).sqrt(),
+            (side_sq / measure as f64).sqrt(),
+            max_diff,
+        )
+    };
+    let (mid_mono, side_mono, diff_mono) = measure_spread(0.0);
+    let (mid_wide, side_wide, _diff_wide) = measure_spread(1.0);
+    assert!(
+        diff_mono < 1e-6 && side_mono < 1e-6,
+        "spread=0 must remain centered mono: diff={diff_mono}"
+    );
+    assert!(
+        side_wide > 0.08,
+        "spread=1 must generate quadrature stereo side energy: side_rms={side_wide}"
+    );
+    let mid_ratio_db = lin_to_db_f64(mid_wide / mid_mono);
+    assert!(
+        (mid_ratio_db + 3.01).abs() < 0.2,
+        "spread=1 Mid collapse must follow exact cos(pi/4) = -3.01 dB without comb notches: {mid_ratio_db:+.2} dB"
+    );
+
+    // Verify continuous updates respect per-voice locks on `Kerr` and `Spread`.
+    let mut z_live = make_filter_zone(
+        440.0,
+        Waveform::Saw,
+        0.7,
+        FilterModule {
+            mode: FilterMode::ImLpf2,
+            cutoff_hz: 1_200.0,
+            resonance: 0.4,
+            kerr_semitones: 2.0,
+            spread: 0.2,
+            ..FilterModule::default()
+        },
+    );
+    let g_live = compile_zone_graph(&z_live).unwrap();
+    let mut v_live = ModularVoice::new_boxed_inactive(sr);
+    v_live.begin_trigger_from_zone(&spec(&z_live, &g_live, sr, 120.0));
+    v_live.apply_trigger_module_param(
+        2,
+        ModuleParam::Kerr,
+        ModuleParam::Kerr.normalize(6.0),
+        0,
+        true,
+    );
+    v_live.finalize_trigger(start(60, None), false, false);
+    if let ModuleKind::Filter(ref mut flt) = z_live.modules[1].kind {
+        flt.kerr_semitones = -9.0;
+        flt.spread = 0.85;
+    }
+    v_live.update_continuous_from_zone(&z_live, 0.0, 0.0, 120.0);
+    let ModuleParams::Filter(target_after) = v_live.module_target_params(2).unwrap() else {
+        panic!("expected Filter target params");
+    };
+    assert!(
+        (target_after.kerr_semitones - 6.0).abs() < 1e-4,
+        "locked Kerr must ignore continuous update: got {}",
+        target_after.kerr_semitones
+    );
+    assert!(
+        (target_after.spread - 0.85).abs() < 1e-4,
+        "unlocked Spread must follow continuous update: got {}",
+        target_after.spread
+    );
+
+    // 5. Click-free mode switching across topologies on active mono legato retarget (zero RT allocs).
+    let mut z_sw = make_filter_zone(
+        220.0,
+        Waveform::Sine,
+        0.5,
+        FilterModule {
+            mode: FilterMode::ImLpf2,
+            cutoff_hz: 900.0,
+            resonance: 0.45,
+            drive: 0.2,
+            ..FilterModule::default()
+        },
+    );
+    let g_sw = compile_zone_graph(&z_sw).unwrap();
+    let mut v_sw = ModularVoice::new_boxed(&spec(&z_sw, &g_sw, sr, 120.0), start(60, None));
+    for _ in 0..2_048 {
+        let _ = v_sw.next_frame(&bank, None);
+    }
+    let mut prev = v_sw.next_frame(&bank, None);
+    let mut max_step = 0.0_f32;
+    let modes = [
+        FilterMode::DiodeLadder,
+        FilterMode::HighPass,
+        FilterMode::ImLpf4,
+        FilterMode::LowPass6,
+        FilterMode::BandPass,
+        FilterMode::ImLpf3,
+    ];
+    for mode in modes {
+        if let ModuleKind::Filter(ref mut flt) = z_sw.modules[1].kind {
+            flt.mode = mode;
+        }
+        let zspec = spec(&z_sw, &g_sw, sr, 120.0);
+        assert_no_heap_operations(|| {
+            v_sw.retarget_from_zone(&zspec, start(60, None), true);
+            for _ in 0..512 {
+                let cur = v_sw.next_frame(&bank, None);
+                assert!(cur[0].is_finite() && cur[1].is_finite());
+                max_step = max_step
+                    .max((cur[0] - prev[0]).abs())
+                    .max((cur[1] - prev[1]).abs());
+                prev = cur;
+            }
+        });
+    }
+    assert!(
+        max_step < 0.08,
+        "legato mode crossfade across FilterMode topologies produced click step {max_step}"
+    );
+}
+
+#[test]
+fn drive_node_native_rate_atomic_jet_and_shock_port_match_core_shaper() {
+    let sr = 48_000.0;
+    let bank: SampleBank = Vec::new();
+    let warmup = 4_800usize;
+    let measure = 4_800usize;
+
+    let run_drive =
+        |level: f32, drv: DriveModule, cv_amount: Option<f32>| -> (f64, f64, f64, f64) {
+            let mut modules = vec![
+                RackModule::new(
+                    1,
+                    "VCO",
+                    ModuleKind::Vco(VcoModule {
+                        waveform: Waveform::Sine,
+                        pitch_tracking: PitchTracking::Fixed,
+                        fixed_hz: 200.0,
+                        level,
+                        ..VcoModule::default()
+                    }),
+                ),
+                RackModule::new(2, "Drive", ModuleKind::Drive(drv)),
+                RackModule::new(3, "Out", ModuleKind::Out(OutModule::default())),
+            ];
+            let mut cables = vec![
+                PatchCable::new(1, 1, 2, InPort::In, 1.0),
+                PatchCable::new(2, 2, 3, InPort::In, 1.0),
+            ];
+            if let Some(amt) = cv_amount {
+                modules.push(RackModule::new(
+                    4,
+                    "CvEnv",
+                    ModuleKind::Env(EnvModule {
+                        mode: EnvMode::HoldDecay,
+                        attack_ms: 0.1,
+                        hold_ms: 500.0,
+                        decay_ms: 100.0,
+                        trigger_mode: TriggerMode::OneShot,
+                        ..EnvModule::default()
+                    }),
+                ));
+                cables.push(PatchCable::new(3, 4, 2, InPort::Cv, amt));
+            }
+            let z = build_zone(modules, cables);
+            let g = compile_zone_graph(&z).unwrap();
+            let mut v = ModularVoice::new_boxed(&spec(&z, &g, sr, 120.0), start(60, None));
+            let mut buf = Vec::with_capacity(measure);
+            let mut dc_sum = 0.0_f64;
+            for i in 0..(warmup + measure) {
+                let y = v.next_frame(&bank, None);
+                assert!(y[0].is_finite() && y[1].is_finite());
+                if i >= warmup {
+                    let s = f64::from(y[0]);
+                    buf.push(s);
+                    dc_sum += s;
+                }
+            }
+            (
+                dft_power(&buf, 200.0, sr),
+                dft_power(&buf, 400.0, sr),
+                dft_power(&buf, 600.0, sr),
+                (dc_sum / measure as f64).abs(),
+            )
+        };
+
+    // 1. Exact identity at drive=0.0 across both DriveMode variants.
+    for mode in DriveMode::ALL {
+        let (h1, h2, h3, dc) = run_drive(
+            0.6,
+            DriveModule {
+                mode,
+                drive: 0.0,
+                asymmetry: 0.5,
+                tone_hz: 18_000.0,
+                output_db: 0.0,
+                mix: 1.0,
+            },
+            None,
+        );
+        assert!(
+            h1 > 5e-3 && h2 < h1 * 1e-6 && h3 < h1 * 1e-6 && dc < 1e-4,
+            "{mode:?} drive=0 must be clean identity: h1={h1}, h2={h2}, h3={h3}, dc={dc}"
+        );
+    }
+
+    // 2. ShockPort maintains a clean linear interior below headroom threshold and strongly
+    //    clamps above threshold with odd harmonics.
+    let (lin_h1, lin_h2, lin_h3, _) = run_drive(
+        0.15,
+        DriveModule {
+            mode: DriveMode::ShockPort,
+            drive: 0.25,
+            asymmetry: 0.0,
+            tone_hz: 18_000.0,
+            output_db: 0.0,
+            mix: 1.0,
+        },
+        None,
+    );
+    assert!(
+        lin_h1 > 5e-4 && lin_h2 < lin_h1 * 1e-6 && lin_h3 < lin_h1 * 1e-6,
+        "ShockPort linear interior must remain clean: h1={lin_h1}, h2={lin_h2}, h3={lin_h3}"
+    );
+    let (sat_h1, sat_h2, sat_h3, _) = run_drive(
+        0.9,
+        DriveModule {
+            mode: DriveMode::ShockPort,
+            drive: 0.85,
+            asymmetry: 0.0,
+            tone_hz: 18_000.0,
+            output_db: 0.0,
+            mix: 1.0,
+        },
+        None,
+    );
+    assert!(
+        sat_h3 > sat_h1 * 5e-3 && sat_h2 < sat_h3 * 1e-4,
+        "symmetric driven ShockPort must create strong odd harmonics: h1={sat_h1}, h2={sat_h2}, h3={sat_h3}"
+    );
+
+    // 3. AtomicJet generates smooth odd harmonics symmetrically and strong 2nd harmonic with asymmetry.
+    let (jet_sym_h1, jet_sym_h2, jet_sym_h3, _) = run_drive(
+        0.75,
+        DriveModule {
+            mode: DriveMode::AtomicJet,
+            drive: 0.75,
+            asymmetry: 0.0,
+            tone_hz: 18_000.0,
+            output_db: 0.0,
+            mix: 1.0,
+        },
+        None,
+    );
+    assert!(
+        jet_sym_h3 > jet_sym_h1 * 1e-3 && jet_sym_h2 < jet_sym_h3 * 1e-4,
+        "symmetric AtomicJet must produce odd harmonics: h1={jet_sym_h1}, h2={jet_sym_h2}, h3={jet_sym_h3}"
+    );
+    let (jet_asym_h1, jet_asym_h2, _, jet_asym_dc) = run_drive(
+        0.75,
+        DriveModule {
+            mode: DriveMode::AtomicJet,
+            drive: 0.75,
+            asymmetry: 0.75,
+            tone_hz: 18_000.0,
+            output_db: 0.0,
+            mix: 1.0,
+        },
+        None,
+    );
+    assert!(
+        jet_asym_h2 > jet_asym_h1 * 5e-3 && jet_asym_dc < 2e-3,
+        "asymmetric AtomicJet must produce 2nd harmonic with zero DC: h1={jet_asym_h1}, h2={jet_asym_h2}, dc={jet_asym_dc}"
+    );
+
+    // 4. Drive.Cv dynamically drives saturation from zero base drive.
+    let (cv_h1, _, cv_h3, _) = run_drive(
+        0.75,
+        DriveModule {
+            mode: DriveMode::AtomicJet,
+            drive: 0.0,
+            asymmetry: 0.0,
+            tone_hz: 18_000.0,
+            output_db: 0.0,
+            mix: 1.0,
+        },
+        Some(0.75),
+    );
+    assert!(
+        cv_h3 > cv_h1 * 1e-3 && (cv_h3 - jet_sym_h3).abs() / jet_sym_h3 < 0.05,
+        "Drive.Cv (+0.75) from drive=0 must match drive=0.75 saturation: cv_h3={cv_h3}, ref_h3={jet_sym_h3}"
+    );
+
+    // 5. Click-free mode crossfade between AtomicJet and ShockPort on mono legato retarget.
+    let mut z_sw = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "VCO",
+                ModuleKind::Vco(VcoModule {
+                    waveform: Waveform::Sine,
+                    pitch_tracking: PitchTracking::Fixed,
+                    fixed_hz: 220.0,
+                    level: 0.7,
+                    ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(
+                2,
+                "Drive",
+                ModuleKind::Drive(DriveModule {
+                    mode: DriveMode::AtomicJet,
+                    drive: 0.75,
+                    asymmetry: 0.25,
+                    tone_hz: 14_000.0,
+                    output_db: 0.0,
+                    mix: 1.0,
+                }),
+            ),
+            RackModule::new(3, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 2, 3, InPort::In, 1.0),
+        ],
+    );
+    z_sw.voice.voice_mode = VoiceMode::Mono;
+    z_sw.voice.legato = true;
+    let g_sw = compile_zone_graph(&z_sw).unwrap();
+    let mut v_sw = ModularVoice::new_boxed(&spec(&z_sw, &g_sw, sr, 120.0), start(60, None));
+    for _ in 0..2_048 {
+        let _ = v_sw.next_frame(&bank, None);
+    }
+    let mut prev = v_sw.next_frame(&bank, None);
+    let mut max_step = 0.0_f32;
+    for next_mode in [DriveMode::ShockPort, DriveMode::AtomicJet] {
+        if let ModuleKind::Drive(ref mut d) = z_sw.modules[1].kind {
+            d.mode = next_mode;
+        }
+        let zspec = spec(&z_sw, &g_sw, sr, 120.0);
+        assert_no_heap_operations(|| {
+            v_sw.retarget_from_zone(&zspec, start(60, None), true);
+            for _ in 0..512 {
+                let cur = v_sw.next_frame(&bank, None);
+                assert!(cur[0].is_finite() && cur[1].is_finite());
+                max_step = max_step
+                    .max((cur[0] - prev[0]).abs())
+                    .max((cur[1] - prev[1]).abs());
+                prev = cur;
+            }
+        });
+    }
+    assert!(
+        max_step < 0.08,
+        "legato mode crossfade between AtomicJet and ShockPort produced click step {max_step}"
+    );
 }

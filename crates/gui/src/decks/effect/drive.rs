@@ -1,4 +1,4 @@
-//! Multi-mode Drive (`Tape` / `HardClip` / `Fold`) transfer curve and warmth tone filter visualizer.
+//! Multi-mode cubic Drive (`AtomicJet` / `ShockPort`) transfer curve and warmth tone filter visualizer.
 use super::{
     draw_card_panel, draw_lp_response_card, draw_mode_badge_header, split_side_card,
     LpResponseSpec, ModeBadgeHeader,
@@ -48,20 +48,18 @@ pub(super) fn draw_drive_visual(
     let inner = draw_card_panel(dl, left_card, theme);
     let (hdr, body) = inner.split_top(18.0);
     let mode_badge = match mode {
-        DriveMode::Tape => "TAPE",
-        DriveMode::HardClip => "HARD CLIP",
-        DriveMode::Fold => "FOLD",
+        DriveMode::AtomicJet => "ATOMIC JET",
+        DriveMode::ShockPort => "SHOCK PORT",
     };
     let shaper_col = if bypassed {
         theme.text.muted
     } else {
         match mode {
-            DriveMode::Tape => theme
+            DriveMode::AtomicJet => theme
                 .accent
                 .warning_key
-                .mix(theme.accent.alert, drive * 0.45),
-            DriveMode::HardClip => theme.accent.alert,
-            DriveMode::Fold => theme.accent.modulation,
+                .mix(theme.accent.edit, drive * 0.40),
+            DriveMode::ShockPort => theme.accent.alert,
         }
     };
     draw_mode_badge_header(
@@ -70,7 +68,7 @@ pub(super) fn draw_drive_visual(
         &ModeBadgeHeader {
             badge: mode_badge,
             badge_col: shaper_col,
-            title: "SATURATOR  ·  TRANSFER",
+            title: "CUBIC DRIVE  ·  TRANSFER",
             summary,
             title_col: shaper_col,
             bypassed,

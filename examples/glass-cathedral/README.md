@@ -53,7 +53,7 @@ Once open:
 ## Studio Mix & Mastering Chain
 
 - **Spatial Returns:** `Tap` (`5/16` ping-pong `Delay` + `260 Hz` HPF / gentle `3.2 kHz` & high-shelf taming) and `Cathedral` (`5.8s` `Vault Verb`, `3200 Hz` damping + `190 Hz` HPF).
-- **Master Bus (4 Inserts):** `Tape Warmth` (`Drive(Tape)` whisper saturation) → `Cathedral Glue` (`Compressor`) → `Master Tone` (`Eq`, `26 Hz` HPF, gentle low warmth & `3.2 kHz` silk dip) → `Master Limiter` (`-1.5 dBFS` ceiling). Run `--render-report` or `build-glass-cathedral -- --analyze` to inspect section dynamics and gain reduction.
+- **Master Bus (4 Inserts):** `Tape Warmth` (`Drive(AtomicJet)` whisper saturation) → `Cathedral Glue` (`Compressor`) → `Master Tone` (`Eq`, `26 Hz` HPF, gentle low warmth & `3.2 kHz` silk dip) → `Master Limiter` (`-1.5 dBFS` ceiling). Run `--render-report` or `build-glass-cathedral -- --analyze` to inspect section dynamics and gain reduction.
 
 ## Explore Further
 

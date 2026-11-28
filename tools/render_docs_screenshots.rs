@@ -973,9 +973,9 @@ fn main() {
         let drive_id = zone.next_module_id();
         zone.modules.push(RackModule::new(
             drive_id,
-            "Fold Drive",
+            "Shock Drive",
             ModuleKind::Drive(DriveModule {
-                mode: DriveMode::Fold,
+                mode: DriveMode::ShockPort,
                 drive: 0.62,
                 asymmetry: 0.25,
                 tone_hz: 8_800.0,
@@ -994,7 +994,7 @@ fn main() {
             }),
         ));
 
-        // Re-route Acid Filter -> Fold Drive -> VCA (with parallel Bit Crush) + FM/LFO + z-1 feedback.
+        // Re-route Acid Filter -> Shock Drive -> VCA (with parallel Bit Crush) + FM/LFO + z-1 feedback.
         zone.cables
             .retain(|c| !(c.from_module == filter_id && c.to_module == vca_id));
         for (from, to, port, amt) in [

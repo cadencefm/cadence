@@ -61,13 +61,15 @@ fn gpu_renders_all_eight_fx_decks_bypass_and_compact_limiter() {
         });
         project.mixer.master.inserts.push(EffectDevice {
             id: filter_id,
-            name: "Acid PCF Filter".into(),
+            name: "Diode 303 PCF".into(),
             bypassed: false,
             kind: EffectKind::Filter(FilterPatch {
-                mode: FilterMode::AcidLowPass,
+                mode: FilterMode::DiodeLadder,
                 cutoff_hz: 620.0,
                 resonance: 0.72,
                 drive: 0.35,
+                kerr_semitones: 3.5,
+                spread: 0.45,
                 mix: 1.0,
                 env_pattern: 6,
                 env_pattern_id: None,
@@ -77,10 +79,10 @@ fn gpu_renders_all_eight_fx_decks_bypass_and_compact_limiter() {
         });
         project.mixer.master.inserts.push(EffectDevice {
             id: drive_id,
-            name: "Tape Saturator".into(),
+            name: "Atomic Jet Drive".into(),
             bypassed: false,
             kind: EffectKind::Drive(DrivePatch {
-                mode: DriveMode::Tape,
+                mode: DriveMode::AtomicJet,
                 drive: 0.76,
                 asymmetry: 0.0,
                 tone_hz: 5200.0,
@@ -121,7 +123,7 @@ fn gpu_renders_all_eight_fx_decks_bypass_and_compact_limiter() {
                     size: 0.74,
                     decay_seconds: 3.8,
                     damping_hz: 4400.0,
-                    predelay_ms: 48.0,
+                    diffusion: 0.78,
                     mix: 0.36,
                     width: 0.88,
                 }),
@@ -224,7 +226,7 @@ fn gpu_renders_all_eight_fx_decks_bypass_and_compact_limiter() {
             (eq_id, "fx-01-eq.png"),
             (filter_id, "fx-02-filter-pcf.png"),
             (comp_id, "fx-03-compressor-gr.png"),
-            (drive_id, "fx-04-drive-tape.png"),
+            (drive_id, "fx-04-drive-atomic-jet.png"),
             (delay_id, "fx-05-delay-pingpong.png"),
             (chorus_id, "fx-06-chorus.png"),
             (reverb_id, "fx-07-reverb.png"),
@@ -291,7 +293,7 @@ fn gpu_renders_fx_edge_cases_modes_and_groove_browser() {
         let dark = Theme::cadence_dark();
         let light = Theme::studio_light();
 
-        // 1. Edge cases: Mono Reverb, negative-makeup Compressor, 44.1 kHz Parallel Acid Filter.
+        // 1. Edge cases: Mono low-diffusion Reverb, negative-makeup Compressor, 44.1 kHz Parallel Diode Filter.
         let mut project = Project::demo();
         reset_inserts_and_channel_gain_automation(&mut project);
         let base_id = project.max_id() + 1;
@@ -302,13 +304,13 @@ fn gpu_renders_fx_edge_cases_modes_and_groove_browser() {
         project.mixer.master.inserts.clear();
         project.mixer.master.inserts.push(EffectDevice {
             id: rev_mono_id,
-            name: "Mono Plate".into(),
+            name: "Mono Chamber".into(),
             bypassed: false,
             kind: EffectKind::Reverb(ReverbPatch {
                 size: 0.55,
                 decay_seconds: 2.2,
                 damping_hz: 6_400.0,
-                predelay_ms: 18.0,
+                diffusion: 0.20,
                 mix: 0.40,
                 width: 0.0,
             }),
@@ -328,13 +330,15 @@ fn gpu_renders_fx_edge_cases_modes_and_groove_browser() {
         });
         project.mixer.master.inserts.push(EffectDevice {
             id: filt_par_id,
-            name: "Parallel Acid 44k".into(),
+            name: "Parallel Diode 44k".into(),
             bypassed: false,
             kind: EffectKind::Filter(FilterPatch {
-                mode: FilterMode::AcidLowPass,
+                mode: FilterMode::DiodeLadder,
                 cutoff_hz: 950.0,
                 resonance: 0.78,
-                drive: 0.0,
+                drive: 0.20,
+                kerr_semitones: -4.0,
+                spread: 0.35,
                 mix: 0.55,
                 env_pattern: 12,
                 env_pattern_id: None,
@@ -397,11 +401,11 @@ fn gpu_renders_fx_edge_cases_modes_and_groove_browser() {
         );
         assert_ne!(px_grv_dark, px_grv_light);
 
-        // 2. Delay (PingPong vs Stereo) & Drive (Tape vs HardClip vs Fold + Light Fold) mode renders.
+        // 2. Delay (PingPong vs Stereo), Drive (AtomicJet vs ShockPort + Light), & Static Filter (LP24 Kerr/Spread).
         let mut mode_proj = Project::demo();
         reset_inserts_and_channel_gain_automation(&mut mode_proj);
         let base = mode_proj.max_id() + 1;
-        let (delay_pp_id, delay_st_id, drive_tape_id, drive_hard_id, drive_fold_id) =
+        let (delay_pp_id, delay_st_id, drive_jet_id, drive_shock_id, filt_static_id) =
             (base, base + 1, base + 2, base + 3, base + 4);
         mode_proj.mixer.master.inserts = vec![
             EffectDevice {
@@ -427,26 +431,26 @@ fn gpu_renders_fx_edge_cases_modes_and_groove_browser() {
                 }),
             },
             EffectDevice {
-                id: drive_tape_id,
-                name: "Tape Drive".into(),
+                id: drive_jet_id,
+                name: "Atomic Jet".into(),
                 bypassed: false,
                 kind: EffectKind::Drive(DrivePatch {
-                    mode: DriveMode::Tape,
+                    mode: DriveMode::AtomicJet,
                     drive: 0.80,
-                    asymmetry: 0.0,
+                    asymmetry: 0.25,
                     tone_hz: 6_500.0,
                     output_db: 0.0,
                     mix: 1.0,
                 }),
             },
             EffectDevice {
-                id: drive_hard_id,
-                name: "Hard Clip Dist".into(),
+                id: drive_shock_id,
+                name: "Shock Port".into(),
                 bypassed: false,
                 kind: EffectKind::Drive(DrivePatch {
-                    mode: DriveMode::HardClip,
-                    drive: 0.88,
-                    asymmetry: 0.0,
+                    mode: DriveMode::ShockPort,
+                    drive: 0.84,
+                    asymmetry: -0.30,
                     tone_hz: 9_500.0,
                     output_db: 0.0,
                     mix: 1.0,
@@ -455,16 +459,21 @@ fn gpu_renders_fx_edge_cases_modes_and_groove_browser() {
         ];
         if let Some(ch0) = mode_proj.mixer.channels.first_mut() {
             ch0.inserts = vec![EffectDevice {
-                id: drive_fold_id,
-                name: "West-Coast Fold".into(),
+                id: filt_static_id,
+                name: "Cubic LP24".into(),
                 bypassed: false,
-                kind: EffectKind::Drive(DrivePatch {
-                    mode: DriveMode::Fold,
-                    drive: 0.72,
-                    asymmetry: 0.0,
-                    tone_hz: 12_000.0,
-                    output_db: 0.0,
+                kind: EffectKind::Filter(FilterPatch {
+                    mode: FilterMode::ImLpf4,
+                    cutoff_hz: 1_400.0,
+                    resonance: 0.62,
+                    drive: 0.35,
+                    kerr_semitones: 5.5,
+                    spread: 0.72,
                     mix: 1.0,
+                    env_pattern: 0,
+                    env_pattern_id: None,
+                    env_amount: 0.0,
+                    env_decay_ms: 240.0,
                 }),
             }];
         }
@@ -474,34 +483,40 @@ fn gpu_renders_fx_edge_cases_modes_and_groove_browser() {
             ..AudioSnapshot::default()
         };
         let mut mode_app = App::new_in_memory(mode_proj, "fx-modes.json".into()).unwrap();
-        let mut render_fx = |id: u64, name: &str| {
+        let mut render_fx = |id: u64, name: &str, theme: &Theme| {
             mode_app.press_keys("<Esc>").unwrap();
             mode_app.execute_command(&format!("fx {id}")).unwrap();
             render_checked(
                 gpu,
                 name,
                 &mode_app.frame_view(&snap_48k, STATUS),
-                &dark,
+                theme,
                 0.25,
             )
         };
-        let px_pp = render_fx(delay_pp_id, "fx-16-delay-pingpong.png");
-        let px_st = render_fx(delay_st_id, "fx-17-delay-stereo.png");
-        let px_tape = render_fx(drive_tape_id, "fx-18-drive-tape.png");
-        let px_hard = render_fx(drive_hard_id, "fx-19-drive-hardclip.png");
-        let px_fold = render_fx(drive_fold_id, "fx-20-drive-fold-dark.png");
+        let px_pp = render_fx(delay_pp_id, "fx-16-delay-pingpong.png", &dark);
+        let px_st = render_fx(delay_st_id, "fx-17-delay-stereo.png", &dark);
+        let px_jet = render_fx(drive_jet_id, "fx-18-drive-atomic-jet.png", &dark);
+        let px_shock = render_fx(drive_shock_id, "fx-19-drive-shock-port-dark.png", &dark);
         assert_ne!(px_pp, px_st, "PingPong and Stereo delay must differ");
-        assert_ne!(px_tape, px_hard, "Tape and HardClip drive must differ");
-        assert_ne!(px_hard, px_fold, "HardClip and Fold drive must differ");
-        assert_ne!(px_tape, px_fold, "Tape and Fold drive must differ");
-
-        let px_fold_light = render_checked(
-            gpu,
-            "fx-21-drive-fold-light.png",
-            &mode_app.frame_view(&snap_48k, STATUS),
-            &light,
-            0.25,
+        assert_ne!(
+            px_jet, px_shock,
+            "AtomicJet and ShockPort drive must differ"
         );
-        assert_ne!(px_fold, px_fold_light);
+
+        let px_shock_light = render_fx(drive_shock_id, "fx-20-drive-shock-port-light.png", &light);
+        assert_ne!(px_shock, px_shock_light);
+
+        let px_filt_dark = render_fx(
+            filt_static_id,
+            "fx-21-filter-im-lpf4-kerr-spread-dark.png",
+            &dark,
+        );
+        let px_filt_light = render_fx(
+            filt_static_id,
+            "fx-22-filter-im-lpf4-kerr-spread-light.png",
+            &light,
+        );
+        assert_ne!(px_filt_dark, px_filt_light);
     });
 }

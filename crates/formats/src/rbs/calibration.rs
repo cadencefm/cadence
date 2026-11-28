@@ -20,7 +20,7 @@ use cadence_core::rack::{
 /// Normal TB-303 step velocity — sits cleanly below `cadence_core::dsp::ACID_ACCENT_THRESHOLD`
 /// (`0.85`) so non-accented notes retain their full authored filter envelope decay.
 pub(super) const RBS_303_NORMAL_VEL: f32 = 0.64;
-/// Accented TB-303 step velocity — drives `acid_accent_amount(1.0) == 1.0` for crisp Acid Ladder
+/// Accented TB-303 step velocity — drives `acid_accent_amount(1.0) == 1.0` for crisp Diode Ladder
 /// accent decay snap, resonance boost, and filter `vel_amount` octave sweep.
 pub(super) const RBS_303_ACCENT_VEL: f32 = 1.0;
 
@@ -131,9 +131,9 @@ pub(super) fn rbs_pcf_decay_ms(v: u8) -> f32 {
 }
 
 pub(super) fn rbs_pcf_filter_mode(v: u8) -> FilterMode {
-    // ReBirth PCF mode: 0 = BandPass, 1 = LowPass.
+    // ReBirth PCF mode: 0 = BandPass, 1 = 12 dB/oct LowPass (`ImLpf2`).
     if v == 1 {
-        FilterMode::LowPass
+        FilterMode::ImLpf2
     } else {
         FilterMode::BandPass
     }
@@ -158,10 +158,11 @@ pub(super) fn rbs_dist_tone_hz(shape: u8) -> f32 {
     norm_to_log(t.powf(0.6), 9_500.0, 18_000.0).clamp(600.0, 18_000.0)
 }
 
-/// Output gain trim (dB) compensating `DriveMode::HardClip` overdrive so engaging ReBirth DIST
-/// adds dense harmonic bite without jumping +12 dB louder than clean synths and drums.
+/// Output gain trim (dB) balancing `DriveMode::ShockPort` harmonic density so engaging ReBirth
+/// DIST stays level-matched with clean synths and drums (`ShockPort` already holds unity
+/// small-signal slope and bounds peaks smoothly).
 pub(super) fn rbs_dist_output_db(drive: f32) -> f32 {
-    (-11.0 * drive.clamp(0.0, 1.0).powf(0.65)).clamp(-12.0, 0.0)
+    (-2.5 * drive.clamp(0.0, 1.0)).clamp(-3.0, 0.0)
 }
 
 pub(super) fn rbs_comp_threshold_db(v: u8) -> f32 {
@@ -181,7 +182,7 @@ pub(super) const RBS_ECHO_SEND_SCALE: f32 = 0.76;
 pub(super) const RBS_MASTER_GAIN_SCALE: f32 = 0.88;
 pub(super) const RBS_MASTER_GAIN_MAX: f32 = 0.96;
 /// Nominal source headroom (dB) on imported TB-303 Racks so dual-303 mixes with automated
-/// `0..1` channel faders balance cleanly without altering `AcidLowPass` internal drive.
+/// `0..1` channel faders balance cleanly without altering `DiodeLadder` internal drive.
 pub(super) const RBS_303_RACK_GAIN_DB: f32 = -6.0;
 /// Nominal source headroom (dB) on imported TR-808 / TR-909 drum Racks, compensating
 /// full-scale factory kits plus per-voice `trim_db` and `level_to_zone_db` boosts so all
@@ -335,7 +336,7 @@ pub(super) fn rack_patch_for_303(
                 }
             } else if m.id == targets.filter_id {
                 if let ModuleKind::Filter(flt) = &mut m.kind {
-                    flt.mode = FilterMode::AcidLowPass;
+                    flt.mode = FilterMode::DiodeLadder;
                     flt.drive = RBS_303_DRIVE;
                 }
             }
@@ -607,7 +608,7 @@ fn splice_before_out(zone: &mut RackZone, mut new_mod: RackModule) -> Option<u16
     Some(new_id)
 }
 
-/// Return the zone's existing `Filter` module ID or splice a neutral wide-open `LowPass`
+/// Return the zone's existing `Filter` module ID or splice a neutral wide-open `ImLpf2`
 /// `Filter` inline before `Out` on sampled drum zones.
 pub(super) fn ensure_zone_filter(zone: &mut RackZone) -> Option<u16> {
     if let Some(id) = find_zone_filter(zone) {
@@ -619,10 +620,12 @@ pub(super) fn ensure_zone_filter(zone: &mut RackZone) -> Option<u16> {
             0,
             "Tone Filter",
             ModuleKind::Filter(FilterModule {
-                mode: FilterMode::LowPass,
+                mode: FilterMode::ImLpf2,
                 cutoff_hz: 20_000.0,
                 resonance: 0.0,
                 drive: 0.0,
+                kerr_semitones: 0.0,
+                spread: 0.0,
                 key_tracking: 0.0,
                 vel_amount: 0.0,
                 mix: 1.0,

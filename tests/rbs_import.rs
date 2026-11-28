@@ -440,7 +440,7 @@ fn delay_track_5_echo_pan_automates_stereo_return_bus_across_bars() {
         (64, 4, 127),
     ];
 
-    // Verify Dist imports as DriveMode::HardClip alongside DelayMode::Stereo on Echo.
+    // Verify Dist imports as DriveMode::ShockPort alongside DelayMode::Stereo on Echo.
     rbs.dist = [1, 110, 96, 0, 0, 0, 0, 0];
     rbs.tracks[0].push((0, 21, 1)); // TR-808 Dist ON
     rbs.tracks[6] = vec![(0, 0, 1), (0, 1, 110), (0, 2, 96)];
@@ -455,7 +455,7 @@ fn delay_track_5_echo_pan_automates_stereo_return_bus_across_bars() {
     assert!(ch_808.inserts.iter().any(|d| matches!(
         d.kind,
         cadence_core::mixer::EffectKind::Drive(p)
-            if p.mode == cadence_core::mixer::DriveMode::HardClip && p.drive > 0.7
+            if p.mode == cadence_core::mixer::DriveMode::ShockPort && p.drive > 0.7
     )));
     let echo = proj
         .mixer
@@ -512,7 +512,7 @@ fn pcf_track_7_honors_native_pattern_decay_and_dynamic_bp_lp_mode_switch() {
             (0, 5, decay),
             (0, 6, 0),   // BandPass at bar 0
             (64, 4, 24), // switch to Pattern 24 (Acid Bounce) at bar 2!
-            (64, 6, 1),  // switch to LowPass at bar 2!
+            (64, 6, 1),  // switch to ImLpf2 (12 dB/oct LP) at bar 2!
         ];
         import_rbs_bytes(&rbs.build("PcfTest"), "PcfTest")
             .unwrap()
@@ -564,8 +564,9 @@ fn pcf_track_7_honors_native_pattern_decay_and_dynamic_bp_lp_mode_switch() {
     };
     assert!(points.len() >= 2);
     let expected_bp = EffectParam::FilterMode.normalize(FilterMode::BandPass.to_index() as f32);
+    let expected_lp = EffectParam::FilterMode.normalize(FilterMode::ImLpf2.to_index() as f32);
     assert!((points[0].value - expected_bp).abs() < 1e-3);
-    assert!(points[1].value.abs() < 1e-3);
+    assert!((points[1].value - expected_lp).abs() < 1e-3);
 
     assert!(
         short_dec.modulations.iter().any(|m| matches!(

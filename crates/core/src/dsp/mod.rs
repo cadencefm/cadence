@@ -41,10 +41,10 @@ pub use env::{
     ModularEnv, ModularEnvParams, RhythmicEnv,
 };
 pub use filter::{
-    acid_accent_amount, acid_filter_decay_ms, acid_ladder_transfer, filter_magnitude,
+    acid_accent_amount, acid_filter_decay_ms, diode_ladder_transfer, filter_magnitude,
     filter_magnitude_db, filter_mix_magnitude_db, filter_transfer, filter_velocity_mod,
-    one_pole_lpf_transfer, svf_transfer, AcidAccentMod, AcidCoeffs, AcidLadder, RhythmicFilter,
-    Svf, SvfCoeffs, ACID_ACCENT_THRESHOLD, ACID_FILTER_VEL_MAX,
+    im_lpf_transfer, one_pole_lpf_transfer, svf_transfer, AcidAccentMod, MultiModeFilter,
+    RhythmicFilter, Svf, SvfCoeffs, ACID_ACCENT_THRESHOLD, ACID_FILTER_VEL_MAX,
 };
 pub use gain::{
     apply_fader_gain, apply_pan_balance, apply_strip_gain, channel_gain_to_norm, format_db_fixed,
@@ -67,8 +67,8 @@ pub use math::{
     sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, semitones_to_ratio_f32,
     semitones_to_ratio_f64, smooth_step_f32, smooth_step_f64, BypassFader, BypassStep, LogSmoother,
     PeakHold, Smoother, AUDIO_SUB_BLOCK_FRAMES, BYPASS_FADE_MS, BYPASS_SETTLE_EPS, CHOKE_MS,
-    DECAY_LN_60DB, FAST_RELEASE_MS, LN_100, NYQUIST_SAFE_RATIO, SMOOTH_SETTLE_EPS_F32,
-    SMOOTH_SETTLE_EPS_F64, TAIL_SILENCE_FLOOR_F32, TAIL_SILENCE_FLOOR_F64,
+    DECAY_LN_60DB, FAST_RELEASE_MS, LIN_FLOOR_F64, LN_100, NYQUIST_SAFE_RATIO,
+    SMOOTH_SETTLE_EPS_F32, SMOOTH_SETTLE_EPS_F64, TAIL_SILENCE_FLOOR_F32, TAIL_SILENCE_FLOOR_F64,
 };
 pub use noise::{
     mix_seed, NoiseGen, PinkFilter, XorShift32, GOLDEN_RATIO_32, NOISE_REF_SAMPLE_RATE,
@@ -89,12 +89,10 @@ pub use reverb::{reverb_hf_rt60_envelope, reverb_rt60_envelope, Reverb};
 pub use sampler_voice::{sample_hermite_stereo_f64, SamplerCursor, SamplerRegion};
 pub use saturate::{
     asymmetric_drive_shape, asymmetric_drive_shape_f64, drive_shape_mode, drive_shape_mode_asym,
-    drive_shape_mode_asym_f64, drive_shape_mode_f64, drive_transfer_sample,
-    shape_drive_oversampled_2x, shape_drive_oversampled_2x_coeffs, soft_clip_drive,
+    drive_shape_mode_asym_f64, drive_shape_mode_f64, drive_transfer_sample, soft_clip_drive,
     soft_clip_drive_f64, soft_knee_guard_f64, voice_guard_f64, Drive, DriveShaperCoeffs,
-    Halfband2x, Halfband2xDryAlign, SoftClipCoeffs, DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ,
-    DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ, VOICE_GUARD_CEILING, VOICE_GUARD_HEADROOM,
-    VOICE_GUARD_KNEE,
+    Halfband2x, SoftClipCoeffs, DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB,
+    DRIVE_MIN_TONE_HZ, VOICE_GUARD_CEILING, VOICE_GUARD_HEADROOM, VOICE_GUARD_KNEE,
 };
 pub use slice::{
     compute_waveform_peaks_window, default_zero_snap_radius, detect_grid_slices,

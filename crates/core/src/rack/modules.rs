@@ -116,7 +116,7 @@ crate::define_choice_enum! {
         Lfo => ("lfo", "LFO"),
         Filter => ("filter", "Filter", ["flt", "vcf"]),
         Vca => ("vca", "VCA", ["amp", "ring", "ringmod"]),
-        Drive => ("drive", "Drive", ["drv", "sat", "saturator", "dist", "fold"]),
+        Drive => ("drive", "Drive", ["drv", "sat", "saturator", "dist"]),
         #[serde(rename = "lofi")]
         LoFi => ("lofi", "Lo-Fi", ["lo_fi", "lfi", "crush", "bitcrush", "bitcrusher"]),
         Resonator => ("resonator", "Resonator", ["res", "modal", "rings", "plate"]),
@@ -271,6 +271,8 @@ impl ModuleKindTag {
                 ModuleParam::Cutoff,
                 ModuleParam::Resonance,
                 ModuleParam::Drive,
+                ModuleParam::Kerr,
+                ModuleParam::Spread,
                 ModuleParam::KeyTrack,
                 ModuleParam::VelAmount,
                 ModuleParam::Mix,
@@ -847,8 +849,9 @@ impl LfoModule {
     }
 }
 
-/// Multi-mode ZDF filter (`LowPass`, `BandPass`, `HighPass`, `AcidLowPass`, `LowPass6`)
-/// with pre-drive, key tracking, velocity/Acid accent modulation, and parallel dry/wet mix.
+/// Multi-mode cubic & ZDF filter (`ImLpf2`, `ImLpf3`, `ImLpf4`, `DiodeLadder`,
+/// `BandPass`, `HighPass`, `LowPass6`) with diode bark / peak drag, State-Kerr resonance bend,
+/// zero-comb quadrature M/S spread, key tracking, velocity/accent modulation, and parallel mix.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FilterModule {
@@ -861,6 +864,10 @@ pub struct FilterModule {
     #[serde(default)]
     pub drive: f32,
     #[serde(default)]
+    pub kerr_semitones: f32,
+    #[serde(default)]
+    pub spread: f32,
+    #[serde(default)]
     pub key_tracking: f32,
     #[serde(default)]
     pub vel_amount: f32,
@@ -871,10 +878,12 @@ pub struct FilterModule {
 impl Default for FilterModule {
     fn default() -> Self {
         Self {
-            mode: FilterMode::LowPass,
+            mode: FilterMode::ImLpf2,
             cutoff_hz: 7_000.0,
             resonance: 0.12,
             drive: 0.0,
+            kerr_semitones: 0.0,
+            spread: 0.0,
             key_tracking: 0.0,
             vel_amount: 0.0,
             mix: 1.0,
@@ -906,7 +915,7 @@ impl Default for VcaModule {
     }
 }
 
-/// Multi-mode waveshaper (`Tape`, `HardClip`, `Fold`) with bipolar asymmetry, tone LPF,
+/// Pure 1x-rate cubic waveshaper (`AtomicJet`, `ShockPort`) with bipolar asymmetry, tone LPF,
 /// output trim, and dry/wet mix, backed directly by `crate::dsp::saturate`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -928,7 +937,7 @@ pub struct DriveModule {
 impl Default for DriveModule {
     fn default() -> Self {
         Self {
-            mode: DriveMode::Tape,
+            mode: DriveMode::AtomicJet,
             drive: 0.35,
             asymmetry: 0.0,
             tone_hz: 12_000.0,
@@ -1197,6 +1206,8 @@ impl ModuleKind {
             (Self::Filter(m), ModuleParam::Cutoff) => Some(m.cutoff_hz),
             (Self::Filter(m), ModuleParam::Resonance) => Some(m.resonance),
             (Self::Filter(m), ModuleParam::Drive) => Some(m.drive),
+            (Self::Filter(m), ModuleParam::Kerr) => Some(m.kerr_semitones),
+            (Self::Filter(m), ModuleParam::Spread) => Some(m.spread),
             (Self::Filter(m), ModuleParam::KeyTrack) => Some(m.key_tracking),
             (Self::Filter(m), ModuleParam::VelAmount) => Some(m.vel_amount),
             (Self::Filter(m), ModuleParam::Mix) => Some(m.mix),
@@ -1301,6 +1312,8 @@ impl ModuleKind {
             (Self::Filter(m), ModuleParam::Cutoff) => m.cutoff_hz = value,
             (Self::Filter(m), ModuleParam::Resonance) => m.resonance = value,
             (Self::Filter(m), ModuleParam::Drive) => m.drive = value,
+            (Self::Filter(m), ModuleParam::Kerr) => m.kerr_semitones = value,
+            (Self::Filter(m), ModuleParam::Spread) => m.spread = value,
             (Self::Filter(m), ModuleParam::KeyTrack) => m.key_tracking = value,
             (Self::Filter(m), ModuleParam::VelAmount) => m.vel_amount = value,
             (Self::Filter(m), ModuleParam::Mix) => m.mix = value,

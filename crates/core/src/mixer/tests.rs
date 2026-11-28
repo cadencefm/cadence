@@ -21,6 +21,14 @@ fn generic_device_parameters_roundtrip_units_and_reject_wrong_device_controls() 
     assert!((EffectParam::Decay.denormalize(decay) - 0.85).abs() < 1e-5);
     let damping = EffectParam::Damping.parse_value("4.2kHz").unwrap();
     assert!((EffectParam::Damping.denormalize(damping) - 4200.0).abs() < 0.01);
+    assert_eq!(verb.parse_param("diff"), Some(EffectParam::Diffusion));
+    let diffusion = EffectParam::Diffusion.parse_value("65%").unwrap();
+    assert!((EffectParam::Diffusion.denormalize(diffusion) - 0.65).abs() < 1e-5);
+    verb.write_normalized(EffectParam::Diffusion, diffusion)
+        .unwrap();
+    assert_eq!(EffectParam::Diffusion.format_normalized(diffusion), "65%");
+    assert!(verb.write_normalized(EffectParam::Kerr, 0.5).is_err());
+    assert!(verb.write_normalized(EffectParam::Spread, 0.5).is_err());
     let encoded = serde_json::to_string(&verb).unwrap();
     assert_eq!(
         serde_json::from_str::<EffectDevice>(&encoded).unwrap(),
@@ -146,10 +154,11 @@ fn delay_and_drive_modes_roundtrip_serde_params_parsing_and_nudging() {
         assert_eq!(DriveMode::parse(m.label()), Some(m));
         assert_eq!(DriveMode::parse(&i.to_string()), Some(m));
     }
-    assert_eq!(DriveMode::from_index(99), DriveMode::Fold);
-    assert_eq!(DriveMode::parse("tape"), Some(DriveMode::Tape));
-    assert_eq!(DriveMode::parse("hard_clip"), Some(DriveMode::HardClip));
-    assert_eq!(DriveMode::parse("fold"), Some(DriveMode::Fold));
+    assert_eq!(DriveMode::from_index(99), DriveMode::ShockPort);
+    assert_eq!(DriveMode::parse("atomic_jet"), Some(DriveMode::AtomicJet));
+    assert_eq!(DriveMode::parse("shock_port"), Some(DriveMode::ShockPort));
+    assert_eq!(DriveMode::parse("jet"), Some(DriveMode::AtomicJet));
+    assert_eq!(DriveMode::parse("shock"), Some(DriveMode::ShockPort));
     assert_eq!(DriveMode::parse("invalid"), None);
 
     // 2. EffectParam metadata, discrete classification, ALL canonical name roundtrip, and contextual `mode`.
@@ -197,19 +206,25 @@ fn delay_and_drive_modes_roundtrip_serde_params_parsing_and_nudging() {
     assert_eq!(EffectParam::DelayMode.format_normalized(0.0), "Ping-Pong");
 
     assert_eq!(drive.read_normalized(EffectParam::DriveMode), Some(0.0));
-    drive.nudge(EffectParam::DriveMode, 1, false).unwrap();
-    assert_eq!(drive.read_normalized(EffectParam::DriveMode), Some(0.5));
-    assert_eq!(EffectParam::DriveMode.format_normalized(0.5), "Hard Clip");
+    assert_eq!(EffectParam::DriveMode.format_normalized(0.0), "Atomic Jet");
     drive.nudge(EffectParam::DriveMode, 1, false).unwrap();
     assert_eq!(drive.read_normalized(EffectParam::DriveMode), Some(1.0));
-    assert_eq!(EffectParam::DriveMode.format_normalized(1.0), "Fold");
-    let parsed = EffectParam::DriveMode.parse_value("hard_clip").unwrap();
+    assert_eq!(EffectParam::DriveMode.format_normalized(1.0), "Shock Port");
+    let parsed = EffectParam::DriveMode.parse_value("atomic_jet").unwrap();
     drive
         .write_normalized(EffectParam::DriveMode, parsed)
         .unwrap();
     assert_eq!(
         drive.native_value(EffectParam::DriveMode),
-        Some(DriveMode::HardClip.to_index() as f32)
+        Some(DriveMode::AtomicJet.to_index() as f32)
+    );
+    let parsed_shock = EffectParam::DriveMode.parse_value("shock_port").unwrap();
+    drive
+        .write_normalized(EffectParam::DriveMode, parsed_shock)
+        .unwrap();
+    assert_eq!(
+        drive.native_value(EffectParam::DriveMode),
+        Some(DriveMode::ShockPort.to_index() as f32)
     );
 
     // Reject cross-device mode writes cleanly.
@@ -261,18 +276,64 @@ fn channel_strip_validates_plus_6db_headroom_and_formats_normalized_targets() {
     assert_eq!(normalize_duck_recovery_ms(f32::NAN), 0.0);
     assert!((normalize_duck_recovery_ms(1005.0) - 0.5).abs() < 1e-6);
     assert_eq!(
+        EffectParam::FilterMode.parse_value_native("lp12").unwrap(),
+        0.0
+    );
+    assert_eq!(
+        EffectParam::FilterMode.parse_value_native("lp18").unwrap(),
+        1.0
+    );
+    assert_eq!(
+        EffectParam::FilterMode.parse_value_native("lp24").unwrap(),
+        2.0
+    );
+    assert_eq!(
         EffectParam::FilterMode.parse_value_native("303").unwrap(),
         3.0
     );
     assert_eq!(
-        EffectParam::FilterMode.parse_value_native("lp6").unwrap(),
+        EffectParam::FilterMode.parse_value_native("bp").unwrap(),
         4.0
     );
-    assert_eq!(EffectParam::FilterMode.format_normalized(1.0), "LP 6dB");
     assert_eq!(
         EffectParam::FilterMode.parse_value_native("hp").unwrap(),
-        2.0
+        5.0
     );
+    assert_eq!(
+        EffectParam::FilterMode.parse_value_native("lp6").unwrap(),
+        6.0
+    );
+    assert_eq!(EffectParam::FilterMode.format_normalized(1.0), "LP 6dB");
+
+    // Filter Kerr & Spread parameter parsing, formatting, nudging, and validation.
+    let mut flt = EffectDevice::filter(100);
+    assert_eq!(flt.parameter_descriptors().len(), 10);
+    assert_eq!(flt.parse_param("kerr"), Some(EffectParam::Kerr));
+    assert_eq!(flt.parse_param("bend"), Some(EffectParam::Kerr));
+    assert_eq!(flt.parse_param("dispersion"), Some(EffectParam::Kerr));
+    assert_eq!(flt.parse_param("spread"), Some(EffectParam::Spread));
+    assert_eq!(flt.parse_param("quad"), Some(EffectParam::Spread));
+    assert_eq!(flt.native_value(EffectParam::Kerr), Some(0.0));
+    assert_eq!(EffectParam::Kerr.format_native(0.0), "0.0 st");
+    assert_eq!(EffectParam::Kerr.format_native(3.5), "+3.5 st");
+    assert_eq!(EffectParam::Kerr.format_native(-6.0), "-6.0 st");
+    let kerr_parsed = EffectParam::Kerr.parse_value_native("-4.5st").unwrap();
+    assert!((kerr_parsed + 4.5).abs() < 1e-6);
+    flt.write_native(EffectParam::Kerr, kerr_parsed).unwrap();
+    flt.nudge(EffectParam::Kerr, 1, false).unwrap();
+    assert!((flt.native_value(EffectParam::Kerr).unwrap() + 4.0).abs() < 1e-5);
+    flt.nudge(EffectParam::Kerr, 1, true).unwrap();
+    assert!((flt.native_value(EffectParam::Kerr).unwrap() + 1.0).abs() < 1e-5);
+
+    assert_eq!(flt.native_value(EffectParam::Spread), Some(0.0));
+    assert_eq!(EffectParam::Spread.format_native(0.5), "50%");
+    let spread_parsed = EffectParam::Spread.parse_value_native("75%").unwrap();
+    assert!((spread_parsed - 0.75).abs() < 1e-6);
+    flt.write_native(EffectParam::Spread, spread_parsed)
+        .unwrap();
+    flt.nudge(EffectParam::Spread, -1, true).unwrap();
+    assert!((flt.native_value(EffectParam::Spread).unwrap() - 0.70).abs() < 1e-5);
+    assert!(flt.validate().is_ok());
 
     // Drive asymmetry parameter parsing, formatting, nudging, and validation.
     let mut drv = EffectDevice::drive(99);
@@ -350,7 +411,7 @@ fn mixer_choice_enums_and_effect_kind_tag_dispatch_roundtrip() {
         assert_eq!(v.cycle(1).cycle(-1), v);
     }
     round_cycle(DelayMode::PingPong);
-    round_cycle(DriveMode::Tape);
+    round_cycle(DriveMode::AtomicJet);
     round_cycle(ChannelKind::Audio);
     round_cycle(ChannelParam::Gain);
     round_cycle(EffectKindTag::Delay);

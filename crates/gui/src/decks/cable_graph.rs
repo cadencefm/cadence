@@ -1621,7 +1621,7 @@ mod tests {
         flt.activity = audio_activity_norm(1.25);
         flt.hot = true;
 
-        let mut drive = CableNode::new("Drive", "TAPE", "+6.0 dB · Asym", theme.accent.warning_key);
+        let mut drive = CableNode::new("Drive", "JET", "+6.0 dB · Asym", theme.accent.warning_key);
         drive.in_path = true;
         drive.activity = audio_activity_norm(0.88);
 

@@ -66,6 +66,8 @@
               "cutoff_hz": 480.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -156,7 +158,7 @@
             "name": "Diode Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.19,
               "asymmetry": 0.45,
               "tone_hz": 16000.0,
@@ -173,6 +175,8 @@
               "cutoff_hz": 26.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0

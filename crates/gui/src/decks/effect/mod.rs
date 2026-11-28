@@ -11,7 +11,9 @@ mod time;
 
 use crate::chrome::{draw_deck_frame, DeckFrameSpec};
 use crate::decks::object::{control_list_preferred_height, draw_control_list};
-pub(super) use crate::decks::vis::{draw_card_panel, draw_freq_ticks_and_grid, draw_meter_bar_row};
+pub(super) use crate::decks::vis::{
+    draw_bipolar_meter_bar_row, draw_card_panel, draw_freq_ticks_and_grid, draw_meter_bar_row,
+};
 pub(super) use crate::display::{build_curve_pts, sample_curve_y};
 use crate::display::{trim_label, DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};

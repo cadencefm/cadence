@@ -45,10 +45,12 @@
             "name": "Acid Filter",
             "kind": {
               "type": "filter",
-              "mode": "acid_low_pass",
+              "mode": "diode_ladder",
               "cutoff_hz": 440.0,
               "resonance": 0.74,
               "drive": 0.3,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.25,
               "vel_amount": 2.0,
               "mix": 1.0

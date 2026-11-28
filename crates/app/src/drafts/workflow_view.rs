@@ -419,7 +419,7 @@ impl WorkflowDraft {
                         'f',
                         "Filter",
                         "filter",
-                        "Pattern-Controlled Filter (SVF / Acid 303 + rhythmic env)",
+                        "Pattern-Controlled Filter (LP12–24 / Diode 303 / SVF + rhythmic env)",
                     ),
                     (
                         'c',
@@ -437,11 +437,16 @@ impl WorkflowDraft {
                         'd',
                         "Drive",
                         "drive",
-                        "Analog saturation / overdrive + tone LPF",
+                        "Cubic 1x waveshaper (Atomic Jet / Shock Port) + tone LPF",
                     ),
                     ('t', "Delay", "delay", "Tempo-synced stereo ping-pong delay"),
                     ('h', "Chorus", "chorus", "Stereo modulated BBD-style chorus"),
-                    ('r', "Reverb", "reverb", "Coprime FDN stereo studio reverb"),
+                    (
+                        'r',
+                        "Reverb",
+                        "reverb",
+                        "Zero-delay 96-mode ambient modal room reverb",
+                    ),
                 ] {
                     out.push(Candidate {
                         view: DraftCandidate {

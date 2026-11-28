@@ -526,6 +526,8 @@ fn make_hat_zone(id: u16, name: &str, midi: u8, choke: Option<u8>, decay_ms: f32
                     cutoff_hz: 7_500.0,
                     resonance: 0.1,
                     drive: 0.0,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.0,
                     vel_amount: 0.0,
                     mix: 1.0,
@@ -561,7 +563,7 @@ fn make_hat_zone(id: u16, name: &str, midi: u8, choke: Option<u8>, decay_ms: f32
 
 #[test]
 fn acid_303_accent_and_drumkit_rack_with_hat_choke_render_cleanly() {
-    // 1. Verify AcidLowPass accented hit is brighter/hotter than unaccented hit.
+    // 1. Verify DiodeLadder accented hit is brighter/hotter than unaccented hit.
     let mut acid = RackPatch::acid_303();
     {
         let flt = filter_mut(&mut acid);
@@ -3366,7 +3368,7 @@ fn rack_bus_wide_open_cutoff_bypasses_svf_at_all_sample_rates() {
                     svf_active = engine
                         .voices()
                         .iter()
-                        .any(|v| v.active && v.rack_svf_was_active);
+                        .any(|v| v.active && v.rack_filter_was_active);
                 }
                 if i >= warmup {
                     sum_sq += f64::from(frame[0]) * f64::from(frame[0]);
@@ -3702,9 +3704,9 @@ fn watchdog_ema_time_based_overload_sr_scaled_fade_and_engine_pdc_telemetry() {
         let sh = Shared::new_arc();
         let mut eng = Engine::new(score, Vec::new(), sr, Arc::clone(&sh));
         assert_eq!(
-            eng.voices()[0].rack_svf_mask,
+            eng.voices()[0].rack_filter_mask,
             expected_svf_mask,
-            "sr={sr}: rack_svf_mask mismatch"
+            "sr={sr}: rack_filter_mask mismatch"
         );
         let gen_start = sh.mixer_meter_generation.load(Ordering::Acquire);
         for _ in 0..(expected_meter_stride - 1) {

@@ -80,10 +80,12 @@
             "name": "Body LP",
             "kind": {
               "type": "filter",
-              "mode": "low_pass",
+              "mode": "im_lpf_2",
               "cutoff_hz": 440.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -283,6 +285,8 @@
               "cutoff_hz": 2400.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -319,7 +323,7 @@
             "name": "Tom Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.13,
               "asymmetry": 0.0,
               "tone_hz": 18000.0,

@@ -175,6 +175,8 @@
               "cutoff_hz": 1750.0,
               "resonance": 0.08,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -185,7 +187,7 @@
             "name": "Bronze Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.2,
               "asymmetry": 0.04,
               "tone_hz": 17200.0,

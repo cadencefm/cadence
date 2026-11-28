@@ -129,6 +129,8 @@
               "cutoff_hz": 480.0,
               "resonance": 0.12,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -139,7 +141,7 @@
             "name": "Rim Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.36,
               "asymmetry": 0.1,
               "tone_hz": 14500.0,

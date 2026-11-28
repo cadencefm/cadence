@@ -5992,10 +5992,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 20000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6073,10 +6075,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 20000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6154,10 +6158,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6235,10 +6241,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6316,10 +6324,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6397,10 +6407,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 18000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6479,10 +6491,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 18000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6560,10 +6574,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 14000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6641,10 +6657,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 12000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6722,10 +6740,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6804,10 +6824,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6885,10 +6907,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 12000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -6966,10 +6990,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 12000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7047,10 +7073,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 14000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7128,10 +7156,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7209,10 +7239,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 18000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7305,10 +7337,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7386,10 +7420,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 18000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7467,10 +7503,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7548,10 +7586,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7629,10 +7669,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7710,10 +7752,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 18000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7792,10 +7836,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16500.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7873,10 +7919,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 15000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -7954,10 +8002,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 16000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -8035,10 +8085,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 17000.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -8117,10 +8169,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 15500.0,
                   "resonance": 0.0,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -8212,10 +8266,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 3600.0,
                   "resonance": 0.24,
                   "drive": 0.0,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.0,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -8422,10 +8478,12 @@
                 "name": "Acid Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "acid_low_pass",
+                  "mode": "diode_ladder",
                   "cutoff_hz": 420.0,
                   "resonance": 0.72,
                   "drive": 0.32,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.28,
                   "vel_amount": 2.35,
                   "mix": 1.0
@@ -8682,10 +8740,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 680.0,
                   "resonance": 0.22,
                   "drive": 0.16,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.18,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -8923,10 +8983,12 @@
                 "name": "Filter",
                 "kind": {
                   "type": "filter",
-                  "mode": "low_pass",
+                  "mode": "im_lpf_2",
                   "cutoff_hz": 5600.0,
                   "resonance": 0.14,
                   "drive": 0.08,
+                  "kerr_semitones": 0.0,
+                  "spread": 0.0,
                   "key_tracking": 0.28,
                   "vel_amount": 0.0,
                   "mix": 1.0
@@ -9927,7 +9989,7 @@
           "kind": {
             "type": "drive",
             "patch": {
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.14,
               "asymmetry": 0.0,
               "tone_hz": 16800.0,
@@ -10071,7 +10133,7 @@
             "kind": {
               "type": "drive",
               "patch": {
-                "mode": "fold",
+                "mode": "shock_port",
                 "drive": 0.34,
                 "asymmetry": 0.0,
                 "tone_hz": 2600.0,
@@ -10119,7 +10181,7 @@
             "kind": {
               "type": "drive",
               "patch": {
-                "mode": "hard_clip",
+                "mode": "shock_port",
                 "drive": 0.38,
                 "asymmetry": 0.0,
                 "tone_hz": 3900.0,
@@ -10231,10 +10293,12 @@
             "kind": {
               "type": "filter",
               "patch": {
-                "mode": "low_pass",
+                "mode": "im_lpf_2",
                 "cutoff_hz": 640.0,
                 "resonance": 0.36,
                 "drive": 0.16,
+                "kerr_semitones": 0.0,
+                "spread": 0.0,
                 "mix": 1.0,
                 "env_pattern": 0,
                 "env_pattern_id": 1,
@@ -10305,7 +10369,7 @@
             "kind": {
               "type": "drive",
               "patch": {
-                "mode": "tape",
+                "mode": "atomic_jet",
                 "drive": 0.24,
                 "asymmetry": 0.0,
                 "tone_hz": 14500.0,
@@ -10491,7 +10555,7 @@
                 "size": 0.54,
                 "decay_seconds": 1.45,
                 "damping_hz": 4800.0,
-                "predelay_ms": 14.0,
+                "diffusion": 0.45,
                 "mix": 1.0,
                 "width": 0.86
               }

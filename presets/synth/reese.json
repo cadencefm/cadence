@@ -81,10 +81,12 @@
             "name": "Filter",
             "kind": {
               "type": "filter",
-              "mode": "low_pass",
+              "mode": "im_lpf_2",
               "cutoff_hz": 1100.0,
               "resonance": 0.25,
               "drive": 0.23,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0

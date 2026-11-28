@@ -2,7 +2,7 @@
 
 **48 bars · 132 BPM · A natural minor · 1:27 full hardware-groovebox arrangement**
 
-*Iron Circuit* is Cadence's Acid Electro flagship showcase — channeling Drexciya, Aphex Twin's *Analord*, and Underground Resistance through dual sampled `TR-808` + `TR-909` `Rack` kits, a filtered Detroit chord `Sampler` Rack, native `AcidLowPass` 303 squelch, West-Coast wavefolded electro bass, nested `Group → Group` bus routing, all 8 native effects, and all 8 assignable Project Macros.
+*Iron Circuit* is Cadence's Acid Electro flagship showcase — channeling Drexciya, Aphex Twin's *Analord*, and Underground Resistance through dual sampled `TR-808` + `TR-909` `Rack` kits, a filtered Detroit chord `Sampler` Rack, native `DiodeLadder` 303 squelch, Shock-Port driven electro bass, nested `Group → Group` bus routing, all 8 native effects, and all 8 assignable Project Macros.
 
 ![Iron Circuit Interactive 5-Column Signal Graph](../../docs/screenshots/02-signal-graph.png)
 
@@ -31,7 +31,7 @@ Once open:
 | Section | Bars | Key | Musical Arc |
 | --- | --- | --- | --- |
 | **1. Boot** | 1–8 | `⌥1` | Syncopated TR-808 electro break + dub-echoed brass chord stab + bar-5 Fold Bass teaser |
-| **2. Circuit** | 9–16 | `⌥2` | TR-909 crash, swung hats & snare lock in + funky `Drive(Fold)` bassline + dark 303 bar-13 entry |
+| **2. Circuit** | 9–16 | `⌥2` | TR-909 crash, swung hats & snare lock in + funky `Drive(ShockPort)` bassline + dark 303 bar-13 entry |
 | **3. Acid Line** | 17–24 | `⌥3` | Resonant `Acid 303` lead (native `vel ≥ 0.95` accents + mono slides) + `FilterEnv`-gated electro pad |
 | **4. Overload** | 25–32 | `⌥4` | Peak electro climax: 808 Euclidean cowbell, 909 Euclidean ride, screaming 303, dub turnaround throws |
 | **5. Voltage Drop** | 33–40 | `⌥5` | Stripped hypnotic breakdown: tuned 808 congas & cowbell, blooming `FilterEnv` pad, 303 riser & 909 snare roll |
@@ -42,15 +42,15 @@ Once open:
 - **Unified Modular `Rack` Architecture Across All Roles (7 instruments, 29 MIT repo-relative samples):**
   - **Dual Multi-Zone Kit `Rack`s:** `TR-808` (16 zones, `../../factory-samples/tr-808/`) and `TR-909` (11 zones, `../../factory-samples/tr-909/`) with choke groups, equal-power zone panning, per-zone `ZoneParam` P-locks (conga pan & clap filter), and continuous `909 OH` cutoff modulation.
   - **Standalone `Sampler` `Rack`s:** `Electro Stab` (`../../examples/demo/samples/brass-pad.wav`, filtered/chorused Detroit chord stab) plus dedicated `808 Kick` sampler driving sidechain `Duck` cleanly without false triggers from percussion.
-  - **Sculpted Synth `Rack`s:** `Acid 303` (saw into 4-pole nonlinear `AcidLowPass` with mono legato glide & velocity accents), `Fold Bass` (West-Coast triangle+sine mono bass), and `Gate Pad` (wide 2-voice unison saw/pulse Am9 pad).
+  - **Sculpted Synth `Rack`s:** `Acid 303` (saw into 4-pole nonlinear `DiodeLadder` with mono legato glide & velocity accents), `Fold Bass` (triangle+sine mono bass), and `Gate Pad` (wide 2-voice unison saw/pulse Am9 pad).
 - **Nested `Group → Group` DAG Routing (12 channels + Master):**
-  - `808 Kit` + `909 Kit` → **`Percussion` Group** (`Compressor` + `Drive(Tape)`) → **`Rhythm` Group** (joined by `Fold Bass`, `Eq` + `Compressor`) → `Master`.
+  - `808 Kit` + `909 Kit` → **`Percussion` Group** (`Compressor` + `Drive(AtomicJet)`) → **`Rhythm` Group** (joined by `Fold Bass`, `Eq` + `Compressor`) → `Master`.
   - `Acid 303` + `Electro Stab` + `Gate Pad` → **`Synths` Group** (`Eq`, sidechain `Duck` off `808 Kick`) → `Master`.
   - **3 Parallel Returns:** `Dub Tape` (`Delay(Stereo)` 3/16 + `Eq`), `PingPong` (`Delay(PingPong)` 6/16), and `Room` (`Reverb`), driven by automated `ModulationTarget::Send` turnaround throws.
-- **All 8 Native Effects & Modes (22 devices total):** `Drive(HardClip)` (`303 Diode`), `Drive(Fold)` (`West Fold`), `Drive(Tape)` (`Perc Tape` & `Master Tape`), rhythmic `Filter` (`Pad Gate` triggered by custom `env_pattern_id` `"Pad Gate Groove"`), `Chorus`, `Delay(Stereo)` + `Delay(PingPong)`, `Reverb`, `Compressor`, `Eq`, and unity-gain `Master` `Limiter` (`-0.8 dBFS` ceiling).
+- **All 8 Native Effects & Modes (22 devices total):** `Drive(ShockPort)` (`303 Diode` & `West Fold`), `Drive(AtomicJet)` (`Perc Tape` & `Master Tape`), rhythmic `Filter` (`Pad Gate` triggered by custom `env_pattern_id` `"Pad Gate Groove"`), `Chorus`, `Delay(Stereo)` + `Delay(PingPong)`, `Reverb`, `Compressor`, `Eq`, and unity-gain `Master` `Limiter` (`-0.8 dBFS` ceiling).
 - **All 8 Assignable Project Macros (`M1..M8`):**
-  - `M1 Acid Squelch` *(automated)* — 303 cutoff, resonance, filter env & `HardClip` drive
-  - `M2 Fold Grit` *(automated)* — Fold Bass wavefolder drive, tone & synth cutoff
+  - `M1 Acid Squelch` *(automated)* — 303 cutoff, resonance, filter env & `ShockPort` drive
+  - `M2 Fold Grit` *(automated)* — Fold Bass `ShockPort` drive, tone & synth cutoff
   - `M3 Dub Throw` *(automated)* — `Send` spikes into `PingPong` & `Dub Tape` + dub delay feedback
   - `M4 808 Pitch` *(automated)* — Per-zone `ParamAddress::Zone` cowbell tune/cutoff & conga tuning/filter
   - `M5 909 Air` — 909 `Rack` cutoff/resonance, crisp high EQ & closed hat filter

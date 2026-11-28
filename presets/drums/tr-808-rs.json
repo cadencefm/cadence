@@ -152,7 +152,7 @@
             "name": "Diode Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.62,
               "asymmetry": -0.3,
               "tone_hz": 13500.0,
@@ -169,6 +169,8 @@
               "cutoff_hz": 450.0,
               "resonance": 0.12,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0

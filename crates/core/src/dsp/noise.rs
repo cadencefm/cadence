@@ -251,9 +251,9 @@ impl NoiseGen {
         if self.ultrasonic_active {
             let s1 = self
                 .ult_stage1
-                .process_mono(raw, self.ult_c1, FilterMode::LowPass);
+                .process_mono(raw, self.ult_c1, FilterMode::ImLpf2);
             self.ult_stage2
-                .process_mono(s1, self.ult_c2, FilterMode::LowPass)
+                .process_mono(s1, self.ult_c2, FilterMode::ImLpf2)
         } else {
             raw
         }

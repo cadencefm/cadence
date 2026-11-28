@@ -319,7 +319,7 @@ fn filter_and_compressor_inserts_process_with_zero_allocations() {
     let mut score = stereo_score();
     let mut flt = EffectDevice::filter(21);
     flt.kind = EffectKind::Filter(cadence_core::mixer::FilterPatch {
-        mode: cadence_core::rack::FilterMode::AcidLowPass,
+        mode: cadence_core::rack::FilterMode::DiodeLadder,
         cutoff_hz: 600.0,
         resonance: 0.72,
         drive: 0.25,
@@ -857,7 +857,7 @@ fn delay_stereo_and_drive_modes_process_and_automate_with_zero_rt_allocations() 
     });
     let mut drive = EffectDevice::drive(202);
     drive.kind = EffectKind::Drive(DrivePatch {
-        mode: DriveMode::HardClip,
+        mode: DriveMode::ShockPort,
         drive: 0.85,
         asymmetry: 0.0,
         tone_hz: 9_000.0,
@@ -891,11 +891,11 @@ fn delay_stereo_and_drive_modes_process_and_automate_with_zero_rt_allocations() 
         points: vec![
             MixerBreakpoint {
                 step: 0,
-                value: 0.5, // HardClip
+                value: 0.0, // AtomicJet
             },
             MixerBreakpoint {
                 step: 2,
-                value: 1.0, // Fold
+                value: 1.0, // ShockPort
             },
         ],
     });

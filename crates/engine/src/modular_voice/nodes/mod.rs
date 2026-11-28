@@ -27,12 +27,61 @@ pub(super) use vco::VcoNode;
 
 use super::{ModuleParams, VoiceLockKey};
 use cadence_core::dsp::{
-    midi_to_hz, sanitize_clamp_f64, semitones_to_ratio_f64, stereo_mid_f64, ModalResonator,
+    midi_to_hz, sanitize_clamp_f64, sanitize_sample_rate, semitones_to_ratio_f64, stereo_mid_f64,
+    ModalResonator, MultiModeFilter,
 };
 use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking};
 use cadence_core::runtime::SampleBank;
 use cadence_core::sampler::SampleData;
 use std::sync::Arc;
+
+/// Heap-hosted stereo [`MultiModeFilter`] slot pairing DSP state with its configured sample rate.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct FilterBankSlot {
+    pub filter: MultiModeFilter,
+    sr_bits: u64,
+}
+
+impl FilterBankSlot {
+    #[inline]
+    pub(super) fn new(sample_rate: f64) -> Self {
+        let sr = sanitize_sample_rate(sample_rate);
+        Self {
+            filter: MultiModeFilter::new(sr),
+            sr_bits: sr.to_bits(),
+        }
+    }
+
+    /// Ensure this filter bank matches `sample_rate`, reconstructing in place on rate change.
+    /// Returns `true` when reconstructed (leaving all filter states zeroed).
+    #[inline]
+    pub(super) fn sync_sample_rate(&mut self, sample_rate: f64) -> bool {
+        let sr = sanitize_sample_rate(sample_rate);
+        let bits = sr.to_bits();
+        if bits != self.sr_bits {
+            self.filter = MultiModeFilter::new(sr);
+            self.sr_bits = bits;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Reset all filter topologies for a fresh trigger at `sample_rate`.
+    #[inline]
+    pub(super) fn reset_for_rate(&mut self, sample_rate: f64) {
+        if !self.sync_sample_rate(sample_rate) {
+            self.filter.reset();
+        }
+    }
+}
+
+/// Read-only view of the voice's heap-hosted stateful node pools for tail-silence checks.
+#[derive(Clone, Copy)]
+pub(super) struct TailBanks<'a> {
+    pub resonator_banks: &'a [ModalResonator],
+    pub filter_banks: &'a [FilterBankSlot],
+}
 
 /// Rising/falling gate trigger threshold for `InPort::TrigIn` edge detection.
 pub(super) const TRIG_THRESHOLD: f64 = 0.5;
@@ -120,6 +169,7 @@ impl<'a> VoiceLocks<'a> {
 /// Immutable per-slot context passed into [`VoiceModule::on_trigger`].
 #[derive(Clone, Copy)]
 pub(super) struct TriggerCtx {
+    pub slot: u8,
     pub sample_rate: f64,
     pub bpm: f64,
     pub mod_id: u16,
@@ -141,6 +191,7 @@ pub(super) struct TriggerCtx {
 pub(super) struct TriggerState<'a> {
     pub resonator_banks: &'a mut [ModalResonator],
     pub next_res_bank: usize,
+    pub filter_banks: &'a mut [FilterBankSlot],
 }
 
 /// Summed stereo audio and CV inputs gathered from a module's incoming patch cables.
@@ -177,6 +228,7 @@ pub(super) struct ProcessCtx<'a> {
     pub bank: &'a SampleBank,
     pub preview: Option<&'a Arc<SampleData>>,
     pub resonator_banks: &'a mut [ModalResonator],
+    pub filter_banks: &'a mut [FilterBankSlot],
 }
 
 /// Delegate normalized parameter writes on a `Copy` module struct straight to
@@ -235,7 +287,7 @@ pub(super) trait VoiceModule {
     fn on_choke(&mut self, _sample_rate: f64, _choke_coeff: f64) {}
 
     #[inline]
-    fn is_tail_quiet(&self, _resonator_banks: &[ModalResonator]) -> bool {
+    fn is_tail_quiet(&self, _banks: TailBanks<'_>) -> bool {
         true
     }
 }
@@ -395,7 +447,7 @@ impl ModuleNode {
     }
 
     #[inline]
-    pub(super) fn is_tail_quiet(&self, resonator_banks: &[ModalResonator]) -> bool {
-        dispatch_module_node!(self, |n| n.is_tail_quiet(resonator_banks))
+    pub(super) fn is_tail_quiet(&self, banks: TailBanks<'_>) -> bool {
+        dispatch_module_node!(self, |n| n.is_tail_quiet(banks))
     }
 }

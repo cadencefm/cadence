@@ -330,7 +330,7 @@ impl App {
                 let mod_norm = live_cut.map(|hz| log_to_norm(hz, 20.0, ctx.high_hz));
                 let lbl = format!("RACK FILTER · {}", format_hz(eff_cut));
                 let curve = sample_filter_curve(
-                    FilterMode::LowPass,
+                    FilterMode::ImLpf2,
                     eff_cut,
                     ctx.rack.resonance,
                     1.0,
@@ -543,7 +543,7 @@ fn build_noise_visual(
                 ctx.sr,
             );
             let lp = filter_magnitude_db(
-                FilterMode::LowPass,
+                FilterMode::ImLpf2,
                 n.lowpass_hz,
                 0.0,
                 f64::from(freq),
@@ -654,6 +654,8 @@ fn build_filter_visual(
         curve,
         cutoff_norm,
         mod_cutoff_norm,
+        kerr_semitones: eff_f.kerr_semitones,
+        spread: eff_f.spread,
         mix: eff_f.mix,
         live_waveform,
     }
@@ -715,17 +717,29 @@ fn build_drive_visual(
             drive_transfer_sample(x, &patch).clamp(-1.5, 1.5)
         })
         .collect();
-    ModuleVisualView::Drive {
-        module_id: base_mod.id,
-        name: base_mod.name.clone(),
-        label: format!(
+    let label = if d.asymmetry.abs() >= 0.005 {
+        format!(
+            "{} · {} · drive {:.0}% · asym {:+.0}% · mix {:.0}%",
+            base_mod.name,
+            d.mode.label(),
+            d.drive * 100.0,
+            d.asymmetry * 100.0,
+            d.mix * 100.0
+        )
+    } else {
+        format!(
             "{} · {} · drive {:.0}% · mix {:.0}%",
             base_mod.name,
             d.mode.label(),
             d.drive * 100.0,
             d.mix * 100.0
-        ),
-        mode_label: d.mode.label(),
+        )
+    };
+    ModuleVisualView::Drive {
+        module_id: base_mod.id,
+        name: base_mod.name.clone(),
+        label,
+        mode: d.mode,
         transfer_curve,
         live_waveform,
     }

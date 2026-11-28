@@ -147,6 +147,8 @@
               "cutoff_hz": 1100.0,
               "resonance": 0.08,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -161,6 +163,8 @@
               "cutoff_hz": 3600.0,
               "resonance": 0.22,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -175,6 +179,8 @@
               "cutoff_hz": 7200.0,
               "resonance": 0.05,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -237,7 +243,7 @@
             "name": "Snare Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.2,
               "asymmetry": 0.05,
               "tone_hz": 16000.0,

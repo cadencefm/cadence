@@ -119,6 +119,8 @@
               "cutoff_hz": 980.0,
               "resonance": 0.79,
               "drive": 0.04,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -170,6 +172,8 @@
               "cutoff_hz": 850.0,
               "resonance": 0.78,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -184,6 +188,8 @@
               "cutoff_hz": 1750.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 0.78
@@ -194,7 +200,7 @@
             "name": "CP Crack",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.1,
               "asymmetry": 0.0,
               "tone_hz": 18000.0,

@@ -191,6 +191,8 @@
               "cutoff_hz": 1550.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -201,7 +203,7 @@
             "name": "OpAmp Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.04,
               "asymmetry": 0.18,
               "tone_hz": 4800.0,
@@ -470,6 +472,8 @@
               "cutoff_hz": 1380.0,
               "resonance": 0.14,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -484,6 +488,8 @@
               "cutoff_hz": 3200.0,
               "resonance": 0.28,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -520,7 +526,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.22,
               "asymmetry": 0.1,
               "tone_hz": 11500.0,
@@ -819,7 +825,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.22,
               "asymmetry": 0.14,
               "tone_hz": 6500.0,
@@ -1094,7 +1100,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.22,
               "asymmetry": 0.14,
               "tone_hz": 6500.0,
@@ -1369,7 +1375,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.14,
               "asymmetry": 0.03,
               "tone_hz": 6500.0,
@@ -1627,7 +1633,7 @@
             "name": "Diode Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.62,
               "asymmetry": -0.3,
               "tone_hz": 13500.0,
@@ -1644,6 +1650,8 @@
               "cutoff_hz": 450.0,
               "resonance": 0.12,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1883,7 +1891,7 @@
             "name": "Schmitt Mix",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.42,
               "asymmetry": 0.05,
               "tone_hz": 18000.0,
@@ -1900,6 +1908,8 @@
               "cutoff_hz": 6800.0,
               "resonance": 0.14,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1914,6 +1924,8 @@
               "cutoff_hz": 8800.0,
               "resonance": 0.22,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1928,6 +1940,8 @@
               "cutoff_hz": 7200.0,
               "resonance": 0.38,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 0.45
@@ -2126,6 +2140,8 @@
               "cutoff_hz": 935.0,
               "resonance": 0.56,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2140,6 +2156,8 @@
               "cutoff_hz": 1900.0,
               "resonance": 0.25,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2202,7 +2220,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.08,
               "asymmetry": 0.0,
               "tone_hz": 5500.0,
@@ -2371,7 +2389,7 @@
             "name": "Mixer Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.08,
               "asymmetry": 0.1,
               "tone_hz": 15000.0,
@@ -2388,6 +2406,8 @@
               "cutoff_hz": 440.0,
               "resonance": 0.1,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2402,6 +2422,8 @@
               "cutoff_hz": 825.0,
               "resonance": 0.62,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2416,6 +2438,8 @@
               "cutoff_hz": 2250.0,
               "resonance": 0.38,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2733,7 +2757,7 @@
             "name": "Schmitt Mix",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.24,
               "asymmetry": 0.06,
               "tone_hz": 17500.0,
@@ -2750,6 +2774,8 @@
               "cutoff_hz": 2350.0,
               "resonance": 0.1,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2764,6 +2790,8 @@
               "cutoff_hz": 5400.0,
               "resonance": 0.14,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2778,6 +2806,8 @@
               "cutoff_hz": 7600.0,
               "resonance": 0.16,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2818,6 +2848,8 @@
               "cutoff_hz": 6680.0,
               "resonance": 0.64,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2858,6 +2890,8 @@
               "cutoff_hz": 3350.0,
               "resonance": 0.52,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -3218,6 +3252,8 @@
               "cutoff_hz": 2600.0,
               "resonance": 0.06,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -3232,6 +3268,8 @@
               "cutoff_hz": 5400.0,
               "resonance": 0.14,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -3246,6 +3284,8 @@
               "cutoff_hz": 6750.0,
               "resonance": 0.58,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 0.78
@@ -3594,7 +3634,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.08,
               "asymmetry": 0.03,
               "tone_hz": 6500.0,
@@ -3869,7 +3909,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.08,
               "asymmetry": 0.03,
               "tone_hz": 6500.0,
@@ -4144,7 +4184,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.08,
               "asymmetry": 0.03,
               "tone_hz": 6500.0,
@@ -4358,7 +4398,7 @@
             "name": "Warm Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.14,
               "asymmetry": 0.0,
               "tone_hz": 8500.0,
@@ -4474,6 +4514,8 @@
               "cutoff_hz": 5900.0,
               "resonance": 0.22,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -4510,7 +4552,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.2,
               "asymmetry": 0.0,
               "tone_hz": 17500.0,

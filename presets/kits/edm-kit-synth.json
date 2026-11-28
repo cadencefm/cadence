@@ -161,7 +161,7 @@
             "name": "Club Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.26,
               "asymmetry": 0.08,
               "tone_hz": 8600.0,
@@ -178,6 +178,8 @@
               "cutoff_hz": 30.0,
               "resonance": 0.05,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -428,6 +430,8 @@
               "cutoff_hz": 1100.0,
               "resonance": 0.08,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -442,6 +446,8 @@
               "cutoff_hz": 3600.0,
               "resonance": 0.22,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -456,6 +462,8 @@
               "cutoff_hz": 7200.0,
               "resonance": 0.05,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -518,7 +526,7 @@
             "name": "Snare Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.2,
               "asymmetry": 0.05,
               "tone_hz": 16000.0,
@@ -835,6 +843,8 @@
               "cutoff_hz": 1750.0,
               "resonance": 0.28,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -871,7 +881,7 @@
             "name": "Tom Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.22,
               "asymmetry": 0.08,
               "tone_hz": 10000.0,
@@ -1140,6 +1150,8 @@
               "cutoff_hz": 2550.0,
               "resonance": 0.28,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1176,7 +1188,7 @@
             "name": "Tom Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.22,
               "asymmetry": 0.08,
               "tone_hz": 10000.0,
@@ -1445,6 +1457,8 @@
               "cutoff_hz": 3350.0,
               "resonance": 0.28,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1481,7 +1495,7 @@
             "name": "Tom Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.22,
               "asymmetry": 0.08,
               "tone_hz": 10000.0,
@@ -1732,6 +1746,8 @@
               "cutoff_hz": 480.0,
               "resonance": 0.12,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1742,7 +1758,7 @@
             "name": "Rim Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.36,
               "asymmetry": 0.1,
               "tone_hz": 14500.0,
@@ -1955,6 +1971,8 @@
               "cutoff_hz": 6600.0,
               "resonance": 0.1,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1969,6 +1987,8 @@
               "cutoff_hz": 11200.0,
               "resonance": 0.18,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2182,6 +2202,8 @@
               "cutoff_hz": 1250.0,
               "resonance": 0.3,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2196,6 +2218,8 @@
               "cutoff_hz": 3200.0,
               "resonance": 0.18,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2210,6 +2234,8 @@
               "cutoff_hz": 2400.0,
               "resonance": 0.05,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2272,7 +2298,7 @@
             "name": "Clap Crunch",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.24,
               "asymmetry": 0.05,
               "tone_hz": 14500.0,
@@ -2569,6 +2595,8 @@
               "cutoff_hz": 1750.0,
               "resonance": 0.08,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2579,7 +2607,7 @@
             "name": "Bronze Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.2,
               "asymmetry": 0.04,
               "tone_hz": 17200.0,
@@ -2876,6 +2904,8 @@
               "cutoff_hz": 2600.0,
               "resonance": 0.1,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2886,7 +2916,7 @@
             "name": "Ride Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.16,
               "asymmetry": 0.03,
               "tone_hz": 17600.0,
@@ -3166,6 +3196,8 @@
               "cutoff_hz": 5800.0,
               "resonance": 0.1,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -3180,6 +3212,8 @@
               "cutoff_hz": 10500.0,
               "resonance": 0.16,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0

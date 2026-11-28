@@ -108,7 +108,7 @@
             "name": "Warm Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.14,
               "asymmetry": 0.0,
               "tone_hz": 8500.0,

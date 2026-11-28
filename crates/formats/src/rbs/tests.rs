@@ -220,12 +220,32 @@ fn synthetic_rbs_42_parses_converts_validates_and_compiles() {
         .expect("PCF insert on TB-303 A");
     match pcf_dev.kind {
         EffectKind::Filter(p) => {
+            assert_eq!(p.mode, cadence_core::rack::FilterMode::ImLpf2);
             assert_eq!(p.env_pattern, 2);
             assert!(p.env_amount > 1.5);
             assert!(p.env_decay_ms > 100.0);
         }
         _ => panic!("expected native Filter PCF device"),
     }
+    let dist_dev = project.mixer.channels[0]
+        .inserts
+        .iter()
+        .find(|d| d.name == "Dist")
+        .expect("Dist insert on TB-303 A");
+    assert!(matches!(
+        dist_dev.kind,
+        EffectKind::Drive(p) if p.mode == cadence_core::mixer::DriveMode::ShockPort
+    ));
+    assert!(project.instruments[0].rack.zones[0]
+        .modules
+        .iter()
+        .any(|m| {
+            matches!(
+                m.kind,
+                cadence_core::rack::ModuleKind::Filter(f)
+                    if f.mode == cadence_core::rack::FilterMode::DiodeLadder
+            )
+        }));
     // Must compile cleanly into a valid executable ScoreWindow!
     let score = project.compile().unwrap();
     assert_eq!(score.bars(), 4);
@@ -445,11 +465,11 @@ fn rbs_title_sanitization_channel_gain_section_fade_comp_makeup_and_32_step_dela
         "Fallback Title"
     );
 
-    // 2. DIST output trim scales smoothly from 0 dB at drive=0 down to -11 dB at full overdrive
-    //    so engaging ReBirth DIST preserves clean-vs-distorted mix balance.
+    // 2. DIST output trim scales smoothly from 0 dB at drive=0 down to -2.5 dB at full ShockPort
+    //    density so engaging ReBirth DIST preserves clean-vs-distorted mix balance.
     assert_eq!(calibration::rbs_dist_output_db(0.0), 0.0);
-    assert!(calibration::rbs_dist_output_db(0.7) < -7.0);
-    assert!(calibration::rbs_dist_output_db(1.0) <= -10.5);
+    assert!(calibration::rbs_dist_output_db(0.7) < -1.5);
+    assert!(calibration::rbs_dist_output_db(1.0) <= -2.5);
     assert!(calibration::rbs_dist_tone_hz(0) >= 9_000.0);
 
     // 3. Delay steps map cleanly up to 32 steps (mode 1 = straight steps, mode 0 = dotted 4/3x).
@@ -1076,6 +1096,17 @@ fn per_zone_drum_ccs_automate_both_sample_and_synth_kits_with_calibrated_values(
             find_mod_param(inst808.id, z808_bd, ModuleParam::Decay);
             // BD started at decay=127 (unspliced) and dipped below 0.72 -> OneShot Decay Env spliced!
             let bd_zone = kit808.zone(z808_bd).unwrap();
+            let spliced_filter = bd_zone
+                .modules
+                .iter()
+                .find_map(|m| match &m.kind {
+                    ModuleKind::Filter(flt) => Some(flt),
+                    _ => None,
+                })
+                .expect("Sample zone with automated Cutoff must splice a neutral Tone Filter");
+            assert_eq!(spliced_filter.mode, cadence_core::rack::FilterMode::ImLpf2);
+            assert_eq!(spliced_filter.kerr_semitones, 0.0);
+            assert_eq!(spliced_filter.spread, 0.0);
             let spliced_env = bd_zone
                 .modules
                 .iter()
@@ -1355,7 +1386,7 @@ fn tb303_velocity_threshold_vintage_drive_and_decay_ramp_mode() {
     use cadence_core::params::{InstrumentParam, ValueMode};
     use cadence_core::rack::ModuleParam;
 
-    // TB-303 normal velocity sits cleanly below AcidLowPass accent threshold; accent hits 1.0.
+    // TB-303 normal velocity sits cleanly below DiodeLadder accent threshold; accent hits 1.0.
     assert!(f64::from(calibration::RBS_303_NORMAL_VEL) < ACID_ACCENT_THRESHOLD);
     assert_eq!(
         acid_accent_amount(f64::from(calibration::RBS_303_NORMAL_VEL)),

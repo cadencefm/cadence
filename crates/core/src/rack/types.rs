@@ -126,12 +126,17 @@ crate::define_choice_enum! {
     #[derive(Default)]
     pub enum FilterMode {
         #[default]
-        LowPass => ("low_pass", "Low-pass", ["0", "lp", "lp12", "lp_12", "lowpass", "low_pass_12", "lowpass12"]),
-        BandPass => ("band_pass", "Band-pass", ["1", "bp", "bandpass"]),
-        HighPass => ("high_pass", "High-pass", ["2", "hp", "highpass"]),
-        AcidLowPass => ("acid_low_pass", "Acid LP", ["3", "acid", "303", "acid_lp", "acidlp"]),
+        #[serde(rename = "im_lpf_2")]
+        ImLpf2 => ("im_lpf_2", "LP 12dB", ["0", "lp", "lp12", "lp_12", "low_pass", "lowpass", "low_pass_12", "lowpass12", "im2", "imlpf2", "im_lpf2"]),
+        #[serde(rename = "im_lpf_3")]
+        ImLpf3 => ("im_lpf_3", "LP 18dB", ["1", "lp18", "lp_18", "low_pass_18", "im3", "imlpf3", "im_lpf3"]),
+        #[serde(rename = "im_lpf_4")]
+        ImLpf4 => ("im_lpf_4", "LP 24dB", ["2", "lp24", "lp_24", "low_pass_24", "im4", "imlpf4", "im_lpf4"]),
+        DiodeLadder => ("diode_ladder", "Diode 303", ["3", "diode", "acid", "303", "acid_lp", "acidlp", "acid_low_pass"]),
+        BandPass => ("band_pass", "Band-pass", ["4", "bp", "bandpass"]),
+        HighPass => ("high_pass", "High-pass", ["5", "hp", "highpass"]),
         #[serde(rename = "low_pass_6")]
-        LowPass6 => ("low_pass_6", "LP 6dB", ["4", "lp6", "lp_6", "lp6db", "lp_6db", "lowpass6", "low_pass6", "1pole", "one_pole", "6db"]),
+        LowPass6 => ("low_pass_6", "LP 6dB", ["6", "lp6", "lp_6", "lp6db", "lp_6db", "lowpass6", "low_pass6", "1pole", "one_pole", "6db"]),
     }
 }
 

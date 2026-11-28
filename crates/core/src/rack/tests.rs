@@ -16,7 +16,23 @@ fn shared_enums_roundtrip_serde_slug_label_and_parse_aliases() {
     }
     assert_eq!(FilterMode::parse("low_pass6"), Some(FilterMode::LowPass6));
     assert_eq!(FilterMode::parse("low_pass_6"), Some(FilterMode::LowPass6));
-    assert_eq!(FilterMode::parse("lp12"), Some(FilterMode::LowPass));
+    assert_eq!(FilterMode::parse("lp12"), Some(FilterMode::ImLpf2));
+    assert_eq!(FilterMode::parse("lp18"), Some(FilterMode::ImLpf3));
+    assert_eq!(FilterMode::parse("lp24"), Some(FilterMode::ImLpf4));
+    assert_eq!(FilterMode::parse("303"), Some(FilterMode::DiodeLadder));
+    assert_eq!(FilterMode::parse("diode"), Some(FilterMode::DiodeLadder));
+    assert_eq!(FilterMode::parse("bp"), Some(FilterMode::BandPass));
+    assert_eq!(FilterMode::parse("hp"), Some(FilterMode::HighPass));
+
+    for (i, &dm) in DriveMode::ALL.iter().enumerate() {
+        assert_eq!(dm.to_index(), i);
+        assert_eq!(DriveMode::from_index(i), dm);
+        let json = serde_json::to_string(&dm).unwrap();
+        assert_eq!(json, format!("\"{}\"", dm.slug()));
+        assert_eq!(serde_json::from_str::<DriveMode>(&json).unwrap(), dm);
+        assert_eq!(DriveMode::parse(dm.slug()), Some(dm));
+        assert_eq!(DriveMode::parse(dm.label()), Some(dm));
+    }
 
     for (i, &w) in Waveform::ALL.iter().enumerate() {
         assert_eq!(Waveform::from_index(i), w);
@@ -298,6 +314,41 @@ fn all_module_params_roundtrip_normalize_format_and_nudge() {
             kind.write_native(param, v).unwrap();
         }
     }
+
+    // Filter module Kerr & Spread parameter roundtrip, aliases, formatting, and nudging.
+    let mut flt = ModuleKind::Filter(FilterModule::default());
+    assert_eq!(
+        ModuleParam::parse_for_kind("kerr", ModuleKindTag::Filter),
+        Some(ModuleParam::Kerr)
+    );
+    assert_eq!(
+        ModuleParam::parse_for_kind("bend", ModuleKindTag::Filter),
+        Some(ModuleParam::Kerr)
+    );
+    assert_eq!(
+        ModuleParam::parse_for_kind("spread", ModuleKindTag::Filter),
+        Some(ModuleParam::Spread)
+    );
+    assert_eq!(
+        ModuleParam::parse_for_kind("quad", ModuleKindTag::Filter),
+        Some(ModuleParam::Spread)
+    );
+    let kerr_val = ModuleParam::Kerr.parse_value_native("-3.5 st").unwrap();
+    assert!((kerr_val + 3.5).abs() < 1e-6);
+    flt.write_native(ModuleParam::Kerr, kerr_val).unwrap();
+    assert_eq!(flt.format_param(ModuleParam::Kerr, 0).unwrap(), "-3.5 st");
+    let nudged_kerr = flt.nudge_param(ModuleParam::Kerr, 1, false, 0).unwrap();
+    assert!((nudged_kerr + 3.0).abs() < 1e-5);
+    assert!((flt.read_native(ModuleParam::Kerr).unwrap() + 3.0).abs() < 1e-5);
+
+    let spread_val = ModuleParam::Spread.parse_value_native("65%").unwrap();
+    assert!((spread_val - 0.65).abs() < 1e-6);
+    flt.write_native(ModuleParam::Spread, spread_val).unwrap();
+    assert_eq!(flt.format_param(ModuleParam::Spread, 0).unwrap(), "65%");
+    let nudged_spread = flt.nudge_param(ModuleParam::Spread, 1, true, 0).unwrap();
+    assert!((nudged_spread - 0.70).abs() < 1e-5);
+    assert!((flt.read_native(ModuleParam::Spread).unwrap() - 0.70).abs() < 1e-5);
+    flt.validate().unwrap();
 
     // Frame-based sampler write_normalized(LoopEnd) must not flip loop_mode.
     let mut smp = ModuleKind::Sampler(SamplerModule::default());

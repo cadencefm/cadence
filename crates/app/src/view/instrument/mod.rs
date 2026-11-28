@@ -5,7 +5,7 @@ use crate::rack::RackTab;
 use crate::{App, Control, Detail};
 use cadence_core::dsp::sanitize_sample;
 use cadence_core::material::Id;
-use cadence_core::mixer::ChannelRef;
+use cadence_core::mixer::{ChannelRef, DriveMode};
 use cadence_core::params::{format_hz, format_pan, InstrumentParam, ParamAddress};
 use cadence_core::rack::{InPort, ModuleKind, ModuleKindTag, PitchTracking, RackModule, RackPatch};
 use cadence_core::runtime::AudioSnapshot;
@@ -158,6 +158,8 @@ pub enum ModuleVisualView {
         curve: Vec<f32>,
         cutoff_norm: f32,
         mod_cutoff_norm: Option<f32>,
+        kerr_semitones: f32,
+        spread: f32,
         mix: f32,
         live_waveform: Vec<f32>,
     },
@@ -176,7 +178,7 @@ pub enum ModuleVisualView {
         module_id: u16,
         name: String,
         label: String,
-        mode_label: &'static str,
+        mode: DriveMode,
         /// Waveshaper transfer curve for `x in [-1.0, 1.0]` via `drive_transfer_sample`.
         transfer_curve: Vec<f32>,
         live_waveform: Vec<f32>,

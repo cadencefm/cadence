@@ -600,14 +600,17 @@ impl App {
                 cadence_core::mixer::ParameterUnit::Hertz => "Hz or kHz (e.g. 1200hz, 1.8khz)",
                 cadence_core::mixer::ParameterUnit::Decibels => "dB (e.g. -6db, +3db, 0db)",
                 cadence_core::mixer::ParameterUnit::FilterMode => {
-                    "lp / bp / hp / acid / lp6 (or index)"
+                    "lp12 / lp18 / lp24 / diode / bp / hp / lp6 (or index)"
                 }
                 cadence_core::mixer::ParameterUnit::DelayMode => "ping_pong / stereo (or index)",
                 cadence_core::mixer::ParameterUnit::DriveMode => {
-                    "tape / hard_clip / fold (or index)"
+                    "atomic_jet / shock_port (or index)"
                 }
                 cadence_core::mixer::ParameterUnit::CompressionRatio => "ratio (e.g. 4, 8:1)",
                 cadence_core::mixer::ParameterUnit::Octaves => "octaves (e.g. +2.5, -1.5, off)",
+                cadence_core::mixer::ParameterUnit::Semitones => {
+                    "semitones (-12..+12, e.g. +4.5st, -6st, off)"
+                }
                 cadence_core::mixer::ParameterUnit::FilterPattern => {
                     "groove ID 0–127 or groove name"
                 }

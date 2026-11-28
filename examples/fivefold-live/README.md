@@ -84,14 +84,14 @@ Four performance macros are pre-mapped for real-time shaping in the **Macros Dec
 
 | Macro | Name | Rest | What it shapes |
 | --- | --- | --- | --- |
-| `M1` | **Acid Bite** | `35%` | 4-pole Acid Ladder resonance & filter envelope depth on *Five-step Cell* + `Acid Bite` hard-clip drive, mix, and tone |
+| `M1` | **Acid Bite** | `35%` | 4-pole Diode Ladder resonance & filter envelope depth on *Five-step Cell* + `Acid Bite` Shock-Port drive, mix, and tone |
 | `M2` | **Air Bloom** | `35%` | `Air Chorus` depth & mix, `Music → Prism Space` reverb send, `Reverb` size, and `Air Shimmer EQ` high shelf |
 | `M3` | **Dub Echo** | `35%` | `Music → Dotted Echo` (3/16 ping-pong) & `Long Echo` (5/16 ping-pong) sends and both delay feedback levels |
 | `M4` | **Club Glue** | `40%` | `Master Glue` & `Drum Glue` compressor thresholds/mix + `Master Tape` saturation drive & mix |
 
 ## Sound Design, Mixing & Mastering
 
-- **Instruments:** *Five-step Cell* runs through Cadence's nonlinear 4-pole `acid_low_pass` ladder filter with velocity-sensitive bite; *Pulse Source* is tuned to a tight 55 Hz (`A1`, fifth of D minor) club kick sitting cleanly beneath *Harmonic Weight*'s dual-saw + sine-fundamental D2 bass; *Refracted Air* stacks 4-voice wide stereo unison; *Closed/Open Spark* pan symmetrically (`+12%` / `-12%`); *Handclap* plays the bundled [samples/clap.wav](samples/clap.wav); *Current Lift* builds stereo-spread filtered noise.
+- **Instruments:** *Five-step Cell* runs through Cadence's nonlinear 4-pole `diode_ladder` filter with velocity-sensitive bite; *Pulse Source* is tuned to a tight 55 Hz (`A1`, fifth of D minor) club kick sitting cleanly beneath *Harmonic Weight*'s dual-saw + sine-fundamental D2 bass; *Refracted Air* stacks 4-voice wide stereo unison; *Closed/Open Spark* pan symmetrically (`+12%` / `-12%`); *Handclap* plays the bundled [samples/clap.wav](samples/clap.wav); *Current Lift* builds stereo-spread filtered noise.
 - **Studio Mix & Mastering Chain (18 native DSP devices):** Per-channel sculpting (`Acid Bite` drive + `Cell Sculpt EQ`, `Kick Weight EQ` + `Kick Punch` tape, `Air Chorus` + `Air Shimmer EQ`, `Bass Tape` + `Bass Pocket EQ`, `Clap Snap EQ`), `Drums` bus `Drum Glue` compressor, `Music` bus `Music Clear EQ`, three stereo returns (`Dotted Echo` 3/16 ping-pong, `Long Echo` 5/16 ping-pong, `Prism Space` reverb + `Space Clean EQ` HPF), five kick-triggered sidechain ducks, and a 3-stage master bus (`Master Glue` compressor → `Master Tape` drive → `Master Limiter` at `-1.0 dBFS` ceiling). Pass `--render-report` to inspect loudness and bus metering for either the 62-bar recorded take or the 60-bar arrangement.
 
 **Screenshots & User Guide:** [Take Deck & Visual Range](../../docs/screenshots/15-take-deck.png) · [Live Performance & Armed Takes](../../docs/guide/07-performing-and-takes.md) · [Macros & Modulation](../../docs/guide/05-macros-and-modulation.md)

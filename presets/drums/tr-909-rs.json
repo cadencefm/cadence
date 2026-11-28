@@ -162,10 +162,12 @@
             "name": "Click LP",
             "kind": {
               "type": "filter",
-              "mode": "low_pass",
+              "mode": "im_lpf_2",
               "cutoff_hz": 820.0,
               "resonance": 0.42,
               "drive": 0.15,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -219,7 +221,7 @@
             "name": "RS Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.36,
               "asymmetry": -0.25,
               "tone_hz": 18000.0,
@@ -232,7 +234,7 @@
             "name": "RS Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.18,
               "asymmetry": -0.05,
               "tone_hz": 18000.0,

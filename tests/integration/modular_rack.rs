@@ -1,6 +1,6 @@
 //! End-to-end integration tests for the Unified Eurorack Modular Rack architecture:
 //! - Native single-Rack TR-909 Low Tom (dual fixed VCO `105 Hz + 70 Hz` -> LP12 + post-filter
-//!   Noise -> LP6 -> Drive HardClip -> Out) proving distinct low body + post-filter stick click.
+//!   Noise -> LP6 -> Drive ShockPort -> Out) proving distinct low body + post-filter stick click.
 //! - Native single-Rack TR-909 Clap using multi-burst `Env` (`bursts: 4, burst_spacing_ms: 11.4`)
 //!   + delayed reverb `Env` (`delay_ms: 34.0`) + `Filter(LowPass6)` with zero pattern hacks.
 //! - Native `LoFi` bit/rate quantizer, `Vca` 4-quadrant audio-rate Ring Mod, `z-1` feedback cable,
@@ -137,7 +137,7 @@ fn peak_mono(frames: &[[f32; 2]]) -> f64 {
 
 fn build_tr909_low_tom_rack(noise_level: f32) -> RackPatch {
     // Dual fixed-pitch VCOs (105 Hz + 70 Hz) with pitch-drop envelope -> Body LP12 -> Body VCA,
-    // summed with a post-filter Noise -> Stick LP6 -> Stick VCA into HardClip Drive -> Out.
+    // summed with a post-filter Noise -> Stick LP6 -> Stick VCA into ShockPort Drive -> Out.
     let zone = RackZone {
         id: 1,
         name: "TR-909 LT".into(),
@@ -197,10 +197,12 @@ fn build_tr909_low_tom_rack(noise_level: f32) -> RackPatch {
                 4,
                 "Body LP12",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 320.0,
                     resonance: 0.15,
                     drive: 0.0,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.0,
                     vel_amount: 0.0,
                     mix: 1.0,
@@ -241,6 +243,8 @@ fn build_tr909_low_tom_rack(noise_level: f32) -> RackPatch {
                     cutoff_hz: 6_500.0,
                     resonance: 0.0,
                     drive: 0.0,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.0,
                     vel_amount: 0.0,
                     mix: 1.0,
@@ -265,13 +269,13 @@ fn build_tr909_low_tom_rack(noise_level: f32) -> RackPatch {
             ),
             RackModule::new(
                 11,
-                "HardClip",
+                "ShockPort",
                 ModuleKind::Drive(DriveModule {
-                    mode: DriveMode::HardClip,
+                    mode: DriveMode::ShockPort,
                     drive: 0.35,
                     asymmetry: 0.0,
                     tone_hz: 16_000.0,
-                    output_db: -3.0,
+                    output_db: 0.0,
                     mix: 1.0,
                 }),
             ),
@@ -414,6 +418,8 @@ fn native_single_rack_tr909_clap_renders_four_distinct_bursts_and_delayed_tail()
                     cutoff_hz: 2_400.0,
                     resonance: 0.0,
                     drive: 0.0,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.0,
                     vel_amount: 0.0,
                     mix: 1.0,
@@ -759,10 +765,12 @@ fn lofi_ring_mod_z1_feedback_and_env_pitched_sampler_work_end_to_end() {
                         2,
                         "Filter",
                         ModuleKind::Filter(FilterModule {
-                            mode: FilterMode::LowPass,
+                            mode: FilterMode::ImLpf2,
                             cutoff_hz: 1_200.0,
                             resonance: 0.25,
                             drive: 0.0,
+                            kerr_semitones: 0.0,
+                            spread: 0.0,
                             key_tracking: 0.0,
                             vel_amount: 0.0,
                             mix: 1.0,
@@ -772,7 +780,7 @@ fn lofi_ring_mod_z1_feedback_and_env_pitched_sampler_work_end_to_end() {
                         3,
                         "Drive",
                         ModuleKind::Drive(DriveModule {
-                            mode: DriveMode::Tape,
+                            mode: DriveMode::AtomicJet,
                             drive: 0.45,
                             asymmetry: 0.1,
                             tone_hz: 10_000.0,
@@ -1527,7 +1535,7 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
         "String resonator at A4 must ring at 440/880 Hz (440={mag_440:.4}, 880={mag_880:.4}, 620={mag_620:.4})"
     );
 
-    // 2. Nonlinear `z-1` `Drive(Tape)` feedback `ResonatorMode::Plate` -> `LoFi` cymbal path +
+    // 2. Nonlinear `z-1` `Drive(AtomicJet)` feedback `ResonatorMode::Plate` -> `LoFi` cymbal path +
     //    Project JSON roundtrip.
     let plate_rack = RackPatch {
         kit_name: String::new(),
@@ -1591,7 +1599,7 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
                     5,
                     "Plate NL",
                     ModuleKind::Drive(DriveModule {
-                        mode: DriveMode::Tape,
+                        mode: DriveMode::AtomicJet,
                         drive: 0.45,
                         asymmetry: 0.0,
                         tone_hz: 14_000.0,
@@ -1704,6 +1712,8 @@ fn rack_param_descriptors_and_module_metadata_stay_aligned() {
             ModuleParam::Cutoff,
             ModuleParam::Resonance,
             ModuleParam::Drive,
+            ModuleParam::Kerr,
+            ModuleParam::Spread,
             ModuleParam::KeyTrack,
             ModuleParam::VelAmount,
             ModuleParam::Mix,

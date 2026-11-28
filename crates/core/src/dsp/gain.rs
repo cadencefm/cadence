@@ -271,7 +271,7 @@ pub fn stereo_ms_decode_f64(mid: f64, side: f64) -> [f64; 2] {
 /// - `width = 1.0` -> exact unity pass-through `[L, R]` (`0.00 dB`).
 /// - `width = 0.0` -> equal-power mono sum `[(L + R) / sqrt(2), (L + R) / sqrt(2)]` (`0.00 dB` RMS).
 /// - All `width ∈ [0.0, 2.0]` preserve `Var(out_L) == Var(out_R) == σ²` for uncorrelated
-///   stereo sources such as FDN reverb outputs.
+///   stereo sources such as diffuse modal room reverb outputs.
 #[inline]
 pub fn stereo_ms_width_uncorrelated_f64(stereo: [f64; 2], width: f64) -> [f64; 2] {
     let l = sanitize_sample_f64(stereo[0]);
@@ -499,7 +499,7 @@ mod tests {
             [0.4, -0.3]
         );
 
-        // Two orthogonal unit-RMS sinusoids model uncorrelated stereo FDN taps.
+        // Two orthogonal unit-RMS sinusoids model uncorrelated stereo room taps.
         let n = 4096usize;
         for &w in &[0.0_f64, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0] {
             let mut in_e = [0.0_f64; 2];

@@ -67,6 +67,8 @@
               "cutoff_hz": 480.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -157,7 +159,7 @@
             "name": "Diode Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.19,
               "asymmetry": 0.45,
               "tone_hz": 16000.0,
@@ -174,6 +176,8 @@
               "cutoff_hz": 26.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -361,6 +365,8 @@
               "cutoff_hz": 900.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -453,6 +459,8 @@
               "cutoff_hz": 1400.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -547,6 +555,8 @@
               "cutoff_hz": 115.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -557,7 +567,7 @@
             "name": "SD Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.24,
               "asymmetry": 0.0,
               "tone_hz": 9200.0,
@@ -574,6 +584,8 @@
               "cutoff_hz": 2800.0,
               "resonance": 0.306,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -837,10 +849,12 @@
             "name": "Body LP",
             "kind": {
               "type": "filter",
-              "mode": "low_pass",
+              "mode": "im_lpf_2",
               "cutoff_hz": 315.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1040,6 +1054,8 @@
               "cutoff_hz": 2400.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1076,7 +1092,7 @@
             "name": "Tom Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.16,
               "asymmetry": 0.0,
               "tone_hz": 18000.0,
@@ -1358,10 +1374,12 @@
             "name": "Body LP",
             "kind": {
               "type": "filter",
-              "mode": "low_pass",
+              "mode": "im_lpf_2",
               "cutoff_hz": 385.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1561,6 +1579,8 @@
               "cutoff_hz": 2400.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -1597,7 +1617,7 @@
             "name": "Tom Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.15,
               "asymmetry": 0.0,
               "tone_hz": 18000.0,
@@ -1879,10 +1899,12 @@
             "name": "Body LP",
             "kind": {
               "type": "filter",
-              "mode": "low_pass",
+              "mode": "im_lpf_2",
               "cutoff_hz": 440.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2082,6 +2104,8 @@
               "cutoff_hz": 2400.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2118,7 +2142,7 @@
             "name": "Tom Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.13,
               "asymmetry": 0.0,
               "tone_hz": 18000.0,
@@ -2482,10 +2506,12 @@
             "name": "Click LP",
             "kind": {
               "type": "filter",
-              "mode": "low_pass",
+              "mode": "im_lpf_2",
               "cutoff_hz": 820.0,
               "resonance": 0.42,
               "drive": 0.15,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2539,7 +2565,7 @@
             "name": "RS Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.36,
               "asymmetry": -0.25,
               "tone_hz": 18000.0,
@@ -2552,7 +2578,7 @@
             "name": "RS Clip",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.18,
               "asymmetry": -0.05,
               "tone_hz": 18000.0,
@@ -2854,7 +2880,7 @@
             "name": "EPROM Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.88,
               "asymmetry": 0.0,
               "tone_hz": 17500.0,
@@ -2881,6 +2907,8 @@
               "cutoff_hz": 2650.0,
               "resonance": 0.14,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -2932,6 +2960,8 @@
               "cutoff_hz": 270.0,
               "resonance": 0.42,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -3284,6 +3314,8 @@
               "cutoff_hz": 980.0,
               "resonance": 0.79,
               "drive": 0.04,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -3335,6 +3367,8 @@
               "cutoff_hz": 850.0,
               "resonance": 0.78,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -3349,6 +3383,8 @@
               "cutoff_hz": 1750.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 0.78
@@ -3359,7 +3395,7 @@
             "name": "CP Crack",
             "kind": {
               "type": "drive",
-              "mode": "hard_clip",
+              "mode": "shock_port",
               "drive": 0.1,
               "asymmetry": 0.0,
               "tone_hz": 18000.0,
@@ -3607,7 +3643,7 @@
             "name": "Plate NL",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.88,
               "asymmetry": 0.0,
               "tone_hz": 13800.0,
@@ -3698,6 +3734,8 @@
               "cutoff_hz": 525.0,
               "resonance": 0.82,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -3734,7 +3772,7 @@
             "name": "EPROM Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.76,
               "asymmetry": 0.0,
               "tone_hz": 15500.0,
@@ -3761,6 +3799,8 @@
               "cutoff_hz": 1850.0,
               "resonance": 0.12,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -3775,6 +3815,8 @@
               "cutoff_hz": 12800.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -4312,7 +4354,7 @@
             "name": "EPROM Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.45,
               "asymmetry": 0.0,
               "tone_hz": 18000.0,
@@ -4339,6 +4381,8 @@
               "cutoff_hz": 920.0,
               "resonance": 0.05,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -4732,7 +4776,7 @@
             "name": "Sizzle NL",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.7,
               "asymmetry": 0.0,
               "tone_hz": 16000.0,
@@ -4823,6 +4867,8 @@
               "cutoff_hz": 430.0,
               "resonance": 0.56,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -4859,7 +4905,7 @@
             "name": "EPROM Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.68,
               "asymmetry": 0.0,
               "tone_hz": 17800.0,
@@ -4886,6 +4932,8 @@
               "cutoff_hz": 2250.0,
               "resonance": 0.1,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0

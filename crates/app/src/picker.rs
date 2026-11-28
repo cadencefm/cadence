@@ -550,9 +550,11 @@ impl App {
                     ModuleKindTag::Noise => "Noise source · White/Pink",
                     ModuleKindTag::Env => "ADSR / Hold-Decay envelope (CV modulator)",
                     ModuleKindTag::Lfo => "Low-frequency oscillator (free/sync CV)",
-                    ModuleKindTag::Filter => "SVF/Acid/6dB filter · Cutoff/Res/CV",
+                    ModuleKindTag::Filter => {
+                        "LP12–24 / Diode 303 / SVF filter · Cutoff/Res/Kerr/Spread"
+                    }
                     ModuleKindTag::Vca => "Voltage-controlled amplifier / RingMod",
-                    ModuleKindTag::Drive => "Waveshaper saturation & overdrive",
+                    ModuleKindTag::Drive => "Cubic 1x waveshaper · Atomic Jet / Shock Port",
                     ModuleKindTag::LoFi => "Bitcrusher & sample-rate reducer",
                     ModuleKindTag::Resonator => {
                         "Modal physical resonator · String/Bar/Membrane/Plate"

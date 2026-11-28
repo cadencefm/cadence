@@ -190,6 +190,8 @@
               "cutoff_hz": 1550.0,
               "resonance": 0.0,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -200,7 +202,7 @@
             "name": "OpAmp Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.04,
               "asymmetry": 0.18,
               "tone_hz": 4800.0,

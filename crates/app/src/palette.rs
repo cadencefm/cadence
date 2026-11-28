@@ -775,7 +775,7 @@ impl App {
             (
                 "reverb",
                 "Add Effect: Reverb",
-                "Lush algorithmic stereo reverb",
+                "Zero-delay 96-mode ambient modal room reverb",
             ),
             (
                 "delay",
@@ -785,7 +785,7 @@ impl App {
             (
                 "filter",
                 "Add Effect: Filter",
-                "Resonant SVF filter with rhythmic envelope",
+                "Resonant LP12–24 / Diode / SVF filter with rhythmic envelope",
             ),
             ("eq", "Add Effect: EQ", "3-band parametric equalizer"),
             (
@@ -794,9 +794,9 @@ impl App {
                 "Dynamics bus compressor with gain reduction",
             ),
             (
-                "distortion",
-                "Add Effect: Distortion",
-                "Waveshaper drive & tone saturation",
+                "drive",
+                "Add Effect: Drive",
+                "Cubic 1x waveshaper (Atomic Jet / Shock Port) & tone",
             ),
             (
                 "chorus",

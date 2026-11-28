@@ -224,7 +224,7 @@
             "name": "EPROM Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.45,
               "asymmetry": 0.0,
               "tone_hz": 18000.0,
@@ -251,6 +251,8 @@
               "cutoff_hz": 920.0,
               "resonance": 0.05,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0

@@ -6,6 +6,7 @@ use super::instrument::map_controls;
 use super::ControlView;
 use crate::{App, Detail};
 use cadence_core::dsp::chorus::eval_quadrature;
+use cadence_core::dsp::cubic::room::room_mode_rt60;
 use cadence_core::dsp::{
     db_to_lin_f64, drive_transfer_sample, eq_response_db, filter_mix_magnitude_db, lin_to_db_f64,
     log_to_norm, norm_to_log, octaves_to_ratio_f32, reverb_hf_rt60_envelope, reverb_rt60_envelope,
@@ -108,6 +109,8 @@ pub enum EffectVisualView {
         cutoff_hz: f32,
         resonance: f32,
         drive: f32,
+        kerr_semitones: f32,
+        spread: f32,
         mix: f32,
         /// 128 log-spaced points (`20 Hz..freq_high_hz`) in dB clamped to `[-48.0, 18.0]` (including parallel `mix`).
         curve_db: Vec<f32>,
@@ -163,7 +166,7 @@ pub enum EffectVisualView {
         mode: DriveMode,
         /// Upper frequency axis bound in Hz (`min(20_000.0, sample_rate * 0.45)`) for the tone LPF plot.
         freq_high_hz: f32,
-        /// 160 `(x in -1..=1, y in -1.25..=1.25)` saturator/wavefolder transfer curve points.
+        /// 160 `(x in -1..=1, y in -1.25..=1.25)` cubic waveshaper transfer curve points via `drive_transfer_sample`.
         curve: Vec<(f32, f32)>,
         /// 64 log-spaced points (`20 Hz..freq_high_hz`) of post-saturation warmth tone filter in dB `[-24..3]`.
         tone_curve_db: Vec<f32>,
@@ -199,21 +202,20 @@ pub enum EffectVisualView {
         summary: String,
     },
     Reverb {
-        /// Upper frequency axis bound in Hz (`min(20_000.0, sample_rate * 0.45)`) for the HF damping plot.
+        /// Upper frequency axis bound in Hz (`min(20_000.0, sample_rate * 0.45)`) for the air-absorption damping plot.
         freq_high_hz: f32,
-        /// 96 samples in `[0.0, 1.0]` of full-band RT60 decay envelope (including predelay gap).
+        /// 96 samples in `[0.0, 1.0]` of full-band RT60 modal room decay envelope via `reverb_rt60_envelope`.
         decay_curve: Vec<f32>,
-        /// 96 samples in `[0.0, 1.0]` of high-frequency damped decay envelope.
+        /// 96 samples in `[0.0, 1.0]` of high-frequency air-absorption decay envelope via `reverb_hf_rt60_envelope`.
         hf_decay_curve: Vec<f32>,
-        /// 64 log-spaced points (`20 Hz..freq_high_hz`) of damping LPF response in dB `[-24..3]`.
+        /// 64 log-spaced points (`20 Hz..freq_high_hz`) of modal air-absorption RT60 rolloff in dB `[-24..3]`.
         damping_curve_db: Vec<f32>,
-        predelay_norm: f32,
         damping_norm: f32,
         window_sec: f32,
         size: f32,
         decay_seconds: f32,
         damping_hz: f32,
-        predelay_ms: f32,
+        diffusion: f32,
         width: f32,
         mix: f32,
         summary: String,
@@ -366,9 +368,16 @@ pub fn build_filter_visual(
     let cutoff_norm = log_to_norm(patch.cutoff_hz, FREQ_MIN_HZ, high_hz);
     let mod_cutoff_norm = swept_cutoff_hz.map(|hz| log_to_norm(hz, FREQ_MIN_HZ, high_hz));
     let active_mode = effective_base.mode;
+    let mut extras = String::new();
+    if effective_base.kerr_semitones.abs() >= 0.05 {
+        extras.push_str(&format!(" · Kerr {:+.1}st", effective_base.kerr_semitones));
+    }
+    if effective_base.spread >= 0.005 {
+        extras.push_str(&format!(" · Spr {:.0}%", effective_base.spread * 100.0));
+    }
     let summary = match (&env_visual, swept_cutoff_hz) {
         (Some(ev), Some(hz)) => format!(
-            "{} · {} → {} · Q {:.0}% · {:+.1} oct",
+            "{} · {} → {} · Q {:.0}% · {:+.1} oct{extras}",
             active_mode.label(),
             format_hz(effective_base.cutoff_hz),
             format_hz(hz),
@@ -376,18 +385,18 @@ pub fn build_filter_visual(
             ev.env_amount
         ),
         (None, Some(hz)) => format!(
-            "{} · {} → {} · Q {:.0}%",
+            "{} · {} → {} · Q {:.0}%{extras}",
             active_mode.label(),
             format_hz(patch.cutoff_hz),
             format_hz(hz),
             effective_base.resonance * 100.0
         ),
         _ => format!(
-            "{} · {} · Q {:.0}% · Mix {:.0}%",
-            patch.mode.label(),
-            format_hz(patch.cutoff_hz),
-            patch.resonance * 100.0,
-            patch.mix * 100.0
+            "{} · {} · Q {:.0}%{extras} · Mix {:.0}%",
+            effective_base.mode.label(),
+            format_hz(effective_base.cutoff_hz),
+            effective_base.resonance * 100.0,
+            effective_base.mix * 100.0
         ),
     };
     EffectVisualView::Filter {
@@ -396,6 +405,8 @@ pub fn build_filter_visual(
         cutoff_hz: patch.cutoff_hz,
         resonance: effective_base.resonance,
         drive: effective_base.drive,
+        kerr_semitones: effective_base.kerr_semitones,
+        spread: effective_base.spread,
         mix: effective_base.mix,
         curve_db,
         mod_curve_db,
@@ -690,41 +701,51 @@ pub fn build_chorus_visual(
     }
 }
 
+fn sample_room_air_absorption_db(damping_hz: f32, sr: f64) -> Vec<f32> {
+    let high_hz = freq_high_hz(sr);
+    let damp = f64::from(damping_hz);
+    (0..TONE_CURVE_POINTS)
+        .map(|i| {
+            let x = i as f32 / (TONE_CURVE_POINTS - 1) as f32;
+            let f = norm_to_log(x, FREQ_MIN_HZ, high_hz);
+            let rt_ratio = room_mode_rt60(1.0, damp, f64::from(f));
+            let db = lin_to_db_f64(rt_ratio);
+            if db.is_finite() {
+                db.clamp(-24.0, 3.0) as f32
+            } else {
+                -24.0
+            }
+        })
+        .collect()
+}
+
 pub fn build_reverb_visual(patch: &ReverbPatch, sr: f64) -> EffectVisualView {
     let sr = sanitize_sample_rate(sr);
     let size = patch.size.clamp(0.0, 1.0);
     let decay = patch.decay_seconds.clamp(0.2, 12.0);
     let damping_hz = patch.damping_hz.clamp(500.0, 18_000.0);
-    let predelay_ms = patch.predelay_ms.clamp(0.0, 120.0);
+    let diffusion = patch.diffusion.clamp(0.0, 1.0);
     let width = patch.width.clamp(0.0, 1.0);
     let mix = patch.mix.clamp(0.0, 1.0);
 
-    let predelay_sec = predelay_ms * 0.001;
-    let window_sec = (predelay_sec + decay * 1.1).clamp(0.8, 12.5);
-    let predelay_norm = (predelay_sec / window_sec).clamp(0.0, 0.30);
+    let window_sec = (decay * 1.1).clamp(0.8, 12.5);
 
     let mut decay_curve = Vec::with_capacity(REVERB_CURVE_POINTS);
     let mut hf_decay_curve = Vec::with_capacity(REVERB_CURVE_POINTS);
     for i in 0..REVERB_CURVE_POINTS {
         let xn = i as f32 / (REVERB_CURVE_POINTS - 1) as f32;
         let t = xn * window_sec;
-        if t < predelay_sec {
-            decay_curve.push(0.0);
-            hf_decay_curve.push(0.0);
-        } else {
-            let dt = t - predelay_sec;
-            decay_curve.push(reverb_rt60_envelope(decay, dt));
-            hf_decay_curve.push(reverb_hf_rt60_envelope(decay, damping_hz, dt));
-        }
+        decay_curve.push(reverb_rt60_envelope(decay, t));
+        hf_decay_curve.push(reverb_hf_rt60_envelope(decay, damping_hz, t));
     }
 
     let high_hz = freq_high_hz(sr);
-    let damping_curve_db = sample_tpt_lpf_db(damping_hz, sr);
+    let damping_curve_db = sample_room_air_absorption_db(damping_hz, sr);
     let damping_norm = log_to_norm(damping_hz, FREQ_MIN_HZ, high_hz);
     let summary = format!(
-        "RT60 {:.2} s · Pre {:.0} ms · Damp {} · Size {:.0}%",
+        "RT60 {:.2} s · Diff {:.0}% · Damp {} · Size {:.0}%",
         patch.decay_seconds,
-        predelay_ms,
+        diffusion * 100.0,
         format_hz(damping_hz),
         size * 100.0
     );
@@ -733,13 +754,12 @@ pub fn build_reverb_visual(patch: &ReverbPatch, sr: f64) -> EffectVisualView {
         decay_curve,
         hf_decay_curve,
         damping_curve_db,
-        predelay_norm,
         damping_norm,
         window_sec,
         size,
         decay_seconds: patch.decay_seconds,
         damping_hz,
-        predelay_ms,
+        diffusion,
         width,
         mix,
         summary,
@@ -1104,10 +1124,10 @@ mod tests {
             }
         }
 
-        // 2. Insert Filter parity with parallel mix < 1.0, AcidLowPass k = 3.85, and sr * 0.45 cutoff clamp.
+        // 2. Insert Filter parity with parallel mix < 1.0, DiodeLadder, ImLpf2/3/4, kerr/spread, and sr * 0.45 clamp.
         let sr = 48_000.0;
         let dry_filter = FilterPatch {
-            mode: FilterMode::LowPass,
+            mode: FilterMode::ImLpf2,
             cutoff_hz: 400.0,
             resonance: 0.65,
             drive: 0.0,
@@ -1124,29 +1144,38 @@ mod tests {
             other => panic!("expected Filter visual, got {other:?}"),
         }
 
-        let parallel_acid = FilterPatch {
-            mode: FilterMode::AcidLowPass,
+        let parallel_diode = FilterPatch {
+            mode: FilterMode::DiodeLadder,
             cutoff_hz: 900.0,
             resonance: 0.80,
             drive: 0.25,
+            kerr_semitones: 3.5,
+            spread: 0.45,
             mix: 0.5,
             ..FilterPatch::default()
         };
-        match build_filter_visual(&parallel_acid, None, None, None, 44_100.0) {
+        match build_filter_visual(&parallel_diode, None, None, None, 44_100.0) {
             EffectVisualView::Filter {
                 freq_high_hz,
                 curve_db,
+                kerr_semitones,
+                spread,
+                summary,
                 ..
             } => {
                 assert!((freq_high_hz - 19_845.0).abs() < 1e-2);
+                assert!((kerr_semitones - 3.5).abs() < 1e-5);
+                assert!((spread - 0.45).abs() < 1e-5);
+                assert!(summary.contains("Kerr +3.5st"), "summary={summary}");
+                assert!(summary.contains("Spr 45%"), "summary={summary}");
                 for (i, &db) in curve_db.iter().enumerate() {
                     let x = i as f32 / (FILTER_CURVE_POINTS - 1) as f32;
                     let f = norm_to_log(x, FREQ_MIN_HZ, freq_high_hz);
                     let expected = filter_mix_magnitude_db(
-                        parallel_acid.mode,
-                        parallel_acid.cutoff_hz,
-                        parallel_acid.resonance,
-                        parallel_acid.mix,
+                        parallel_diode.mode,
+                        parallel_diode.cutoff_hz,
+                        parallel_diode.resonance,
+                        parallel_diode.mix,
                         f64::from(f),
                         44_100.0,
                     )
@@ -1158,6 +1187,41 @@ mod tests {
                 }
             }
             other => panic!("expected Filter visual, got {other:?}"),
+        }
+
+        for mode in [FilterMode::ImLpf2, FilterMode::ImLpf3, FilterMode::ImLpf4] {
+            let patch = FilterPatch {
+                mode,
+                cutoff_hz: 1_200.0,
+                resonance: 0.55,
+                mix: 1.0,
+                ..FilterPatch::default()
+            };
+            match build_filter_visual(&patch, None, None, None, sr) {
+                EffectVisualView::Filter {
+                    mode_label,
+                    curve_db,
+                    freq_high_hz,
+                    ..
+                } => {
+                    assert_eq!(mode_label, mode.label());
+                    for (i, &db) in curve_db.iter().enumerate() {
+                        let x = i as f32 / (FILTER_CURVE_POINTS - 1) as f32;
+                        let f = norm_to_log(x, FREQ_MIN_HZ, freq_high_hz);
+                        let expected = filter_mix_magnitude_db(
+                            mode,
+                            patch.cutoff_hz,
+                            patch.resonance,
+                            patch.mix,
+                            f64::from(f),
+                            sr,
+                        )
+                        .clamp(-48.0, 18.0) as f32;
+                        assert!((db - expected).abs() < 1e-4);
+                    }
+                }
+                other => panic!("expected Filter visual for {mode:?}, got {other:?}"),
+            }
         }
 
         // Filter envelope modulation clamps to sr * 0.45.
@@ -1311,23 +1375,29 @@ mod tests {
             }
         }
 
-        // 6. Reverb exact -60 dB RT60 envelope parity with core DSP.
+        // 6. Reverb exact -60 dB RT60, HF air-absorption, and diffusion parity with core DSP.
         let rev_patch = ReverbPatch {
             size: 0.6,
             decay_seconds: 2.0,
             damping_hz: 5_000.0,
-            predelay_ms: 0.0,
+            diffusion: 0.65,
             mix: 0.5,
             width: 0.0,
         };
         match build_reverb_visual(&rev_patch, sr) {
             EffectVisualView::Reverb {
+                freq_high_hz,
                 decay_curve,
                 hf_decay_curve,
+                damping_curve_db,
                 window_sec,
+                diffusion,
+                summary,
                 ..
             } => {
                 assert_eq!(decay_curve[0], 1.0);
+                assert!((diffusion - 0.65).abs() < 1e-6);
+                assert!(summary.contains("Diff 65%"), "summary={summary}");
                 // At t == decay_seconds, linear amplitude reaches ~0.001 (-60 dB).
                 let idx_rt60 = ((rev_patch.decay_seconds / window_sec)
                     * (REVERB_CURVE_POINTS - 1) as f32)
@@ -1346,39 +1416,62 @@ mod tests {
                     "Reverb decay near t=RT60 must hit -60 dB (~0.001), got {}",
                     decay_curve[idx_rt60]
                 );
+                for (i, &db) in damping_curve_db.iter().enumerate() {
+                    let xn = i as f32 / (TONE_CURVE_POINTS - 1) as f32;
+                    let f = norm_to_log(xn, FREQ_MIN_HZ, freq_high_hz);
+                    let expected = lin_to_db_f64(room_mode_rt60(
+                        1.0,
+                        f64::from(rev_patch.damping_hz),
+                        f64::from(f),
+                    ))
+                    .clamp(-24.0, 3.0) as f32;
+                    assert!((db - expected).abs() < 1e-4);
+                }
             }
             other => panic!("expected Reverb visual, got {other:?}"),
         }
 
-        // 7. Drive asymmetry bends transfer curve asymmetrically & shows in summary.
-        let asym_drv = build_drive_visual(
-            &DrivePatch {
-                mode: DriveMode::HardClip,
-                drive: 0.55,
+        // 7. Drive asymmetry bends transfer curve asymmetrically & matches drive_shape_mode_asym_f64.
+        for mode in [DriveMode::AtomicJet, DriveMode::ShockPort] {
+            let patch = DrivePatch {
+                mode,
+                drive: 0.65,
                 asymmetry: 0.50,
                 tone_hz: 10_000.0,
                 output_db: 0.0,
                 mix: 1.0,
-            },
-            sr,
-        );
-        match asym_drv {
-            EffectVisualView::Drive {
-                asymmetry,
-                curve,
-                summary,
-                ..
-            } => {
-                assert!((asymmetry - 0.50).abs() < 1e-6);
-                assert!(summary.contains("Asym +50%"), "summary={summary}");
-                let y_neg = curve.first().unwrap().1;
-                let y_pos = curve.last().unwrap().1;
-                assert!(
-                    (y_pos.abs() - y_neg.abs()).abs() > 0.05,
-                    "asymmetry=+0.50 must produce distinct +1/-1 clip ceilings: y_neg={y_neg} y_pos={y_pos}"
-                );
+            };
+            match build_drive_visual(&patch, sr) {
+                EffectVisualView::Drive {
+                    asymmetry,
+                    curve,
+                    summary,
+                    ..
+                } => {
+                    assert!((asymmetry - 0.50).abs() < 1e-6);
+                    assert!(summary.contains("Asym +50%"), "summary={summary}");
+                    for &(x, y) in &curve {
+                        let expected = cadence_core::dsp::drive_shape_mode_asym_f64(
+                            f64::from(x),
+                            f64::from(patch.drive),
+                            f64::from(patch.asymmetry),
+                            mode,
+                        )
+                        .clamp(-1.25, 1.25) as f32;
+                        assert!(
+                            (y - expected).abs() < 1e-4,
+                            "Drive {mode:?} drift at x={x}: view={y} vs dsp={expected}"
+                        );
+                    }
+                    let y_neg = curve.first().unwrap().1;
+                    let y_pos = curve.last().unwrap().1;
+                    assert!(
+                        (y_pos.abs() - y_neg.abs()).abs() > 0.05,
+                        "{mode:?} asymmetry=+0.50 must produce distinct +1/-1 ceilings: y_neg={y_neg} y_pos={y_pos}"
+                    );
+                }
+                other => panic!("expected Drive visual, got {other:?}"),
             }
-            other => panic!("expected Drive visual, got {other:?}"),
         }
 
         // 8. FilterMode::LowPass6 curve matches exact 1-pole -6 dB/oct response.

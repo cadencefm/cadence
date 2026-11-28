@@ -715,10 +715,12 @@ fn filter_custom_project_pattern_drives_rhythmic_envelope() {
         name: "Custom Step Filter".into(),
         bypassed: false,
         kind: EffectKind::Filter(cadence_core::mixer::FilterPatch {
-            mode: cadence_core::rack::FilterMode::LowPass,
+            mode: cadence_core::rack::FilterMode::ImLpf2,
             cutoff_hz: 320.0,
             resonance: 0.6,
             drive: 0.15,
+            kerr_semitones: 0.0,
+            spread: 0.0,
             mix: 1.0,
             env_pattern: 0,
             env_pattern_id: Some(mini_id),

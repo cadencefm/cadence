@@ -1,104 +1,68 @@
-//! Multi-mode ZDF filter voice node (SVF 12 dB, Acid ladder 18/24 dB, and TPT 6 dB LPF).
+//! Multi-mode cubic and ZDF filter voice node composing `cadence_core::dsp::MultiModeFilter`
+//! via the voice's heap-hosted filter bank pool.
 
 use super::{
-    write_copy_module_normalized, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks,
-    VoiceModule,
+    write_copy_module_normalized, NodeInputs, ProcessCtx, TailBanks, TriggerCtx, TriggerState,
+    VoiceLocks, VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
+use cadence_core::dsp::math::LIN_FLOOR_F64;
 use cadence_core::dsp::{
     clamp_freq_hz, control_stride_mask, filter_velocity_mod, mix_stereo_f64, octaves_to_ratio_f64,
-    sanitize_clamp_f32, sanitize_clamp_f64, smooth_step_f32, AcidCoeffs, AcidLadder, LogSmoother,
-    ModalResonator, SoftClipCoeffs, Svf, SvfCoeffs, TptOnePoleLpf,
+    sanitize_clamp_f32, sanitize_clamp_f64, sanitize_sample_rate, smooth_step_f32, LogSmoother,
+    MultiModeFilter, Smoother,
 };
 use cadence_core::rack::{FilterMode, FilterModule, ModuleKind, ModuleKindTag, ModuleParam};
 
 const FILTER_CV_RATE_HZ: f64 = 12_000.0;
 const BIG_CV_JUMP_OCTAVES: f64 = 0.25;
+const MODE_XFADE_MS: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::modular_voice) struct FilterNode {
     current: FilterModule,
     pub target: FilterModule,
-    svf: Svf,
-    acid: AcidLadder,
-    one_pole: TptOnePoleLpf,
-    svf_coeffs: SvfCoeffs,
-    acid_coeffs: AcidCoeffs,
+    bank_idx: u8,
+    prev_mode: FilterMode,
+    mode_xfade: Smoother,
     cutoff: LogSmoother,
+    effective_fc: f64,
     pub effective_cutoff_hz: f32,
+    effective_resonance: f32,
     last_cv_octaves: f64,
     cv_sub_counter: u32,
     cv_subrate_mask: u32,
     has_cv: bool,
-    cached_drive_bits: u64,
-    cached_drive_coeffs: SoftClipCoeffs,
-    cached_coeff_key: (FilterMode, u64, u32, u64),
+    cached_sr_bits: u64,
 }
 
 impl FilterNode {
     #[inline]
     pub(super) fn new(params: FilterModule, sample_rate: f64) -> Self {
-        let fc = clamp_freq_hz(f64::from(params.cutoff_hz), 20.0, sample_rate, 1_000.0);
-        let drv = f64::from(sanitize_clamp_f32(params.drive, 0.0, 1.0, 0.0));
+        let sr = sanitize_sample_rate(sample_rate);
+        let cutoff = LogSmoother::new(f64::from(params.cutoff_hz), 20.0);
+        let fc = clamp_freq_hz(cutoff.current(), 20.0, sr, 1_000.0);
         Self {
             current: params,
             target: params,
-            svf: Svf::default(),
-            acid: AcidLadder::default(),
-            one_pole: TptOnePoleLpf::new(sample_rate, fc),
-            svf_coeffs: SvfCoeffs::new(sample_rate, fc, params.resonance),
-            acid_coeffs: AcidCoeffs::new(sample_rate, fc, params.resonance),
-            cutoff: LogSmoother::new(f64::from(params.cutoff_hz), 20.0),
+            bank_idx: 0,
+            prev_mode: params.mode,
+            mode_xfade: Smoother::new(1.0, MODE_XFADE_MS, sr),
+            cutoff,
+            effective_fc: fc,
             effective_cutoff_hz: fc as f32,
+            effective_resonance: sanitize_clamp_f32(params.resonance, 0.0, 0.95, 0.0),
             last_cv_octaves: f64::NAN,
             cv_sub_counter: 0,
-            cv_subrate_mask: control_stride_mask(sample_rate, FILTER_CV_RATE_HZ),
+            cv_subrate_mask: control_stride_mask(sr, FILTER_CV_RATE_HZ),
             has_cv: false,
-            cached_drive_bits: drv.to_bits(),
-            cached_drive_coeffs: SoftClipCoeffs::new(drv),
-            cached_coeff_key: (
-                params.mode,
-                fc.to_bits(),
-                params.resonance.to_bits(),
-                sample_rate.to_bits(),
-            ),
+            cached_sr_bits: sr.to_bits(),
         }
     }
 
     #[cfg(test)]
     pub(in crate::modular_voice) fn cv_subrate_mask(&self) -> u32 {
         self.cv_subrate_mask
-    }
-
-    #[inline]
-    fn update_coeffs(
-        &mut self,
-        sample_rate: f64,
-        mode: FilterMode,
-        cutoff_hz: f64,
-        resonance: f32,
-    ) {
-        let key = (
-            mode,
-            cutoff_hz.to_bits(),
-            resonance.to_bits(),
-            sample_rate.to_bits(),
-        );
-        if key == self.cached_coeff_key {
-            return;
-        }
-        self.cached_coeff_key = key;
-        match mode {
-            FilterMode::AcidLowPass => {
-                self.acid_coeffs = AcidCoeffs::new(sample_rate, cutoff_hz, resonance);
-            }
-            FilterMode::LowPass6 => {
-                self.one_pole.set_cutoff(sample_rate, cutoff_hz);
-            }
-            _ => {
-                self.svf_coeffs = SvfCoeffs::new(sample_rate, cutoff_hz, resonance);
-            }
-        }
     }
 }
 
@@ -152,6 +116,12 @@ impl VoiceModule for FilterNode {
         if !locks.is_module_locked(module_id, ModuleParam::Drive) {
             self.target.drive = s.drive;
         }
+        if !locks.is_module_locked(module_id, ModuleParam::Kerr) {
+            self.target.kerr_semitones = s.kerr_semitones;
+        }
+        if !locks.is_module_locked(module_id, ModuleParam::Spread) {
+            self.target.spread = s.spread;
+        }
         if !locks.is_module_locked(module_id, ModuleParam::KeyTrack) {
             self.target.key_tracking = s.key_tracking;
         }
@@ -165,7 +135,7 @@ impl VoiceModule for FilterNode {
     }
 
     #[inline]
-    fn on_trigger(&mut self, ctx: &TriggerCtx, _state: &mut TriggerState<'_>) {
+    fn on_trigger(&mut self, ctx: &TriggerCtx, state: &mut TriggerState<'_>) {
         let prev_mode = self.current.mode;
         let flt = self.target;
         if ctx.eff_legato {
@@ -174,14 +144,39 @@ impl VoiceModule for FilterNode {
             self.current = flt;
         }
 
-        let sr = ctx.sample_rate;
+        let sr = sanitize_sample_rate(ctx.sample_rate);
+        let sr_bits = sr.to_bits();
+        self.bank_idx = ctx.slot;
         self.cv_subrate_mask = control_stride_mask(sr, FILTER_CV_RATE_HZ);
         self.cv_sub_counter = 0;
+
         if ctx.eff_retarget {
-            if prev_mode != flt.mode {
-                self.svf.reset();
-                self.acid.reset();
-                self.one_pole.reset();
+            let bank_rebuilt = state
+                .filter_banks
+                .get_mut(usize::from(self.bank_idx))
+                .is_some_and(|bank| bank.sync_sample_rate(sr));
+            if bank_rebuilt || sr_bits != self.cached_sr_bits {
+                self.cached_sr_bits = sr_bits;
+                self.mode_xfade = Smoother::new(1.0, MODE_XFADE_MS, sr);
+                self.prev_mode = flt.mode;
+                self.last_cv_octaves = f64::NAN;
+            } else if prev_mode != flt.mode {
+                if let Some(bank) = state.filter_banks.get_mut(usize::from(self.bank_idx)) {
+                    let prev_topo = MultiModeFilter::topology_id(prev_mode);
+                    let next_topo = MultiModeFilter::topology_id(flt.mode);
+                    if self.prev_mode != prev_mode {
+                        let abandoned_topo = MultiModeFilter::topology_id(self.prev_mode);
+                        if abandoned_topo != prev_topo && abandoned_topo != next_topo {
+                            bank.filter.reset_topology_for(self.prev_mode);
+                        }
+                    }
+                    if prev_topo != next_topo || (next_topo == 1 && bank.filter.quiet()) {
+                        bank.filter.reset_topology_for(flt.mode);
+                    }
+                }
+                self.prev_mode = prev_mode;
+                self.mode_xfade.snap(0.0);
+                self.mode_xfade.set_target(1.0);
                 self.last_cv_octaves = f64::NAN;
             }
             self.has_cv = ctx.has_cv;
@@ -190,25 +185,27 @@ impl VoiceModule for FilterNode {
                 self.cutoff.snap_to_target();
             }
             let fc = clamp_freq_hz(self.cutoff.current(), 20.0, sr, 1_000.0);
+            self.effective_fc = fc;
             self.effective_cutoff_hz = fc as f32;
-            self.update_coeffs(sr, self.current.mode, fc, self.current.resonance);
+            self.effective_resonance = sanitize_clamp_f32(self.current.resonance, 0.0, 0.95, 0.0);
             return;
         }
 
-        let fc = clamp_freq_hz(f64::from(flt.cutoff_hz), 20.0, sr, 1_000.0);
-        self.svf = Svf::default();
-        self.acid = AcidLadder::default();
-        self.one_pole = TptOnePoleLpf::new(sr, fc);
-        self.svf_coeffs = SvfCoeffs::new(sr, fc, flt.resonance);
-        self.acid_coeffs = AcidCoeffs::new(sr, fc, flt.resonance);
-        self.cached_coeff_key = (
-            flt.mode,
-            fc.to_bits(),
-            flt.resonance.to_bits(),
-            sr.to_bits(),
-        );
+        if let Some(bank) = state.filter_banks.get_mut(usize::from(self.bank_idx)) {
+            bank.reset_for_rate(sr);
+        }
+        if sr_bits != self.cached_sr_bits {
+            self.cached_sr_bits = sr_bits;
+            self.mode_xfade = Smoother::new(1.0, MODE_XFADE_MS, sr);
+        } else {
+            self.mode_xfade.snap(1.0);
+        }
+        self.prev_mode = flt.mode;
         self.cutoff = LogSmoother::new(f64::from(flt.cutoff_hz), 20.0);
+        let fc = clamp_freq_hz(self.cutoff.current(), 20.0, sr, 1_000.0);
+        self.effective_fc = fc;
         self.effective_cutoff_hz = fc as f32;
+        self.effective_resonance = sanitize_clamp_f32(flt.resonance, 0.0, 0.95, 0.0);
         self.last_cv_octaves = f64::NAN;
         self.has_cv = ctx.has_cv;
     }
@@ -219,6 +216,12 @@ impl VoiceModule for FilterNode {
         self.current.cutoff_hz = self.cutoff.step(s64) as f32;
         smooth_step_f32(&mut self.current.resonance, self.target.resonance, s32);
         smooth_step_f32(&mut self.current.drive, self.target.drive, s32);
+        smooth_step_f32(
+            &mut self.current.kerr_semitones,
+            self.target.kerr_semitones,
+            s32,
+        );
+        smooth_step_f32(&mut self.current.spread, self.target.spread, s32);
         smooth_step_f32(
             &mut self.current.key_tracking,
             self.target.key_tracking,
@@ -272,32 +275,58 @@ impl VoiceModule for FilterNode {
                 sr,
                 1_000.0,
             );
+            self.effective_fc = fc;
             self.effective_cutoff_hz = fc as f32;
-            self.update_coeffs(sr, flt.mode, fc, vel_mod.resonance);
+            self.effective_resonance = vel_mod.resonance;
         }
 
-        let drv = f64::from(sanitize_clamp_f32(flt.drive, 0.0, 1.0, 0.0));
-        let driven = if drv > 0.0 {
-            let drv_bits = drv.to_bits();
-            if drv_bits != self.cached_drive_bits {
-                self.cached_drive_bits = drv_bits;
-                self.cached_drive_coeffs = SoftClipCoeffs::new(drv);
-            }
-            let c = self.cached_drive_coeffs;
-            [c.shape(inputs.in_audio[0]), c.shape(inputs.in_audio[1])]
-        } else {
-            inputs.in_audio
+        let Some(bank) = ctx.filter_banks.get_mut(usize::from(self.bank_idx)) else {
+            return inputs.in_audio;
         };
-        let wet = match flt.mode {
-            FilterMode::AcidLowPass => self.acid.process_stereo(driven, self.acid_coeffs),
-            FilterMode::LowPass6 => self.one_pole.process_stereo(driven),
-            mode => self.svf.process_stereo(driven, self.svf_coeffs, mode),
+
+        let drv = f64::from(sanitize_clamp_f32(flt.drive, 0.0, 1.0, 0.0));
+        let kerr = f64::from(sanitize_clamp_f32(flt.kerr_semitones, -12.0, 12.0, 0.0));
+        let spread = f64::from(sanitize_clamp_f32(flt.spread, 0.0, 1.0, 0.0));
+        let m_xf = self.mode_xfade.next();
+        let wet = if m_xf >= 1.0 - LIN_FLOOR_F64 {
+            if self.prev_mode != flt.mode {
+                if MultiModeFilter::topology_id(self.prev_mode)
+                    != MultiModeFilter::topology_id(flt.mode)
+                {
+                    bank.filter.reset_topology_for(self.prev_mode);
+                }
+                self.prev_mode = flt.mode;
+            }
+            bank.filter.process_stereo(
+                inputs.in_audio,
+                flt.mode,
+                self.effective_fc,
+                self.effective_resonance,
+                drv,
+                kerr,
+                spread,
+            )
+        } else {
+            bank.filter.process_stereo_crossfade(
+                inputs.in_audio,
+                self.prev_mode,
+                flt.mode,
+                m_xf,
+                self.effective_fc,
+                self.effective_resonance,
+                drv,
+                kerr,
+                spread,
+            )
         };
         mix_stereo_f64(inputs.in_audio, wet, f64::from(flt.mix))
     }
 
     #[inline]
-    fn is_tail_quiet(&self, _resonator_banks: &[ModalResonator]) -> bool {
-        self.svf.quiet() && self.acid.quiet() && self.one_pole.quiet()
+    fn is_tail_quiet(&self, banks: TailBanks<'_>) -> bool {
+        banks
+            .filter_banks
+            .get(usize::from(self.bank_idx))
+            .is_none_or(|bank| bank.filter.quiet())
     }
 }

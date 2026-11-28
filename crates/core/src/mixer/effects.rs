@@ -19,13 +19,12 @@ crate::define_choice_enum! {
 }
 
 crate::define_choice_enum! {
-    /// Waveshaper circuit mode for [`DrivePatch`] and [`crate::dsp::Drive`].
+    /// Pure 1x-rate cubic waveshaper mode for [`DrivePatch`], [`crate::rack::DriveModule`], and [`crate::dsp::Drive`].
     #[derive(Default)]
     pub enum DriveMode [array] {
         #[default]
-        Tape => ("tape", "Tape", ["0", "tube", "warm", "soft", "analog"]),
-        HardClip => ("hard_clip", "Hard Clip", ["1", "hardclip", "hard", "clip", "dist", "diode", "fuzz"]),
-        Fold => ("fold", "Fold", ["2", "wavefold", "wave_fold", "west", "west_coast"]),
+        AtomicJet => ("atomic_jet", "Atomic Jet", ["0", "jet", "tube", "warm", "soft", "tape", "analog"]),
+        ShockPort => ("shock_port", "Shock Port", ["1", "shock", "port", "headroom", "limit", "hard", "clip", "dist"]),
     }
 }
 
@@ -36,7 +35,7 @@ crate::define_choice_enum! {
         Reverb => ("reverb", "Reverb"),
         Eq => ("eq", "EQ"),
         Chorus => ("chorus", "Chorus"),
-        Drive => ("drive", "Drive", ["sat", "saturator"]),
+        Drive => ("drive", "Drive", ["sat", "saturator", "dist", "distortion"]),
         Filter => ("filter", "Filter", ["pcf"]),
         Compressor => ("compressor", "Compressor", ["comp"]),
         Limiter => ("limiter", "Limiter", ["lim"]),
@@ -286,7 +285,7 @@ pub struct DrivePatch {
 impl Default for DrivePatch {
     fn default() -> Self {
         Self {
-            mode: DriveMode::Tape,
+            mode: DriveMode::AtomicJet,
             drive: 0.35,
             asymmetry: 0.0,
             tone_hz: 7500.0,
@@ -311,7 +310,7 @@ pub struct ReverbPatch {
     pub size: f32,
     pub decay_seconds: f32,
     pub damping_hz: f32,
-    pub predelay_ms: f32,
+    pub diffusion: f32,
     pub mix: f32,
     pub width: f32,
 }
@@ -320,27 +319,28 @@ impl Default for ReverbPatch {
     fn default() -> Self {
         Self {
             size: 0.55,
-            decay_seconds: 2.4,
-            damping_hz: 6000.0,
-            predelay_ms: 12.0,
+            decay_seconds: 2.65,
+            damping_hz: 3600.0,
+            diffusion: 0.50,
             mix: 0.25,
-            width: 0.8,
+            width: 0.85,
         }
     }
 }
 
 impl_effect_patch!(ReverbPatch, "Reverb", {
-    f32 Size     => size,
-    f32 Decay    => decay_seconds,
-    f32 Damping  => damping_hz,
-    f32 Predelay => predelay_ms,
-    f32 Mix      => mix,
-    f32 Width    => width,
+    f32 Size      => size,
+    f32 Decay     => decay_seconds,
+    f32 Damping   => damping_hz,
+    f32 Diffusion => diffusion,
+    f32 Mix       => mix,
+    f32 Width     => width,
 });
 
-/// Stereo resonant multi-mode insert filter (LP / BP / HP / Acid LP) with an
-/// optional rhythmic step envelope (external multi-groove bank `00..=127` or any
-/// bound project `Pattern`) and smooth parameter automation.
+/// Stereo resonant multi-mode insert filter (`ImLpf2` / `ImLpf3` / `ImLpf4` / `DiodeLadder` /
+/// `BandPass` / `HighPass` / `LowPass6`) with State-Kerr resonance bend, zero-comb quadrature M/S
+/// spread, and an optional rhythmic step envelope (external multi-groove bank `00..=127` or any
+/// bound project `Pattern`).
 ///
 /// When `env_amount == 0.0` (default), behaves identically to a static studio filter.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -350,6 +350,10 @@ pub struct FilterPatch {
     pub cutoff_hz: f32,
     pub resonance: f32,
     pub drive: f32,
+    #[serde(default)]
+    pub kerr_semitones: f32,
+    #[serde(default)]
+    pub spread: f32,
     pub mix: f32,
     /// External rhythmic envelope groove ID (`0..=127`). Used when `env_pattern_id` is `None`.
     pub env_pattern: u8,
@@ -366,10 +370,12 @@ pub struct FilterPatch {
 impl Default for FilterPatch {
     fn default() -> Self {
         Self {
-            mode: FilterMode::LowPass,
+            mode: FilterMode::ImLpf2,
             cutoff_hz: 1600.0,
             resonance: 0.35,
             drive: 0.0,
+            kerr_semitones: 0.0,
+            spread: 0.0,
             mix: 1.0,
             env_pattern: 0,
             env_pattern_id: None,
@@ -384,6 +390,8 @@ impl_effect_patch!(FilterPatch, "Filter", {
     f32       Cutoff     => cutoff_hz,
     f32       Resonance  => resonance,
     f32       Drive      => drive,
+    f32       Kerr       => kerr_semitones,
+    f32       Spread     => spread,
     groove_u8 EnvPattern => env_pattern,
     f32       EnvAmount  => env_amount,
     f32       EnvDecay   => env_decay_ms,
@@ -625,6 +633,7 @@ impl EffectDevice {
             ParameterUnit::Seconds | ParameterUnit::Octaves => {
                 nudge_quantized(current, direction, 10.0, 1.0, 5.0, coarse)
             }
+            ParameterUnit::Semitones => nudge_quantized(current, direction, 2.0, 1.0, 6.0, coarse),
             ParameterUnit::Milliseconds => {
                 if param == EffectParam::EnvDecay {
                     nudge_log(current, direction, 1.12, 1.4, coarse).round()

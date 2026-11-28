@@ -289,3 +289,57 @@ pub(crate) fn draw_meter_bar_row(
         );
     }
 }
+
+/// Draw a stacked label/value readout above a centered bipolar (`-1..+1`) horizontal meter bar.
+pub(crate) fn draw_bipolar_meter_bar_row(
+    dl: &mut DisplayList,
+    rect: Rect,
+    label: &str,
+    value_text: &str,
+    bipolar: f32,
+    color: Color,
+    theme: &Theme,
+) {
+    if rect.h < 16.0 || rect.w < 40.0 {
+        return;
+    }
+    let font_sz = theme.font.small - 1.5;
+    let label_h = (rect.h - 6.0).clamp(11.0, 13.0);
+    let (top, bot) = rect.split_top(label_h);
+    dl.text(
+        top,
+        label,
+        font_sz,
+        false,
+        theme.text.muted,
+        TextAlign::Left,
+    );
+    dl.text(
+        top,
+        value_text,
+        font_sz,
+        true,
+        theme.text.primary,
+        TextAlign::Right,
+    );
+    let bar_h = if rect.h < 22.0 { 4.0 } else { 5.0 };
+    let track = Rect::new(bot.x, bot.y + 1.0, bot.w, bar_h);
+    dl.rounded(track, theme.meter.track_bg, bar_h * 0.5);
+    let mid_x = track.x + track.w * 0.5;
+    dl.fill(
+        Rect::new(mid_x - 0.5, track.y - 1.0, 1.0, track.h + 2.0),
+        theme.border.grid_bar,
+    );
+    let v = bipolar.clamp(-1.0, 1.0);
+    let px = track.x + track.w * ((v + 1.0) * 0.5);
+    let x0 = mid_x.min(px);
+    let x1 = mid_x.max(px);
+    if x1 - x0 > 0.5 {
+        dl.rounded_glow(
+            Rect::new(x0, track.y, x1 - x0, track.h),
+            color,
+            bar_h * 0.5,
+            0.20,
+        );
+    }
+}

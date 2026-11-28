@@ -1,20 +1,20 @@
-//! Unified heap-boxed [`ModularVoice`] pool entry with Rack-bus SVF, stereo balance
-//! pan, unclamped bus headroom gain, and live held-note stack.
+//! Unified heap-boxed [`ModularVoice`] pool entry with Rack-bus 2-pole ImLPF,
+//! stereo balance pan, unclamped bus headroom gain, and live held-note stack.
 use super::*;
 use crate::modular_voice::ModularVoice;
+use cadence_core::dsp::cubic::{ImLpfCascade, ImLpfPoles};
 use cadence_core::dsp::{
     control_stride_mask, flush_denormal_f32, one_pole_coeff_ms, pan_stereo_balance_f64,
-    sanitize_sample, sanitize_sample_rate, stereo_mid_f32, LogSmoother, Smoother, Svf, SvfCoeffs,
+    sanitize_sample, sanitize_sample_rate, stereo_mid_f32, LogSmoother, Smoother,
     AUDIO_SUB_BLOCK_FRAMES,
 };
-use cadence_core::rack::FilterMode;
 use cadence_core::runtime::RackActivityTelemetry;
 use cadence_core::sampler::SampleData;
 use std::sync::Arc;
 
-/// Target Rack-bus SVF coefficient update cadence (`6 kHz`:
+/// Target Rack-bus filter parameter update cadence (`6 kHz`:
 /// `8` frames @ 44.1/48 kHz, `16` @ 96 kHz, `32` @ 192 kHz).
-const RACK_SVF_CTRL_TARGET_HZ: f64 = 6_000.0;
+const RACK_FILTER_CTRL_TARGET_HZ: f64 = 6_000.0;
 
 /// Unified polyphonic/monophonic Rack voice slot.
 ///
@@ -46,17 +46,17 @@ pub(super) struct Voice {
     pub(super) rack_pan_sm: Smoother,
     pub(super) cached_rack_pan_bits: u64,
     pub(super) cached_rack_pan_lr: [f64; 2],
-    /// Dedicated Rack-bus LowPass SVF (transparent bypass at >= 19.9 kHz & res <= 0.001).
-    pub(super) rack_svf: Svf,
-    pub(super) rack_svf_coeffs: SvfCoeffs,
-    pub(super) cached_rack_svf_key: (u64, u32),
+    /// Dedicated Rack-bus 2-pole Butterworth ImLPF (transparent bypass at >= 19.9 kHz & res <= 0.001).
+    pub(super) rack_filter: [ImLpfCascade; 2],
+    pub(super) rack_filter_fc: f64,
+    pub(super) rack_filter_res: f64,
     pub(super) rack_cutoff: LogSmoother,
     pub(super) rack_cutoff_target_hz: f64,
     pub(super) rack_cutoff_coeff: f64,
     pub(super) rack_res_sm: Smoother,
-    pub(super) rack_svf_ctrl: u32,
-    pub(super) rack_svf_mask: u32,
-    pub(super) rack_svf_was_active: bool,
+    pub(super) rack_filter_ctrl: u32,
+    pub(super) rack_filter_mask: u32,
+    pub(super) rack_filter_was_active: bool,
     pub(super) sample_rate: f64,
     pub(super) live_key: Option<u8>,
     pub(super) choke_group: u8,
@@ -88,16 +88,19 @@ impl Voice {
             rack_pan_sm: Smoother::new(0.0, 4.0, sr),
             cached_rack_pan_bits: 0.0_f64.to_bits(),
             cached_rack_pan_lr: [1.0, 1.0],
-            rack_svf: Svf::default(),
-            rack_svf_coeffs: SvfCoeffs::new(sr, 20_000.0, 0.0),
-            cached_rack_svf_key: (20_000.0_f64.to_bits(), 0.0_f32.to_bits()),
+            rack_filter: [
+                ImLpfCascade::new(sr, ImLpfPoles::Two),
+                ImLpfCascade::new(sr, ImLpfPoles::Two),
+            ],
+            rack_filter_fc: 20_000.0,
+            rack_filter_res: 0.0,
             rack_cutoff: LogSmoother::new_clamped(20_000.0, 20.0, 20_000.0),
             rack_cutoff_target_hz: 20_000.0,
             rack_cutoff_coeff: one_pole_coeff_ms(4.0, sr),
             rack_res_sm: Smoother::new(0.0, 4.0, sr),
-            rack_svf_ctrl: 0,
-            rack_svf_mask: control_stride_mask(sr, RACK_SVF_CTRL_TARGET_HZ),
-            rack_svf_was_active: false,
+            rack_filter_ctrl: 0,
+            rack_filter_mask: control_stride_mask(sr, RACK_FILTER_CTRL_TARGET_HZ),
+            rack_filter_was_active: false,
             sample_rate: sr,
             live_key: None,
             choke_group: 0,
@@ -120,8 +123,9 @@ impl Voice {
         self.zone_locks = 0;
         self.age = 0;
         self.last_output = [0.0; 2];
-        self.rack_svf.reset();
-        self.rack_svf_was_active = false;
+        self.rack_filter[0].reset();
+        self.rack_filter[1].reset();
+        self.rack_filter_was_active = false;
         self.modular.deactivate();
     }
 
@@ -164,13 +168,21 @@ impl Voice {
         self.rack_cutoff_target_hz = fc;
         self.rack_cutoff_coeff = one_pole_coeff_ms(4.0, sr);
         self.rack_res_sm = Smoother::new(f64::from(res), 4.0, sr);
-        self.rack_svf.reset();
-        self.rack_svf_ctrl = 0;
-        self.rack_svf_mask = control_stride_mask(sr, RACK_SVF_CTRL_TARGET_HZ);
-        self.rack_svf_was_active = fc < 19_900.0 || res > 0.001;
-        if self.rack_svf_was_active {
-            self.cached_rack_svf_key = (fc.to_bits(), res.to_bits());
-            self.rack_svf_coeffs = SvfCoeffs::new(sr, fc, res);
+        if (self.rack_filter[0].sample_rate() - sr).abs() > 1e-6 {
+            self.rack_filter = [
+                ImLpfCascade::new(sr, ImLpfPoles::Two),
+                ImLpfCascade::new(sr, ImLpfPoles::Two),
+            ];
+        } else {
+            self.rack_filter[0].reset();
+            self.rack_filter[1].reset();
+        }
+        self.rack_filter_ctrl = 0;
+        self.rack_filter_mask = control_stride_mask(sr, RACK_FILTER_CTRL_TARGET_HZ);
+        self.rack_filter_was_active = fc < 19_900.0 || res > 0.001;
+        if self.rack_filter_was_active {
+            self.rack_filter_fc = fc;
+            self.rack_filter_res = f64::from(res);
         }
     }
 
@@ -269,9 +281,10 @@ impl Voice {
             let filter_active = fc < 19_900.0 || res > 0.001;
 
             if !filter_active {
-                if self.rack_svf_was_active {
-                    self.rack_svf.reset();
-                    self.rack_svf_was_active = false;
+                if self.rack_filter_was_active {
+                    self.rack_filter[0].reset();
+                    self.rack_filter[1].reset();
+                    self.rack_filter_was_active = false;
                 }
                 let run_frames = if mod_frames == 0 { 1 } else { mod_frames };
                 let mut last = self.last_output;
@@ -296,18 +309,19 @@ impl Voice {
                 return;
             }
 
-            let svf_key = (fc.to_bits(), res.to_bits());
-            if self.rack_svf_was_active && svf_key == self.cached_rack_svf_key {
-                let coeffs = self.rack_svf_coeffs;
+            let res64 = f64::from(res);
+            if self.rack_filter_was_active
+                && fc.to_bits() == self.rack_filter_fc.to_bits()
+                && res64.to_bits() == self.rack_filter_res.to_bits()
+            {
                 let mut processed = 0usize;
                 let mut last = self.last_output;
                 for i in 0..frames {
                     let raw = raw_buf[i];
-                    let stereo = self.rack_svf.process_stereo(
-                        [f64::from(raw[0]), f64::from(raw[1])],
-                        coeffs,
-                        FilterMode::LowPass,
-                    );
+                    let stereo = [
+                        self.rack_filter[0].step(f64::from(raw[0]), fc, res64, 0.0, 0.0),
+                        self.rack_filter[1].step(f64::from(raw[1]), fc, res64, 0.0, 0.0),
+                    ];
                     let output = [
                         flush_denormal_f32(sanitize_sample((stereo[0] * scale_l) as f32)),
                         flush_denormal_f32(sanitize_sample((stereo[1] * scale_r) as f32)),
@@ -320,20 +334,20 @@ impl Voice {
                     last = output;
                     processed += 1;
                     let mod_inactive = (i + 1 >= mod_frames) && !self.modular.is_active();
-                    if mod_inactive && self.rack_svf.quiet() {
+                    if mod_inactive && self.rack_filter[0].quiet() && self.rack_filter[1].quiet() {
                         self.active = false;
                         break;
                     }
                 }
-                self.rack_svf_ctrl =
-                    self.rack_svf_ctrl.wrapping_add(processed as u32) & self.rack_svf_mask;
+                self.rack_filter_ctrl =
+                    self.rack_filter_ctrl.wrapping_add(processed as u32) & self.rack_filter_mask;
                 self.age = self.age.saturating_add(processed as u32);
                 self.last_output = last;
                 return;
             }
         }
 
-        // General per-frame Rack-bus smoothing / SVF update path (bit-exact with `next_stereo`).
+        // General per-frame Rack-bus smoothing / ImLPF update path.
         for i in 0..frames {
             let raw = raw_buf[i];
             let gain_scale = self.gain_scale.next();
@@ -344,21 +358,35 @@ impl Voice {
 
             let mut stereo = [f64::from(raw[0]), f64::from(raw[1])];
             if filter_active {
-                let svf_key = (fc.to_bits(), res.to_bits());
-                let need_coeff = !self.rack_svf_was_active
-                    || (self.rack_svf_ctrl == 0 && svf_key != self.cached_rack_svf_key);
-                if need_coeff {
-                    self.cached_rack_svf_key = svf_key;
-                    self.rack_svf_coeffs = SvfCoeffs::new(self.sample_rate, fc, res);
+                let res64 = f64::from(res);
+                let need_update = !self.rack_filter_was_active || self.rack_filter_ctrl == 0;
+                if need_update {
+                    self.rack_filter_fc = fc;
+                    self.rack_filter_res = res64;
                 }
-                self.rack_svf_ctrl = self.rack_svf_ctrl.wrapping_add(1) & self.rack_svf_mask;
-                self.rack_svf_was_active = true;
-                stereo =
-                    self.rack_svf
-                        .process_stereo(stereo, self.rack_svf_coeffs, FilterMode::LowPass);
-            } else if self.rack_svf_was_active {
-                self.rack_svf.reset();
-                self.rack_svf_was_active = false;
+                self.rack_filter_ctrl =
+                    self.rack_filter_ctrl.wrapping_add(1) & self.rack_filter_mask;
+                self.rack_filter_was_active = true;
+                stereo = [
+                    self.rack_filter[0].step(
+                        stereo[0],
+                        self.rack_filter_fc,
+                        self.rack_filter_res,
+                        0.0,
+                        0.0,
+                    ),
+                    self.rack_filter[1].step(
+                        stereo[1],
+                        self.rack_filter_fc,
+                        self.rack_filter_res,
+                        0.0,
+                        0.0,
+                    ),
+                ];
+            } else if self.rack_filter_was_active {
+                self.rack_filter[0].reset();
+                self.rack_filter[1].reset();
+                self.rack_filter_was_active = false;
             }
 
             let rack_pan_bits = rack_pan.to_bits();
@@ -383,7 +411,7 @@ impl Voice {
             self.age = self.age.saturating_add(1);
             self.last_output = output;
             let mod_inactive = (i + 1 >= mod_frames) && !self.modular.is_active();
-            if mod_inactive && self.rack_svf.quiet() {
+            if mod_inactive && self.rack_filter[0].quiet() && self.rack_filter[1].quiet() {
                 self.active = false;
                 break;
             }

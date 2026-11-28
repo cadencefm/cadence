@@ -14,6 +14,7 @@ use super::{
 use crate::display::{DisplayList, Rect};
 use crate::theme::{Color, Theme};
 use cadence_app::view::ModuleVisualView;
+use cadence_core::mixer::DriveMode;
 use cadence_core::params::{format_hz, format_pan};
 use cadence_core::rack::ModuleKindTag;
 use cadence_core::sampler::SampleLoopMode;
@@ -392,6 +393,8 @@ fn draw_filter_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualVie
         curve,
         cutoff_norm,
         mod_cutoff_norm,
+        kerr_semitones,
+        spread,
         mix,
         live_waveform,
         ..
@@ -402,12 +405,17 @@ fn draw_filter_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualVie
 
     draw_module_card_with_scope(dl, area, live_waveform, theme, |dl, hdr, plot| {
         let accent = theme.accent.warning_key;
+        let kerr_txt = format!("KERR {:+.1}st", kerr_semitones);
+        let spread_txt = format!("SPR {:.0}%", spread * 100.0);
         let mix_txt = format!("MIX {:.0}%", mix * 100.0);
-        let badges = [
-            ("FLT", accent),
-            (*mode_label, accent),
-            (mix_txt.as_str(), theme.accent.routing),
-        ];
+        let mut badges: Vec<(&str, Color)> = vec![("FLT", accent), (*mode_label, accent)];
+        if kerr_semitones.abs() >= 0.05 {
+            badges.push((kerr_txt.as_str(), theme.accent.modulation));
+        }
+        if *spread >= 0.005 {
+            badges.push((spread_txt.as_str(), theme.accent.focus));
+        }
+        badges.push((mix_txt.as_str(), theme.accent.routing));
         draw_badge_header(dl, hdr, &badges, label, None, accent, theme);
         draw_filter_plot(dl, plot, curve, *cutoff_norm, *mod_cutoff_norm, true, theme);
     });
@@ -453,7 +461,7 @@ fn draw_vca_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, 
 fn draw_drive_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, theme: &Theme) {
     let ModuleVisualView::Drive {
         label,
-        mode_label,
+        mode,
         transfer_curve,
         live_waveform,
         ..
@@ -463,15 +471,14 @@ fn draw_drive_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView
     };
 
     draw_module_card_with_scope(dl, area, live_waveform, theme, |dl, hdr, plot| {
-        let accent = match *mode_label {
-            "Fold" => theme.accent.modulation,
-            "HardClip" | "Hard Clip" => theme.accent.alert,
-            _ => theme.accent.warning_key.mix(theme.accent.alert, 0.45),
+        let accent = match *mode {
+            DriveMode::AtomicJet => theme.accent.warning_key.mix(theme.accent.edit, 0.35),
+            DriveMode::ShockPort => theme.accent.alert,
         };
         draw_badge_header(
             dl,
             hdr,
-            &[("DRV", accent), (*mode_label, accent)],
+            &[("DRV", accent), (mode.label(), accent)],
             label,
             None,
             accent,

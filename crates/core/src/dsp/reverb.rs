@@ -1,31 +1,44 @@
-//! Stereo 8×8 Hadamard FDN + 4-stage Schroeder diffuser [`Reverb`] insert processor
-//! and exact `-60 dB` RT60 envelope math.
+//! Zero-delay 96-mode ambient-air modal room [`Reverb`] insert processor
+//! and exact physical `-60 dB` RT60 / air-absorption envelope math.
 //!
-//! All diffuser and FDN delay lengths are quantized to distinct prime (pairwise
-//! coprime) integer frame counts for the active sample rate, preserving flat
-//! allpass magnitude and clean HF response across all sample rates.
-//! Automated `size` changes smoothly crossfade between coprime delay sets with zero
-//! clicks. All storage is allocated once in `Reverb::new`; zero RT allocations.
+//! Composes [`AmbientModalRoom`] directly with zero delay buffers and zero
+//! real-time heap allocations. All modal room parameters (`size`,
+//! `decay_seconds`, `damping_hz`, `diffusion`) smooth continuously and update
+//! eigenmode coefficients at a sample-rate-invariant `1.5 kHz` control cadence
+//! without clearing modal state, enabling click-free live automation alongside
+//! natural bypassed tail drainage.
 
-use crate::dsp::biquad::TptOnePoleLpf;
+use crate::dsp::cubic::room::{
+    room_mode_rt60, AmbientModalRoom, ROOM_DEFAULT_DAMPING_HZ, ROOM_DEFAULT_DECAY_SECONDS,
+    ROOM_DEFAULT_DIFFUSION, ROOM_DEFAULT_SIZE, ROOM_MAX_DECAY_SECONDS, ROOM_MIN_DAMPING_HZ,
+    ROOM_MIN_DECAY_SECONDS,
+};
 use crate::dsp::gain::stereo_ms_width_uncorrelated;
 use crate::dsp::math::{
-    clamp_freq_hz, control_stride_last_tick, control_stride_mask, flush_denormal_f32, hann_fade_in,
-    log_to_norm, mix_stereo_f32, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame,
-    sanitize_sample_rate, BypassFader, BypassStep, LogSmoother, Smoother, NYQUIST_SAFE_RATIO,
-    TAIL_SILENCE_FLOOR_F32,
+    clamp_freq_hz, control_stride_last_tick, control_stride_mask, mix_stereo_f32,
+    one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame, sanitize_sample_rate, BypassFader,
+    BypassStep, LogSmoother, Smoother, NYQUIST_SAFE_RATIO, TAIL_SILENCE_FLOOR_F32,
 };
 use crate::mixer::ReverbPatch;
 
-const LINES: usize = 8;
-const BASE_FDN_48K: [f64; LINES] = [
-    1493.0, 1601.0, 1747.0, 1867.0, 1999.0, 2137.0, 2281.0, 2417.0,
-];
-const BASE_DIFFUSER_48K: [f64; 4] = [149.0, 263.0, 163.0, 293.0];
-const LEFT: [f32; LINES] = [1.0, 1.0, 1.0, 1.0, -1.0, -1.0, -1.0, -1.0];
-const RIGHT: [f32; LINES] = [1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, -1.0];
-const NORM: f32 = std::f32::consts::FRAC_1_SQRT_2 * 0.5;
-const ALLPASS_GAIN: f32 = 0.6;
+/// Stored quadratic modal energy floor below which the room tail is treated as quiet.
+const ROOM_QUIET_ENERGY: f64 = 1e-12;
+
+/// High-frequency reference point (Hz) for the physical air-absorption envelope curve.
+const HF_ENVELOPE_REF_HZ: f64 = 8_000.0;
+
+/// Control-rate cadence (Hz) for re-evaluating modal room rotation, decay, and diffusion tables.
+const ROOM_CTRL_HZ: f64 = 1_500.0;
+
+/// Parameter smoothing time constant (ms) for room controls and stereo mix/width.
+const PARAM_SMOOTH_MS: f32 = 5.0;
+
+/// Nominal studio wet readout gain at canonical `decay_seconds = 2.65 s`.
+const WET_GAIN_REF: f64 = 16.0;
+
+/// Passive upper ceiling on wet readout gain so even undiffused single-mode resonance
+/// at full-scale stereo drive remains strictly non-clipping (`< 1.0` peak).
+const WET_GAIN_MAX: f64 = 20.0;
 
 /// Exact perceptual RT60 decay amplitude envelope (`10^(-3 * t / decay_seconds)`),
 /// reaching `-60 dB` (`0.001`) at `t_sec == decay_seconds`.
@@ -34,236 +47,110 @@ pub fn reverb_rt60_envelope(decay_seconds: f32, t_sec: f32) -> f32 {
     if !t_sec.is_finite() || t_sec <= 0.0 {
         return 1.0;
     }
-    let decay = sanitize_clamp_f64(f64::from(decay_seconds), 0.05, 60.0, 2.4);
+    let decay = sanitize_clamp_f64(
+        f64::from(decay_seconds),
+        0.05,
+        60.0,
+        ROOM_DEFAULT_DECAY_SECONDS,
+    );
     10.0_f64
         .powf(-3.0 * f64::from(t_sec) / decay)
         .clamp(0.0, 1.0) as f32
 }
 
-/// High-frequency damped RT60 envelope for UI reverb tail curves.
+/// Physical high-frequency air-absorption RT60 envelope at `8000 Hz`, matching
+/// `RT60(8000) = decay_seconds / (1 + (8000 / damping_hz)^1.45)`.
 #[inline]
 pub fn reverb_hf_rt60_envelope(decay_seconds: f32, damping_hz: f32, t_sec: f32) -> f32 {
     if !t_sec.is_finite() || t_sec <= 0.0 {
         return 1.0;
     }
-    let damp_norm = f64::from(log_to_norm(damping_hz, 500.0, 18_000.0));
-    let hf_mult = 1.0 + 3.0 * (1.0 - damp_norm);
-    let decay = sanitize_clamp_f64(f64::from(decay_seconds), 0.05, 60.0, 2.4);
+    let decay = sanitize_clamp_f64(
+        f64::from(decay_seconds),
+        0.05,
+        60.0,
+        ROOM_DEFAULT_DECAY_SECONDS,
+    );
+    let damp = sanitize_clamp_f64(
+        f64::from(damping_hz),
+        ROOM_MIN_DAMPING_HZ,
+        48_000.0,
+        ROOM_DEFAULT_DAMPING_HZ,
+    );
+    let rt_hf = room_mode_rt60(decay, damp, HF_ENVELOPE_REF_HZ);
     10.0_f64
-        .powf(-3.0 * hf_mult * f64::from(t_sec) / decay)
+        .powf(-3.0 * f64::from(t_sec) / rt_hf)
         .clamp(0.0, 1.0) as f32
 }
 
+/// Decay-compensated wet readout gain matching studio send/insert levels across
+/// `0.2..=12.0 s` while preserving strict passivity and non-clipping headroom.
 #[inline]
-fn is_prime(n: usize) -> bool {
-    if n < 2 {
-        return false;
-    }
-    if n == 2 || n == 3 {
-        return true;
-    }
-    if n.is_multiple_of(2) || n.is_multiple_of(3) {
-        return false;
-    }
-    let mut d = 5usize;
-    while d * d <= n {
-        if n.is_multiple_of(d) || n.is_multiple_of(d + 2) {
-            return false;
-        }
-        d += 6;
-    }
-    true
+fn wet_makeup_gain(decay_seconds: f64) -> f64 {
+    let ratio = (decay_seconds / ROOM_DEFAULT_DECAY_SECONDS).max(0.0);
+    (WET_GAIN_REF * ratio.sqrt()).min(WET_GAIN_MAX)
 }
 
-/// Find the closest prime integer in `[min_val, max_val]` not already present in `used`.
-/// Distinct primes are guaranteed pairwise coprime, maximizing FDN modal density.
-fn nearest_distinct_prime(target: usize, used: &[usize], min_val: usize, max_val: usize) -> usize {
-    let lo = min_val.max(2);
-    let hi = max_val.max(lo);
-    let center = target.clamp(lo, hi);
-    let max_span = center.saturating_sub(lo).max(hi.saturating_sub(center));
-    for offset in 0..=max_span {
-        if let Some(up) = center.checked_add(offset) {
-            if up <= hi && is_prime(up) && !used.contains(&up) {
-                return up;
-            }
-        }
-        if offset > 0 {
-            if let Some(dn) = center.checked_sub(offset) {
-                if dn >= lo && is_prime(dn) && !used.contains(&dn) {
-                    return dn;
-                }
-            }
-        }
-    }
-    center
-}
-
-fn coprime_scaled_lengths<const N: usize>(
-    base_48k: [f64; N],
-    scale: f64,
-    sample_rate: f64,
-    max_len: usize,
-) -> [usize; N] {
-    let mut out = [2usize; N];
-    for (i, base) in base_48k.into_iter().enumerate() {
-        let target = (base * scale * sample_rate / 48_000.0).round() as usize;
-        out[i] = nearest_distinct_prime(target, &out[..i], 5, max_len);
-    }
-    out
-}
-
-struct MonoRing {
-    data: Box<[f32]>,
-    write: usize,
-    valid: usize,
-}
-
-impl MonoRing {
-    fn new(capacity: usize) -> Self {
-        Self {
-            data: vec![0.0; capacity.max(8) + 2].into_boxed_slice(),
-            write: 0,
-            valid: 0,
-        }
-    }
-
-    fn capacity(&self) -> usize {
-        self.data.len().saturating_sub(2)
-    }
-
-    fn reset(&mut self) {
-        self.write = 0;
-        self.valid = 0;
-    }
-
-    #[inline]
-    fn read_integer(&self, distance: usize) -> f32 {
-        let len = self.data.len();
-        if distance == 0 || self.valid < distance || distance >= len {
-            return 0.0;
-        }
-        let idx = if self.write >= distance {
-            self.write - distance
-        } else {
-            self.write + len - distance
-        };
-        self.data[idx]
-    }
-
-    #[inline]
-    fn read_linear(&self, distance: f64) -> f32 {
-        let d = sanitize_clamp_f64(distance, 1.0, self.capacity().max(1) as f64, 1.0);
-        let whole = d.floor() as usize;
-        let frac = (d - whole as f64) as f32;
-        let a = self.read_integer(whole);
-        let b = self.read_integer(whole + 1);
-        a + (b - a) * frac
-    }
-
-    #[inline]
-    fn write(&mut self, value: f32) {
-        let len = self.data.len();
-        self.data[self.write] = flush_denormal_f32(value);
-        self.write += 1;
-        if self.write >= len {
-            self.write = 0;
-        }
-        if self.valid < len - 1 {
-            self.valid += 1;
-        }
-    }
-
-    /// Exact integer-delay Schroeder allpass: `H(z) = (z^{-d} - g) / (1 - g z^{-d})`,
-    /// guaranteeing exact unity magnitude `|H(e^{jω})| == 1.0` at every frequency!
-    #[inline]
-    fn allpass_integer(&mut self, input: f32, distance: usize) -> f32 {
-        let delayed = self.read_integer(distance);
-        let output = delayed - input * ALLPASS_GAIN;
-        self.write(input + output * ALLPASS_GAIN);
-        output
-    }
-}
-
-/// Stereo 8×8 Hadamard FDN reverb with 4 integer-prime Schroeder diffusers,
-/// coprime-integer FDN delay lengths, [`TptOnePoleLpf`] damping, smooth
-/// predelay/mix/width/size transitions, and click-free bypass crossfade.
+/// Stereo zero-delay 96-mode ambient-air modal room reverb with smooth size,
+/// decay, log-domain air-absorption damping, Even/Odd diffusion, uncorrelated
+/// Mid/Side width, and click-free tail-draining bypass crossfade.
 pub struct Reverb {
     sample_rate: f64,
-    lines: [MonoRing; LINES],
-    predelay: [MonoRing; 2],
-    diffuser: [MonoRing; 4],
-    diffuser_lengths: [usize; 4],
-    damping_lpf: [TptOnePoleLpf; LINES],
-    lengths_a: [usize; LINES],
-    lengths_b: [usize; LINES],
-    target_lengths: [usize; LINES],
-    size_xfade: f64,
-    size_xfade_step: f64,
-    feedback: [Smoother; LINES],
+    room: Box<AmbientModalRoom>,
+    size: Smoother,
+    decay_seconds: Smoother,
     damping_hz: LogSmoother,
     damping_coeff: f64,
-    cached_damping_bits: u64,
-    predelay_frames: Smoother,
+    diffusion: Smoother,
     mix: Smoother,
     width: Smoother,
+    cached_size_bits: u64,
+    cached_decay_bits: u64,
+    cached_damping_bits: u64,
+    cached_diffusion_bits: u64,
     bypass: BypassFader,
     target: ReverbPatch,
     ctrl_count: u32,
     ctrl_mask: u32,
-    tail_silent_frames: u32,
-    tail_quiet: bool,
+    room_active: bool,
     has_processed: bool,
 }
 
 impl Reverb {
-    const SIZE_XFADE_SEC: f64 = 0.015;
-
     pub fn new(sample_rate: u32) -> Self {
         let sr = sanitize_sample_rate(f64::from(sample_rate.clamp(8_000, 384_000)));
-        let line_cap = (sr * 0.115).ceil() as usize;
-        let predelay_cap = (sr * 0.125).ceil() as usize;
-        let diff_cap = (sr * 0.008).ceil() as usize;
-        let diffuser_lengths = coprime_scaled_lengths(BASE_DIFFUSER_48K, 1.0, sr, diff_cap);
         let default = ReverbPatch::default();
         let init_damp = clamp_freq_hz(
             f64::from(default.damping_hz),
-            200.0,
+            ROOM_MIN_DAMPING_HZ,
             sr,
             f64::from(default.damping_hz),
         );
-        let initial_lengths = coprime_scaled_lengths(
-            BASE_FDN_48K,
-            0.65 + 1.35 * f64::from(default.size),
-            sr,
-            line_cap,
-        );
-        let xfade_frames = (sr * Self::SIZE_XFADE_SEC).max(16.0);
+        let room = AmbientModalRoom::new_boxed(sr);
         let mut effect = Self {
             sample_rate: sr,
-            lines: std::array::from_fn(|_| MonoRing::new(line_cap)),
-            predelay: std::array::from_fn(|_| MonoRing::new(predelay_cap)),
-            diffuser: std::array::from_fn(|_| MonoRing::new(diff_cap)),
-            diffuser_lengths,
-            damping_lpf: std::array::from_fn(|_| TptOnePoleLpf::new(sr, init_damp)),
-            lengths_a: initial_lengths,
-            lengths_b: initial_lengths,
-            target_lengths: initial_lengths,
-            size_xfade: 1.0,
-            size_xfade_step: 1.0 / xfade_frames,
-            feedback: std::array::from_fn(|_| Smoother::new(0.0, 5.0, sr)),
-            damping_hz: LogSmoother::new_clamped(init_damp, 200.0, sr * NYQUIST_SAFE_RATIO),
-            damping_coeff: one_pole_coeff_ms(5.0, sr),
-            cached_damping_bits: init_damp.to_bits(),
-            predelay_frames: Smoother::new(0.0, 5.0, sr),
-            mix: Smoother::new(f64::from(default.mix), 5.0, sr),
-            width: Smoother::new(f64::from(default.width), 5.0, sr),
+            room,
+            size: Smoother::new(f64::from(default.size), PARAM_SMOOTH_MS, sr),
+            decay_seconds: Smoother::new(f64::from(default.decay_seconds), PARAM_SMOOTH_MS, sr),
+            damping_hz: LogSmoother::new_clamped(
+                init_damp,
+                ROOM_MIN_DAMPING_HZ,
+                sr * NYQUIST_SAFE_RATIO,
+            ),
+            damping_coeff: one_pole_coeff_ms(PARAM_SMOOTH_MS, sr),
+            diffusion: Smoother::new(f64::from(default.diffusion), PARAM_SMOOTH_MS, sr),
+            mix: Smoother::new(f64::from(default.mix), PARAM_SMOOTH_MS, sr),
+            width: Smoother::new(f64::from(default.width), PARAM_SMOOTH_MS, sr),
+            // Track the canonical parameters loaded by `AmbientModalRoom::new_boxed`.
+            cached_size_bits: ROOM_DEFAULT_SIZE.to_bits(),
+            cached_decay_bits: ROOM_DEFAULT_DECAY_SECONDS.to_bits(),
+            cached_damping_bits: ROOM_DEFAULT_DAMPING_HZ.to_bits(),
+            cached_diffusion_bits: ROOM_DEFAULT_DIFFUSION.to_bits(),
             bypass: BypassFader::new(sr),
             target: default,
             ctrl_count: 0,
-            ctrl_mask: control_stride_mask(sr, 3_000.0),
-            tail_silent_frames: 0,
-            tail_quiet: true,
+            ctrl_mask: control_stride_mask(sr, ROOM_CTRL_HZ),
+            room_active: false,
             has_processed: false,
         };
         effect.set_parameters(default);
@@ -280,49 +167,35 @@ impl Reverb {
         self.damping_hz.current()
     }
 
-    /// Integer-prime Schroeder diffuser delay lengths in frames at the active sample rate.
-    #[inline]
-    pub fn diffuser_lengths(&self) -> [usize; 4] {
-        self.diffuser_lengths
+    #[cfg(test)]
+    pub(crate) fn room_energy(&self) -> f64 {
+        self.room.energy()
     }
 
-    /// Active integer-prime FDN delay lengths in frames at the active sample rate.
     #[inline]
-    pub fn fdn_lengths(&self) -> [usize; LINES] {
-        self.target_lengths
+    fn sync_room_if_changed(&mut self, size: f64, decay: f64, damp: f64, diffusion: f64) {
+        let size_bits = size.to_bits();
+        let decay_bits = decay.to_bits();
+        let damp_bits = damp.to_bits();
+        let diff_bits = diffusion.to_bits();
+        if size_bits != self.cached_size_bits
+            || decay_bits != self.cached_decay_bits
+            || damp_bits != self.cached_damping_bits
+            || diff_bits != self.cached_diffusion_bits
+        {
+            self.cached_size_bits = size_bits;
+            self.cached_decay_bits = decay_bits;
+            self.cached_damping_bits = damp_bits;
+            self.cached_diffusion_bits = diff_bits;
+            self.room.configure(size, decay, damp, diffusion);
+        }
     }
 
     pub fn reset(&mut self) {
-        for ring in self
-            .lines
-            .iter_mut()
-            .chain(self.predelay.iter_mut())
-            .chain(self.diffuser.iter_mut())
-        {
-            ring.reset();
-        }
-        for lpf in &mut self.damping_lpf {
-            lpf.reset();
-        }
-        self.lengths_a = self.target_lengths;
-        self.lengths_b = self.target_lengths;
-        self.size_xfade = 1.0;
-        for fb in &mut self.feedback {
-            fb.snap(fb.target());
-        }
-        self.damping_hz.snap_to_target();
-        let damp = self.damping_hz.current();
-        self.cached_damping_bits = damp.to_bits();
-        for lpf in &mut self.damping_lpf {
-            lpf.set_cutoff(self.sample_rate, damp);
-        }
-        self.predelay_frames.snap(self.predelay_frames.target());
-        self.mix.snap(self.mix.target());
-        self.width.snap(self.width.target());
+        self.room.reset();
+        self.room_active = false;
         self.bypass.reset();
         self.ctrl_count = 0;
-        self.tail_silent_frames = 0;
-        self.tail_quiet = true;
         self.has_processed = false;
         self.set_parameters(self.target);
     }
@@ -332,21 +205,21 @@ impl Reverb {
         let size = sanitize_clamp_f64(f64::from(patch.size), 0.0, 1.0, f64::from(def.size));
         let decay = sanitize_clamp_f64(
             f64::from(patch.decay_seconds),
-            0.1,
-            30.0,
+            ROOM_MIN_DECAY_SECONDS,
+            ROOM_MAX_DECAY_SECONDS,
             f64::from(def.decay_seconds),
         );
         let damp_hz = clamp_freq_hz(
             f64::from(patch.damping_hz),
-            200.0,
+            ROOM_MIN_DAMPING_HZ,
             self.sample_rate,
             f64::from(def.damping_hz),
         );
-        let predelay_ms = sanitize_clamp_f64(
-            f64::from(patch.predelay_ms),
+        let diffusion = sanitize_clamp_f64(
+            f64::from(patch.diffusion),
             0.0,
-            120.0,
-            f64::from(def.predelay_ms),
+            1.0,
+            f64::from(def.diffusion),
         );
         let mix = sanitize_clamp_f64(f64::from(patch.mix), 0.0, 1.0, f64::from(def.mix));
         let width = sanitize_clamp_f64(f64::from(patch.width), 0.0, 1.0, f64::from(def.width));
@@ -355,7 +228,7 @@ impl Reverb {
             size: size as f32,
             decay_seconds: decay as f32,
             damping_hz: damp_hz as f32,
-            predelay_ms: predelay_ms as f32,
+            diffusion: diffusion as f32,
             mix: mix as f32,
             width: width as f32,
         };
@@ -364,52 +237,37 @@ impl Reverb {
         }
         self.target = sanitized;
 
-        let scale = 0.65 + 1.35 * size;
-        let line_cap = self.lines[0].capacity();
-        let new_lengths = coprime_scaled_lengths(BASE_FDN_48K, scale, self.sample_rate, line_cap);
-        self.target_lengths = new_lengths;
-
-        let mut target_fb = [0.0_f64; LINES];
-        for (i, &len) in new_lengths.iter().enumerate() {
-            let delay_sec = len as f64 / self.sample_rate;
-            target_fb[i] = 10.0_f64.powf(-3.0 * delay_sec / decay).min(0.9995);
-        }
-
-        let predelay_frames =
-            (predelay_ms * 0.001 * self.sample_rate).clamp(0.0, self.predelay[0].capacity() as f64);
-
         if !self.has_processed {
-            self.lengths_a = new_lengths;
-            self.lengths_b = new_lengths;
-            self.size_xfade = 1.0;
-            for (fb, val) in self.feedback.iter_mut().zip(target_fb) {
-                fb.snap(val);
-            }
+            self.size.snap(size);
+            self.decay_seconds.snap(decay);
             self.damping_hz.snap(damp_hz);
-            self.cached_damping_bits = self.damping_hz.current().to_bits();
-            for lpf in &mut self.damping_lpf {
-                lpf.set_cutoff(self.sample_rate, damp_hz);
-            }
-            self.predelay_frames.snap(predelay_frames);
+            self.diffusion.snap(diffusion);
             self.mix.snap(mix);
             self.width.snap(width);
+            self.sync_room_if_changed(
+                self.size.current(),
+                self.decay_seconds.current(),
+                self.damping_hz.current(),
+                self.diffusion.current(),
+            );
         } else {
-            if self.tail_quiet {
-                self.lengths_a = new_lengths;
-                self.lengths_b = new_lengths;
-                self.size_xfade = 1.0;
-            } else if self.size_xfade >= 1.0 && new_lengths != self.lengths_a {
-                self.lengths_b = new_lengths;
-                self.size_xfade = 0.0;
-            }
-            for (fb, val) in self.feedback.iter_mut().zip(target_fb) {
-                fb.set_target(val);
-            }
+            self.size.set_target(size);
+            self.decay_seconds.set_target(decay);
             self.damping_hz.set_target(damp_hz);
-            self.predelay_frames.set_target(predelay_frames);
+            self.diffusion.set_target(diffusion);
             self.mix.set_target(mix);
             self.width.set_target(width);
         }
+    }
+
+    #[inline]
+    pub fn latency_frames(&self) -> usize {
+        0
+    }
+
+    #[inline]
+    pub fn is_quiet(&self, bypassed: bool) -> bool {
+        self.room.energy() < ROOM_QUIET_ENERGY && self.bypass.is_settled_for(bypassed)
     }
 
     #[inline]
@@ -420,33 +278,33 @@ impl Reverb {
         self.has_processed = true;
         self.bypass.advance_silent(bypassed);
         if let Some(last_tick) = control_stride_last_tick(self.ctrl_count, self.ctrl_mask, frames) {
-            self.damping_hz
-                .advance_silent(self.damping_coeff, last_tick + 1);
-            let damp = self.damping_hz.current();
-            let damp_bits = damp.to_bits();
-            if damp_bits != self.cached_damping_bits {
-                self.cached_damping_bits = damp_bits;
-                for lpf in &mut self.damping_lpf {
-                    lpf.set_cutoff(self.sample_rate, damp);
-                }
-            }
-            let rem = frames - 1 - last_tick;
+            let lead = last_tick + 1;
+            self.size.advance_silent(lead);
+            self.decay_seconds.advance_silent(lead);
+            self.damping_hz.advance_silent(self.damping_coeff, lead);
+            self.diffusion.advance_silent(lead);
+            self.sync_room_if_changed(
+                self.size.current(),
+                self.decay_seconds.current(),
+                self.damping_hz.current(),
+                self.diffusion.current(),
+            );
+            let rem = frames - lead;
             if rem > 0 {
+                self.size.advance_silent(rem);
+                self.decay_seconds.advance_silent(rem);
                 self.damping_hz.advance_silent(self.damping_coeff, rem);
+                self.diffusion.advance_silent(rem);
             }
         } else {
+            self.size.advance_silent(frames);
+            self.decay_seconds.advance_silent(frames);
             self.damping_hz.advance_silent(self.damping_coeff, frames);
+            self.diffusion.advance_silent(frames);
         }
         self.ctrl_count = self.ctrl_count.wrapping_add(frames as u32) & self.ctrl_mask;
-        self.predelay_frames.advance_silent(frames);
         self.mix.advance_silent(frames);
         self.width.advance_silent(frames);
-        for fb in &mut self.feedback {
-            fb.advance_silent(frames);
-        }
-        self.lengths_a = self.target_lengths;
-        self.lengths_b = self.target_lengths;
-        self.size_xfade = 1.0;
     }
 
     pub fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
@@ -461,164 +319,53 @@ impl Reverb {
             BypassStep::Active(w) => (w, false),
         };
 
+        let size = self.size.next();
+        let decay = self.decay_seconds.next();
         let damp = self.damping_hz.step(self.damping_coeff);
+        let diffusion = self.diffusion.next();
         if self.ctrl_count == 0 {
-            let damp_bits = damp.to_bits();
-            if damp_bits != self.cached_damping_bits {
-                self.cached_damping_bits = damp_bits;
-                for lpf in &mut self.damping_lpf {
-                    lpf.set_cutoff(self.sample_rate, damp);
-                }
-            }
+            self.sync_room_if_changed(size, decay, damp, diffusion);
         }
         self.ctrl_count = self.ctrl_count.wrapping_add(1) & self.ctrl_mask;
 
-        let predelay_frames = self.predelay_frames.next();
         let mix = self.mix.next();
         let width = self.width.next() as f32;
 
-        // Age reverb tails naturally when bypassed by feeding silence into the network.
+        // Age modal tails naturally when bypassed by feeding silence into the room.
         let feed = if bypassed { [0.0; 2] } else { dry };
         let feed_silent =
             feed[0].abs() < TAIL_SILENCE_FLOOR_F32 && feed[1].abs() < TAIL_SILENCE_FLOOR_F32;
-        if !feed_silent {
-            self.tail_quiet = false;
-            self.tail_silent_frames = 0;
-        }
-        let mut diffuse = [0.0_f32; 2];
-        for ch in 0..2 {
-            let predelayed = if predelay_frames < 1.0 {
-                feed[ch]
-            } else {
-                self.predelay[ch].read_linear(predelay_frames)
-            };
-            self.predelay[ch].write(feed[ch]);
-            let d0 = self.diffuser_lengths[ch * 2];
-            let d1 = self.diffuser_lengths[ch * 2 + 1];
-            let v0 = self.diffuser[ch * 2].allpass_integer(predelayed, d0);
-            diffuse[ch] = self.diffuser[ch * 2 + 1].allpass_integer(v0, d1);
-        }
 
-        let size_w = if self.size_xfade < 1.0 {
-            self.size_xfade = (self.size_xfade + self.size_xfade_step).min(1.0);
-            Some(hann_fade_in(self.size_xfade as f32))
+        let wet_raw = if self.room_active || !feed_silent {
+            self.room_active = true;
+            let out = self.room.step([f64::from(feed[0]), f64::from(feed[1])]);
+            if feed_silent && self.room.energy() < ROOM_QUIET_ENERGY {
+                self.room.reset();
+                self.room_active = false;
+            }
+            out
         } else {
-            None
+            [0.0, 0.0]
         };
 
-        let mut values = [0.0_f32; LINES];
-        let mut wet = [0.0_f32; 2];
-        let mut max_tail_abs = diffuse[0].abs().max(diffuse[1].abs());
-        for (i, value) in values.iter_mut().enumerate() {
-            let delayed = if let Some(w) = size_w {
-                let a = self.lines[i].read_integer(self.lengths_a[i]);
-                let b = self.lines[i].read_integer(self.lengths_b[i]);
-                a + (b - a) * w
-            } else {
-                self.lines[i].read_integer(self.lengths_a[i])
-            };
-            max_tail_abs = max_tail_abs.max(delayed.abs());
-            let damped = self.damping_lpf[i].process_mono(f64::from(delayed)) as f32;
-            *value = damped;
-            wet[0] += delayed * LEFT[i] * NORM;
-            wet[1] += delayed * RIGHT[i] * NORM;
-        }
-        if size_w.is_some() && self.size_xfade >= 1.0 {
-            self.lengths_a = self.lengths_b;
-            if self.target_lengths != self.lengths_a {
-                self.lengths_b = self.target_lengths;
-                self.size_xfade = 0.0;
-            }
-        }
-
-        // Fast Walsh-Hadamard 8×8 orthogonal mixing matrix.
-        let mut stride = 1;
-        while stride < LINES {
-            for base in (0..LINES).step_by(stride * 2) {
-                for offset in 0..stride {
-                    let a = values[base + offset];
-                    let b = values[base + offset + stride];
-                    values[base + offset] = a + b;
-                    values[base + offset + stride] = a - b;
-                }
-            }
-            stride *= 2;
-        }
-
-        for (i, value) in values.into_iter().enumerate() {
-            let fb = self.feedback[i].next() as f32;
-            let inject = (diffuse[0] * LEFT[i] + diffuse[1] * RIGHT[i]) * NORM;
-            let written = inject + value * NORM * fb;
-            max_tail_abs = max_tail_abs.max(written.abs());
-            self.lines[i].write(written);
-        }
-
-        if !self.tail_quiet && feed_silent {
-            if max_tail_abs < TAIL_SILENCE_FLOOR_F32
-                && self.damping_lpf.iter().all(TptOnePoleLpf::quiet)
-            {
-                self.tail_silent_frames = self.tail_silent_frames.saturating_add(1);
-                let max_predelay = predelay_frames.max(self.predelay_frames.target());
-                let max_diff = (self.diffuser_lengths[0] + self.diffuser_lengths[1])
-                    .max(self.diffuser_lengths[2] + self.diffuser_lengths[3]);
-                let max_fdn = self
-                    .lengths_a
-                    .iter()
-                    .chain(self.lengths_b.iter())
-                    .chain(self.target_lengths.iter())
-                    .copied()
-                    .max()
-                    .unwrap_or(0);
-                let drain_frames = (max_predelay.ceil() as usize)
-                    .saturating_add(max_diff)
-                    .saturating_add(max_fdn)
-                    .saturating_add(4) as u32;
-                if self.tail_silent_frames >= drain_frames {
-                    // O(1) ring resets (zero memset on RT thread) guarantee zero stale tails.
-                    for ring in self
-                        .lines
-                        .iter_mut()
-                        .chain(self.predelay.iter_mut())
-                        .chain(self.diffuser.iter_mut())
-                    {
-                        ring.reset();
-                    }
-                    for lpf in &mut self.damping_lpf {
-                        lpf.reset();
-                    }
-                    self.lengths_a = self.target_lengths;
-                    self.lengths_b = self.target_lengths;
-                    self.size_xfade = 1.0;
-                    self.tail_silent_frames = 0;
-                    self.tail_quiet = true;
-                }
-            } else {
-                self.tail_silent_frames = 0;
-            }
-        }
         if bypass_settled {
-            if self.tail_quiet {
-                self.lengths_a = self.target_lengths;
-                self.lengths_b = self.target_lengths;
-                self.size_xfade = 1.0;
+            if !self.room_active {
                 self.bypass.mark_idle();
             }
             return dry;
         }
 
-        wet = stereo_ms_width_uncorrelated(wet, width);
-        mix_stereo_f32(dry, wet, (mix * bypass_w) as f32)
-    }
-}
-
-impl crate::dsp::StereoEffect for Reverb {
-    #[inline]
-    fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
-        Reverb::process(self, input, bypassed)
+        let wet_gain = wet_makeup_gain(decay);
+        let wet = [
+            (wet_raw[0] * wet_gain) as f32,
+            (wet_raw[1] * wet_gain) as f32,
+        ];
+        let wet_wide = stereo_ms_width_uncorrelated(wet, width);
+        mix_stereo_f32(dry, wet_wide, (mix * bypass_w) as f32)
     }
 
     #[inline]
-    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+    pub fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
         if buf.is_empty() {
             return;
         }
@@ -631,8 +378,20 @@ impl crate::dsp::StereoEffect for Reverb {
             return;
         }
         for frame in buf.iter_mut() {
-            *frame = Reverb::process(self, *frame, bypassed);
+            *frame = self.process(*frame, bypassed);
         }
+    }
+}
+
+impl crate::dsp::StereoEffect for Reverb {
+    #[inline]
+    fn process(&mut self, input: [f32; 2], bypassed: bool) -> [f32; 2] {
+        Reverb::process(self, input, bypassed)
+    }
+
+    #[inline]
+    fn process_block(&mut self, buf: &mut [[f32; 2]], bypassed: bool) {
+        Reverb::process_block(self, buf, bypassed);
     }
 
     #[inline]
@@ -641,8 +400,13 @@ impl crate::dsp::StereoEffect for Reverb {
     }
 
     #[inline]
+    fn latency_frames(&self) -> usize {
+        Reverb::latency_frames(self)
+    }
+
+    #[inline]
     fn is_quiet(&self, bypassed: bool) -> bool {
-        self.tail_quiet && self.bypass.is_settled_for(bypassed)
+        Reverb::is_quiet(self, bypassed)
     }
 
     #[inline]
@@ -657,69 +421,55 @@ mod tests {
     use std::f64::consts::TAU;
 
     #[test]
-    fn rt60_envelope_hits_exact_minus_60_db_at_decay_seconds() {
-        for decay in [0.5_f32, 2.4, 8.0] {
+    fn rt60_and_hf_air_absorption_envelopes_hit_minus_60_db_and_respect_damping() {
+        for decay in [0.5_f32, 2.65, 8.0] {
             assert_eq!(reverb_rt60_envelope(decay, 0.0), 1.0);
+            assert_eq!(reverb_rt60_envelope(decay, -1.0), 1.0);
+            assert_eq!(reverb_rt60_envelope(decay, f32::NAN), 1.0);
             let at_rt60 = reverb_rt60_envelope(decay, decay);
             let db = crate::dsp::lin_to_db(at_rt60);
             assert!(
                 (db + 60.0).abs() < 0.05,
                 "decay={decay}: expected -60.0 dB at t=decay, got {db:.2} dB"
             );
-        }
-    }
 
-    #[test]
-    fn diffusers_are_distinct_primes_with_exact_unity_magnitude_at_44k_48k_96k() {
-        for sr in [44_100u32, 48_000, 96_000] {
-            let verb = Reverb::new(sr);
-            let diffs = verb.diffuser_lengths();
-            let fdn = verb.fdn_lengths();
-            for &d in &diffs {
-                assert!(is_prime(d), "sr={sr}: diffuser len {d} must be prime");
-            }
-            for &l in &fdn {
-                assert!(is_prime(l), "sr={sr}: FDN len {l} must be prime");
-            }
-            // All FDN lengths pairwise distinct.
-            for i in 0..LINES {
-                for j in (i + 1)..LINES {
-                    assert_ne!(fdn[i], fdn[j], "sr={sr}: duplicate FDN prime");
-                }
-            }
-
-            // Direct Schroeder allpass magnitude verification near Nyquist (NYQUIST_SAFE_RATIO * sr) & midband.
-            for &freq in &[400.0_f64, 4_000.0, f64::from(sr) * NYQUIST_SAFE_RATIO] {
-                let mut ap = MonoRing::new(diffs[0] + 8);
-                let warmup = sr as usize / 4;
-                let measure = sr as usize / 4;
-                let mut in_sq = 0.0;
-                let mut out_sq = 0.0;
-                for i in 0..(warmup + measure) {
-                    let x = (TAU * freq * i as f64 / f64::from(sr)).sin() as f32 * 0.5;
-                    let y = ap.allpass_integer(x, diffs[0]);
-                    if i >= warmup {
-                        in_sq += f64::from(x) * f64::from(x);
-                        out_sq += f64::from(y) * f64::from(y);
-                    }
-                }
-                let gain_db = crate::dsp::lin_to_db_f64((out_sq / in_sq).sqrt());
+            for damp in [800.0_f32, 3_600.0, 12_000.0] {
+                assert_eq!(reverb_hf_rt60_envelope(decay, damp, 0.0), 1.0);
+                let rt_hf = room_mode_rt60(f64::from(decay), f64::from(damp), HF_ENVELOPE_REF_HZ);
+                let at_hf = reverb_hf_rt60_envelope(decay, damp, rt_hf as f32);
+                let hf_db = crate::dsp::lin_to_db(at_hf);
                 assert!(
-                    gain_db.abs() < 0.15,
-                    "sr={sr} freq={freq}: allpass magnitude drift {gain_db:+.3} dB (expected 0.0 dB)"
+                    (hf_db + 60.0).abs() < 0.05,
+                    "decay={decay} damp={damp}: expected -60.0 dB at t=rt_hf ({rt_hf:.4}s), got {hf_db:.2} dB"
+                );
+                let mid_t = (0.5 * rt_hf) as f32;
+                assert!(
+                    reverb_hf_rt60_envelope(decay, damp, mid_t)
+                        < reverb_rt60_envelope(decay, mid_t),
+                    "decay={decay} damp={damp}: HF air-absorption must decay faster than DC"
                 );
             }
+
+            let t_probe = 0.25_f32;
+            let e_dark = reverb_hf_rt60_envelope(decay, 800.0, t_probe);
+            let e_mid = reverb_hf_rt60_envelope(decay, 3_600.0, t_probe);
+            let e_bright = reverb_hf_rt60_envelope(decay, 12_000.0, t_probe);
+            assert!(
+                e_dark < e_mid && e_mid < e_bright,
+                "decay={decay}: HF envelope must rise monotonically with damping_hz"
+            );
         }
     }
 
     #[test]
-    fn reverb_tail_decays_cleanly_across_sample_rates_with_zero_nans() {
+    fn modal_reverb_tail_decays_with_rt60_and_zero_latency_across_sample_rates() {
         for sr in [44_100u32, 48_000, 96_000] {
+            let sr_f = f64::from(sr);
             let mut short = Reverb::new(sr);
+            assert_eq!(short.latency_frames(), 0);
             short.set_parameters(ReverbPatch {
                 decay_seconds: 0.4,
                 damping_hz: 12_000.0,
-                predelay_ms: 0.0,
                 mix: 1.0,
                 ..ReverbPatch::default()
             });
@@ -727,22 +477,31 @@ mod tests {
             long.set_parameters(ReverbPatch {
                 decay_seconds: 3.0,
                 damping_hz: 12_000.0,
-                predelay_ms: 0.0,
                 mix: 1.0,
                 ..ReverbPatch::default()
             });
 
-            let total = sr as usize; // 1 second
+            let burst_frames = (sr_f * 0.020) as usize;
+            let total = sr as usize;
             let mut e_short = 0.0_f64;
             let mut e_long = 0.0_f64;
             let mut stereo_diff = 0.0_f64;
             for i in 0..total {
-                let x = if i == 0 { [0.8, 0.0] } else { [0.0, 0.0] };
+                let x = if i < burst_frames {
+                    let t = i as f64 / sr_f;
+                    let env = (-t / 0.008).exp();
+                    let s = (env * ((TAU * 420.0 * t).sin() + 0.5 * (TAU * 1_180.0 * t).cos()))
+                        as f32
+                        * 0.65;
+                    [s, 0.0]
+                } else {
+                    [0.0, 0.0]
+                };
                 let ys = short.process(x, false);
                 let yl = long.process(x, false);
                 assert!(ys[0].is_finite() && ys[1].is_finite());
                 assert!(yl[0].is_finite() && yl[1].is_finite());
-                assert!(yl[0].abs() < 2.0 && yl[1].abs() < 2.0);
+                assert!(yl[0].abs() < 1.0 && yl[1].abs() < 1.0);
                 if i >= total / 2 {
                     e_short += f64::from(ys[0]).powi(2) + f64::from(ys[1]).powi(2);
                     e_long += f64::from(yl[0]).powi(2) + f64::from(yl[1]).powi(2);
@@ -751,59 +510,281 @@ mod tests {
             }
             assert!(
                 e_long > e_short * 20.0,
-                "sr={sr}: long={e_long}, short={e_short}"
+                "sr={sr}: long={e_long:.3e}, short={e_short:.3e}"
             );
             assert!(
                 stereo_diff > 1e-5,
-                "sr={sr}: reverb must produce stereo width"
+                "sr={sr}: modal reverb must produce diffuse stereo width (diff={stereo_diff:.3e})"
             );
         }
     }
 
     #[test]
-    fn reverb_width_preserves_wet_energy_and_bypass_drains_to_idle() {
+    fn air_absorption_damping_diffusion_and_size_shape_modal_response() {
+        let sr = 48_000u32;
+        let sr_f = f64::from(sr);
+
+        // 1. Air-absorption damping selectively attenuates high-frequency tails.
+        let measure_band_tail = |damping_hz: f32, tone_hz: f64| -> f64 {
+            let mut verb = Reverb::new(sr);
+            verb.set_parameters(ReverbPatch {
+                size: 0.5,
+                decay_seconds: 2.0,
+                damping_hz,
+                diffusion: 0.5,
+                mix: 1.0,
+                width: 1.0,
+            });
+            let excite = (sr_f * 0.015) as usize;
+            let tail_start = (sr_f * 0.08) as usize;
+            let total = (sr_f * 0.25) as usize;
+            let mut energy = 0.0_f64;
+            for i in 0..total {
+                let x = if i < excite {
+                    let s = (TAU * tone_hz * i as f64 / sr_f).sin() as f32 * 0.8;
+                    [s, s]
+                } else {
+                    [0.0, 0.0]
+                };
+                let y = verb.process(x, false);
+                if i >= tail_start {
+                    energy += f64::from(y[0]).powi(2) + f64::from(y[1]).powi(2);
+                }
+            }
+            energy
+        };
+        let hf_bright = measure_band_tail(14_000.0, 5_000.0);
+        let hf_dark = measure_band_tail(800.0, 5_000.0);
+        assert!(
+            hf_bright > hf_dark * 10.0,
+            "air absorption must damp 5 kHz tail strongly: bright={hf_bright:.3e}, dark={hf_dark:.3e}"
+        );
+        let lf_bright = measure_band_tail(14_000.0, 120.0);
+        let lf_dark = measure_band_tail(800.0, 120.0);
+        assert!(
+            lf_dark > lf_bright * 0.4,
+            "low-frequency 120 Hz tail should remain intact under HF damping: bright={lf_bright:.3e}, dark={lf_dark:.3e}"
+        );
+
+        // 2. Pair diffusion smoothly reshapes Even/Odd modal coupling without instability.
+        let run_diffusion = |diffusion: f32| -> Vec<[f32; 2]> {
+            let mut verb = Reverb::new(sr);
+            verb.set_parameters(ReverbPatch {
+                size: 0.5,
+                decay_seconds: 2.0,
+                damping_hz: 6_000.0,
+                diffusion,
+                mix: 1.0,
+                width: 1.0,
+            });
+            let total = (sr_f * 0.10) as usize;
+            let mut out = Vec::with_capacity(total);
+            for i in 0..total {
+                let x = if i < 64 {
+                    let t = i as f64 / sr_f;
+                    let s =
+                        ((TAU * 520.0 * t).sin() + 0.5 * (TAU * 1_640.0 * t).cos()) as f32 * 0.5;
+                    [s, -s]
+                } else {
+                    [0.0, 0.0]
+                };
+                out.push(verb.process(x, false));
+            }
+            out
+        };
+        let dry_diff = run_diffusion(0.0);
+        let wet_diff = run_diffusion(1.0);
+        let diff_energy: f64 = dry_diff
+            .iter()
+            .zip(wet_diff.iter())
+            .map(|(a, b)| f64::from(a[0] - b[0]).powi(2) + f64::from(a[1] - b[1]).powi(2))
+            .sum();
+        assert!(
+            diff_energy > 1e-4,
+            "diffusion 0.0 vs 1.0 must audibly alter modal coupling (diff_energy={diff_energy:.3e})"
+        );
+
+        // 3. Size scales modal frequencies inversely (smaller room => higher zero-crossing rate).
+        let measure_zcr = |size: f32| -> usize {
+            let mut verb = Reverb::new(sr);
+            verb.set_parameters(ReverbPatch {
+                size,
+                decay_seconds: 2.0,
+                damping_hz: 10_000.0,
+                diffusion: 0.5,
+                mix: 1.0,
+                width: 1.0,
+            });
+            let total = (sr_f * 0.15) as usize;
+            let mut prev = 0.0_f32;
+            let mut crossings = 0usize;
+            for i in 0..total {
+                let x = if i < 12 { [0.9, 0.0] } else { [0.0, 0.0] };
+                let y = verb.process(x, false);
+                if i > 32 && ((y[0] >= 0.0) != (prev >= 0.0)) {
+                    crossings += 1;
+                }
+                prev = y[0];
+            }
+            crossings
+        };
+        let zcr_small = measure_zcr(0.05);
+        let zcr_large = measure_zcr(0.95);
+        assert!(
+            zcr_small > zcr_large,
+            "smaller room must shift eigenmodes higher: small_zcr={zcr_small} <= large_zcr={zcr_large}"
+        );
+    }
+
+    #[test]
+    fn reverb_width_preserves_wet_rms_and_passivity_under_zero_input_and_steady_drive() {
         for sr in [44_100u32, 48_000, 96_000, 192_000] {
-            // 1. Uncorrelated wet output preserves RMS across width = 0.0 .. 1.0 without -6 dB loss.
-            let measure_rms = |width: f32| -> f64 {
+            let sr_f = f64::from(sr);
+            let burst_frames = (sr_f * 0.004) as usize;
+            let measure_rms = |width: f32| -> (f64, f32) {
                 let mut verb = Reverb::new(sr);
                 verb.set_parameters(ReverbPatch {
                     size: 0.5,
                     decay_seconds: 1.0,
                     damping_hz: 12_000.0,
-                    predelay_ms: 0.0,
+                    diffusion: 0.5,
                     mix: 1.0,
                     width,
                 });
-                let total = (f64::from(sr) * 0.25) as usize;
+                let total = (sr_f * 0.20) as usize;
                 let mut energy = 0.0_f64;
+                let mut max_lr_diff = 0.0_f32;
                 for i in 0..total {
-                    let x = if i == 0 { [1.0, 0.0] } else { [0.0, 0.0] };
+                    let x = if i < burst_frames {
+                        let t = i as f64 / sr_f;
+                        [((-t / 0.0015).exp()) as f32, 0.0]
+                    } else {
+                        [0.0, 0.0]
+                    };
                     let y = verb.process(x, false);
                     energy += f64::from(y[0]).powi(2) + f64::from(y[1]).powi(2);
+                    max_lr_diff = max_lr_diff.max((y[0] - y[1]).abs());
                 }
-                (energy / (2.0 * total as f64)).sqrt()
+                ((energy / (2.0 * total as f64)).sqrt(), max_lr_diff)
             };
-            let rms_wide = measure_rms(1.0);
-            let rms_mono = measure_rms(0.0);
+            let (rms_wide, diff_wide) = measure_rms(1.0);
+            let (rms_mono, diff_mono) = measure_rms(0.0);
             let drift_db = crate::dsp::lin_to_db_f64(rms_mono / rms_wide);
             assert!(
                 drift_db.abs() < 0.75,
                 "sr={sr}: width 1.0->0.0 wet RMS drifted by {drift_db:+.2} dB (wide={rms_wide:.5}, mono={rms_mono:.5})"
             );
+            assert!(diff_wide > 1e-4, "sr={sr}: wide output must be stereo");
+            assert!(
+                diff_mono < 1e-6,
+                "sr={sr}: width=0.0 must collapse cleanly to mono, diff={diff_mono}"
+            );
+        }
 
-            // 2. Bypassed reverb drains its tail naturally to idle, then un-bypasses cleanly.
+        // Zero-input strict passivity & steady-state non-clipping passivity.
+        let sr = 48_000u32;
+        let mut verb = Reverb::new(sr);
+        verb.set_parameters(ReverbPatch {
+            size: 0.5,
+            decay_seconds: 2.65,
+            damping_hz: 3_600.0,
+            diffusion: 0.0,
+            mix: 1.0,
+            width: 1.0,
+        });
+        let mut in_sq = 0.0_f64;
+        let mut out_sq = 0.0_f64;
+        let mut peak = 0.0_f32;
+        for i in 0..24_000 {
+            let t = i as f64 / f64::from(sr);
+            let s = ((TAU * 260.0 * t).sin() * 0.5
+                + (TAU * 440.0 * t).cos() * 0.3
+                + (TAU * 1_230.0 * t).sin() * 0.2) as f32;
+            let y = verb.process([s, s], false);
+            in_sq += 2.0 * f64::from(s).powi(2);
+            out_sq += f64::from(y[0]).powi(2) + f64::from(y[1]).powi(2);
+            peak = peak.max(y[0].abs().max(y[1].abs()));
+        }
+        assert!(peak < 1.0, "wet peak clipped under unit drive: {peak}");
+        assert!(
+            out_sq < in_sq,
+            "steady-state reverb must remain strictly passive: out={out_sq:.4}, in={in_sq:.4}"
+        );
+
+        let mut prev_e = verb.room_energy();
+        assert!(prev_e > ROOM_QUIET_ENERGY);
+        for _ in 0..4_096 {
+            let y = verb.process([0.0, 0.0], false);
+            assert!(y[0].is_finite() && y[1].is_finite());
+            let cur_e = verb.room_energy();
+            assert!(
+                cur_e < prev_e,
+                "zero-input modal energy must strictly decrease: cur={cur_e} >= prev={prev_e}"
+            );
+            prev_e = cur_e;
+        }
+    }
+
+    #[test]
+    fn click_free_live_automation_bypass_drain_and_nan_sanitization() {
+        // 1. Live parameter automation across all room controls stays click-free.
+        let sr = 48_000u32;
+        let mut live = Reverb::new(sr);
+        live.set_parameters(ReverbPatch {
+            size: 0.2,
+            decay_seconds: 1.2,
+            damping_hz: 1_200.0,
+            diffusion: 0.1,
+            mix: 1.0,
+            width: 0.4,
+        });
+        for i in 0..4_800 {
+            let t = i as f64 / f64::from(sr);
+            let s = (TAU * 330.0 * t).sin() as f32 * 0.7;
+            let _ = live.process([s, -s], false);
+        }
+        live.set_parameters(ReverbPatch {
+            size: 0.9,
+            decay_seconds: 6.5,
+            damping_hz: 14_000.0,
+            diffusion: 0.95,
+            mix: 1.0,
+            width: 1.0,
+        });
+        let mut prev = live.process([0.0, 0.0], false);
+        let mut max_step = 0.0_f32;
+        for _ in 0..4_800 {
+            let cur = live.process([0.0, 0.0], false);
+            assert!(cur[0].is_finite() && cur[1].is_finite());
+            max_step = max_step
+                .max((cur[0] - prev[0]).abs())
+                .max((cur[1] - prev[1]).abs());
+            prev = cur;
+        }
+        assert!(
+            max_step < 0.05,
+            "live modal parameter sweep produced click jump {max_step}"
+        );
+
+        // 2. Bypassed reverb drains naturally to idle across sample rates, then un-bypasses cleanly.
+        for sr in [44_100u32, 48_000, 96_000, 192_000] {
             let mut verb = Reverb::new(sr);
             verb.set_parameters(ReverbPatch {
-                size: 0.2,
-                decay_seconds: 0.12,
+                size: 0.25,
+                decay_seconds: 0.2,
                 damping_hz: 8_000.0,
-                predelay_ms: 2.0,
+                diffusion: 0.5,
                 mix: 1.0,
                 width: 1.0,
             });
-            let _ = verb.process([1.0, -1.0], false);
+            let excite = (f64::from(sr) * 0.005) as usize;
+            for _ in 0..excite {
+                let _ = verb.process([0.9, -0.9], false);
+            }
             assert!(!verb.is_idle());
-            let drain_limit = (f64::from(sr) * 1.2) as usize;
+            assert!(!verb.is_quiet(false));
+
+            let drain_limit = (f64::from(sr) * 1.5) as usize;
             for _ in 0..drain_limit {
                 let out = verb.process([0.25, -0.25], true);
                 assert!(out[0].is_finite() && out[1].is_finite());
@@ -812,20 +793,20 @@ mod tests {
                 }
             }
             assert!(
-                verb.is_idle(),
-                "sr={sr}: bypassed reverb must settle to idle after short tail drains"
+                verb.is_idle() && verb.is_quiet(true),
+                "sr={sr}: bypassed reverb must drain to idle & quiet"
             );
             // Once idle, un-bypassing with silence must produce exact zero (zero stale tail).
             for _ in 0..256 {
                 assert_eq!(verb.process([0.0, 0.0], false), [0.0, 0.0]);
             }
 
-            // 3. NaN parameters sanitize cleanly without poisoning FDN state.
+            // 3. NaN parameters sanitize cleanly without poisoning modal state.
             verb.set_parameters(ReverbPatch {
                 size: f32::NAN,
                 decay_seconds: f32::NAN,
                 damping_hz: f32::NAN,
-                predelay_ms: f32::NAN,
+                diffusion: f32::NAN,
                 mix: f32::NAN,
                 width: f32::NAN,
             });
@@ -895,6 +876,72 @@ mod tests {
                 "sr={sr}: damping_hz exceeded Nyquist cap: {}",
                 verb.damping_hz_current()
             );
+        }
+    }
+
+    #[test]
+    fn silent_sleep_advance_matches_silent_processing_bit_for_bit() {
+        let patch_a = ReverbPatch {
+            size: 0.3,
+            decay_seconds: 0.4,
+            damping_hz: 3_000.0,
+            diffusion: 0.25,
+            mix: 0.65,
+            width: 0.8,
+        };
+        let patch_b = ReverbPatch {
+            size: 0.85,
+            decay_seconds: 4.5,
+            damping_hz: 11_000.0,
+            diffusion: 0.9,
+            mix: 0.95,
+            width: 0.3,
+        };
+
+        for sr in [48_000u32, 96_000] {
+            for &bypassed in &[false, true] {
+                let mut awake = Reverb::new(sr);
+                let mut sleeper = Reverb::new(sr);
+                awake.set_parameters(patch_a);
+                sleeper.set_parameters(patch_a);
+                assert!(sleeper.is_quiet(bypassed));
+
+                for &(n, use_b) in &[
+                    (1usize, true),
+                    (7, true),
+                    (13, true),
+                    (32, false),
+                    (64, false),
+                ] {
+                    let p = if use_b { patch_b } else { patch_a };
+                    awake.set_parameters(p);
+                    sleeper.set_parameters(p);
+                    let mut zeros = vec![[0.0_f32; 2]; n];
+                    awake.process_block(&mut zeros, bypassed);
+                    sleeper.advance_silent_frames(n, bypassed);
+                }
+
+                let mut wake_a: Vec<[f32; 2]> = (0..128)
+                    .map(|i| {
+                        let t = i as f64 / f64::from(sr);
+                        [
+                            (TAU * 280.0 * t).sin() as f32 * 0.7,
+                            (TAU * 410.0 * t).cos() as f32 * 0.7,
+                        ]
+                    })
+                    .collect();
+                let mut wake_s = wake_a.clone();
+                awake.process_block(&mut wake_a, false);
+                sleeper.process_block(&mut wake_s, false);
+
+                for (i, (&a, &s)) in wake_a.iter().zip(wake_s.iter()).enumerate() {
+                    assert_eq!(
+                        [a[0].to_bits(), a[1].to_bits()],
+                        [s[0].to_bits(), s[1].to_bits()],
+                        "sr={sr} bypassed={bypassed} frame {i}: awake={a:?} sleeper={s:?}"
+                    );
+                }
+            }
         }
     }
 }

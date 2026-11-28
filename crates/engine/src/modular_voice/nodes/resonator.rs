@@ -1,8 +1,8 @@
 //! Physical 32-mode modal resonator voice node referencing the voice's heap-hosted bank pool.
 
 use super::{
-    resolve_tracked_pitch_hz, write_copy_module_normalized, NodeInputs, ProcessCtx, TrackedPitch,
-    TriggerCtx, TriggerState, VoiceLocks, VoiceModule,
+    resolve_tracked_pitch_hz, write_copy_module_normalized, NodeInputs, ProcessCtx, TailBanks,
+    TrackedPitch, TriggerCtx, TriggerState, VoiceLocks, VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
@@ -283,8 +283,9 @@ impl VoiceModule for ResonatorNode {
     }
 
     #[inline]
-    fn is_tail_quiet(&self, resonator_banks: &[ModalResonator]) -> bool {
-        resonator_banks
+    fn is_tail_quiet(&self, banks: TailBanks<'_>) -> bool {
+        banks
+            .resonator_banks
             .get(usize::from(self.bank_idx))
             .is_none_or(ModalResonator::quiet)
     }

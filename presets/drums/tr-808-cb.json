@@ -63,7 +63,7 @@
             "name": "Mixer Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.08,
               "asymmetry": 0.1,
               "tone_hz": 15000.0,
@@ -80,6 +80,8 @@
               "cutoff_hz": 440.0,
               "resonance": 0.1,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -94,6 +96,8 @@
               "cutoff_hz": 825.0,
               "resonance": 0.62,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -108,6 +112,8 @@
               "cutoff_hz": 2250.0,
               "resonance": 0.38,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0

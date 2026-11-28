@@ -291,7 +291,7 @@ fn poly_air_rack() -> RackPatch {
                     3,
                     "Filter",
                     ModuleKind::Filter(FilterModule {
-                        mode: FilterMode::LowPass,
+                        mode: FilterMode::ImLpf2,
                         cutoff_hz: 2_200.0,
                         resonance: 0.35,
                         ..FilterModule::default()
@@ -449,7 +449,7 @@ pub(crate) fn kitchen_sink_fixture(sample_rate: u32) -> KitchenSinkFixture {
         name: "BassDrive".into(),
         bypassed: false,
         kind: EffectKind::Drive(DrivePatch {
-            mode: DriveMode::Fold,
+            mode: DriveMode::AtomicJet,
             drive: 0.55,
             asymmetry: 0.25,
             tone_hz: 5_200.0,
@@ -507,6 +507,8 @@ pub(crate) fn kitchen_sink_fixture(sample_rate: u32) -> KitchenSinkFixture {
             cutoff_hz: 700.0,
             resonance: 0.55,
             drive: 0.3,
+            kerr_semitones: 0.0,
+            spread: 0.0,
             mix: 0.85,
             env_pattern: 0,
             env_pattern_id: Some(200),
@@ -614,7 +616,7 @@ pub(crate) fn kitchen_sink_fixture(sample_rate: u32) -> KitchenSinkFixture {
             size: 0.5,
             decay_seconds: 0.65,
             damping_hz: 7_200.0,
-            predelay_ms: 10.0,
+            diffusion: 0.5,
             mix: 1.0,
             width: 0.9,
         }),
@@ -1021,7 +1023,7 @@ pub(crate) fn kitchen_sink_hotswap_variant(base: &Project) -> ScoreWindow {
         match dev.id {
             102 => {
                 if let EffectKind::Drive(ref mut d) = dev.kind {
-                    d.mode = DriveMode::HardClip;
+                    d.mode = DriveMode::ShockPort;
                     d.drive = 0.72;
                 }
             }

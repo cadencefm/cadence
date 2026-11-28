@@ -6,7 +6,7 @@
 //!
 //! Converts an `.rbs` song into a clean, validated native Cadence `Project`:
 //! - 3 instruments & 3 lanes on ReBirth 1.x (`TB-303 A`, `TB-303 B`, `TR-808`), or 4 on
-//!   ReBirth 2.0 (adding `TR-909`), built as `RackPatch` Acid TB-303 synths (`AcidLowPass`
+//!   ReBirth 2.0 (adding `TR-909`), built as `RackPatch` Acid TB-303 synths (`DiodeLadder`
 //!   with velocity accent & `panel_pins`) and multi-zone drum `Rack` kits indexed by `drum_midi`
 //! - Deduplicated shared patterns, derived `Part.transpose` for transposed 303 motifs,
 //!   full non-empty bank `lane.parts` launchpads, dense `>6`-voice drum `PatternKind::Stack`

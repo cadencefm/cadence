@@ -182,16 +182,16 @@ pub fn radial_pair_step(xr: f64, xi: f64, vr: f64, vi: f64, bias: f64, eta: f64)
 /// exact unit slope `f'(0) == 1.0` for all `asym` in `(-1, 1)`.
 #[inline]
 pub fn atomic_jet(x: f64, scale: f64, asym: f64) -> f64 {
-    if scale <= 0.0 {
+    if scale <= 0.0 || x == 0.0 {
         return 0.0;
     }
     let a = 0.85 * asym;
     let a2 = a * a;
     let one_plus_a2 = 1.0 + a2;
-    let sqrt_one_plus_a2 = one_plus_a2.sqrt();
+    let sqrt_one_plus_a2 = a.hypot(1.0);
     let inv_na = 1.0 / sqrt_one_plus_a2;
     let u = x / scale + a;
-    let inv_nu = 1.0 / (1.0 + u * u).sqrt();
+    let inv_nu = 1.0 / u.hypot(1.0);
     scale * (u * inv_nu - a * inv_na) * one_plus_a2 * sqrt_one_plus_a2
 }
 

@@ -3,11 +3,12 @@
 //! Models a reverberant acoustic hall with zero delay lines using 96 complex
 //! eigenmodes partitioned into 48 Even + 48 Odd pairs:
 //! - Hybrid acoustic modal density: 18 log-spaced bass modes (38..260 Hz) joined
-//!   to 78 power-law treble modes (260..9600 Hz) with deterministic jitter.
+//!   to 78 power-law treble modes (260..9600 Hz) with deterministic jitter,
+//!   scalable in real time via `size` without reallocating or clearing state.
 //! - Opposing-biased ambient-air input port (`P_atm = 6.0`): strictly linear
 //!   exponential contraction inside `P_atm` (zero port IMD) with smooth outer
 //!   shock guard and physical air-absorption
-//!   `RT60(f) = 2.65 / (1 + (f / 3600)^1.45)` seconds.
+//!   `RT60(f) = decay_seconds / (1 + (f / damping_hz)^1.45)` seconds.
 //! - Gentle per-mode bare-cubic stone loss and passive mean-preserving Even/Odd
 //!   reciprocal diffusion composed in a time-symmetric `O(h^2)` Strang schedule:
 //!   `D(h/2) -> F(h/2) -> I(h) -> F(h/2) -> D(h/2)`, where `F = R o G` combines
@@ -16,6 +17,7 @@
 //!   diffuse decorrelation.
 
 use super::math::{atomic_pair_scalar, sanitize_sample_rate, DEFAULT_SAMPLE_RATE, TAU};
+use crate::dsp::math::sanitize_clamp_f64;
 
 /// Total number of complex acoustic eigenmodes in [`AmbientModalRoom`].
 pub const ROOM_MODES: usize = 96;
@@ -23,7 +25,7 @@ pub const ROOM_MODES: usize = 96;
 /// Number of Even/Odd eigenmode pairs (`ROOM_MODES / 2`).
 pub const ROOM_HALF: usize = ROOM_MODES / 2;
 
-/// Lowest room bass mode frequency in Hz.
+/// Lowest base room bass mode frequency in Hz at canonical `size = 0.5`.
 pub const ROOM_F_MIN: f64 = 38.0;
 
 /// Crossover frequency in Hz between log-spaced bass and power-law treble modes.
@@ -34,6 +36,37 @@ pub const ROOM_F_MAX: f64 = 9600.0;
 
 /// Linear ambient-air headroom threshold for the opposing-biased input port.
 pub const ROOM_PATM: f64 = 6.0;
+
+/// Canonical neutral room size parameter (`freq_scale == 1.0`).
+pub const ROOM_DEFAULT_SIZE: f64 = 0.5;
+
+/// Canonical reference hall low-frequency `RT60` decay time in seconds.
+pub const ROOM_DEFAULT_DECAY_SECONDS: f64 = 2.65;
+
+/// Minimum supported `RT60` decay time in seconds.
+pub const ROOM_MIN_DECAY_SECONDS: f64 = 0.2;
+
+/// Maximum supported `RT60` decay time in seconds.
+pub const ROOM_MAX_DECAY_SECONDS: f64 = 12.0;
+
+/// Canonical air-absorption crossover frequency in Hz.
+pub const ROOM_DEFAULT_DAMPING_HZ: f64 = 3600.0;
+
+/// Minimum supported air-absorption damping frequency in Hz.
+pub const ROOM_MIN_DAMPING_HZ: f64 = 200.0;
+
+/// Canonical neutral Even/Odd pair diffusion parameter (`diff_scale == 1.0`).
+pub const ROOM_DEFAULT_DIFFUSION: f64 = 0.5;
+
+/// Physical air-absorption power-law exponent in `RT60(f) = decay / (1 + (f / damp)^p)`.
+pub const ROOM_AIR_ABSORPTION_EXP: f64 = 1.45;
+
+/// Physical air-absorption `RT60` in seconds at frequency `freq_hz` Hz for low-frequency
+/// `decay_seconds` and air-absorption crossover `damping_hz`.
+#[inline]
+pub fn room_mode_rt60(decay_seconds: f64, damping_hz: f64, freq_hz: f64) -> f64 {
+    decay_seconds / (1.0 + (freq_hz / damping_hz).powf(ROOM_AIR_ABSORPTION_EXP))
+}
 
 /// Fibonacci golden angle `pi * (3 - sqrt(5))` in radians for diffuse stereo projection.
 const GOLDEN_ANGLE: f64 = 2.399_963_229_728_653;
@@ -49,6 +82,7 @@ const QUIET_ENERGY_FLOOR: f64 = 1e-18;
 pub struct AmbientModalRoom {
     sample_rate: f64,
     h: f64,
+    base_freqs: [f64; ROOM_MODES],
     ev_x: [f64; ROOM_HALF],
     ev_y: [f64; ROOM_HALF],
     od_x: [f64; ROOM_HALF],
@@ -84,6 +118,7 @@ impl AmbientModalRoom {
         Self {
             sample_rate: DEFAULT_SAMPLE_RATE,
             h: 1.0 / DEFAULT_SAMPLE_RATE,
+            base_freqs: [0.0; ROOM_MODES],
             ev_x: [0.0; ROOM_HALF],
             ev_y: [0.0; ROOM_HALF],
             od_x: [0.0; ROOM_HALF],
@@ -120,8 +155,7 @@ impl AmbientModalRoom {
         self.h = 1.0 / sr;
 
         let f_max = ROOM_F_MAX.min(0.45 * sr);
-        let mut freqs = [0.0_f64; ROOM_MODES];
-        for (k, slot) in freqs[..BASS_MODES].iter_mut().enumerate() {
+        for (k, slot) in self.base_freqs[..BASS_MODES].iter_mut().enumerate() {
             let kf = k as f64;
             *slot = ROOM_F_MIN
                 * (ROOM_F_SPLIT / ROOM_F_MIN).powf(kf / BASS_MODES as f64)
@@ -131,44 +165,14 @@ impl AmbientModalRoom {
         let split_pow = ROOM_F_SPLIT.powf(1.35);
         let span_pow = f_max.powf(1.35) - split_pow;
         let inv_exp = 1.0 / 1.35;
-        for (k, slot) in freqs[BASS_MODES..].iter_mut().enumerate() {
+        for (k, slot) in self.base_freqs[BASS_MODES..].iter_mut().enumerate() {
             let t = (k as f64 + 0.5) / n_hi as f64;
             *slot = (split_pow + t * span_pow).powf(inv_exp)
                 * (1.0 + 0.006 * ((k + BASS_MODES) as f64 * 19.3 + 0.7).sin());
         }
 
         let out_gain = 0.65 / (ROOM_MODES as f64).sqrt();
-        let ln_1000 = 1000.0_f64.ln();
-        let h_half = 0.5 * self.h;
-
         for j in 0..ROOM_HALF {
-            let f_e = freqs[2 * j];
-            let f_o = freqs[2 * j + 1];
-            let w_e = TAU * f_e;
-            let w_o = TAU * f_o;
-
-            // Half-step rotation, half-step stone drag, and half-step diffusion for symmetric Strang O(h^2).
-            let (sin_e, cos_e) = (w_e * h_half).sin_cos();
-            let (sin_o, cos_o) = (w_o * h_half).sin_cos();
-            self.ev_c[j] = cos_e;
-            self.ev_s[j] = sin_e;
-            self.od_c[j] = cos_o;
-            self.od_s[j] = sin_o;
-
-            let rt_e = 2.65 / (1.0 + (f_e / 3600.0).powf(1.45));
-            let rt_o = 2.65 / (1.0 + (f_o / 3600.0).powf(1.45));
-            let lam_e = ln_1000 / rt_e;
-            let lam_o = ln_1000 / rt_o;
-            self.ev_k[j] = (-lam_e * self.h).exp();
-            self.od_k[j] = (-lam_o * self.h).exp();
-            self.ev_sh[j] = (lam_e * self.h) / (2.0 * ROOM_PATM);
-            self.od_sh[j] = (lam_o * self.h) / (2.0 * ROOM_PATM);
-            self.ev_g[j] = (0.35 + 0.00018 * f_e) * h_half;
-            self.od_g[j] = (0.35 + 0.00018 * f_o) * h_half;
-
-            let d_rate = 4.2 + 12.0 * (j as f64 / ROOM_HALF as f64);
-            self.kd[j] = (-2.0 * d_rate * h_half).exp();
-
             let a_e = (2 * j) as f64 * GOLDEN_ANGLE;
             let a_o = (2 * j + 1) as f64 * GOLDEN_ANGLE;
             let (sin_ae, cos_ae) = a_e.sin_cos();
@@ -194,6 +198,70 @@ impl AmbientModalRoom {
             self.od_oil[j] = out_gain * sin_ol;
             self.od_orr[j] = out_gain * cos_or;
             self.od_oir[j] = out_gain * sin_or;
+        }
+
+        self.configure(
+            ROOM_DEFAULT_SIZE,
+            ROOM_DEFAULT_DECAY_SECONDS,
+            ROOM_DEFAULT_DAMPING_HZ,
+            ROOM_DEFAULT_DIFFUSION,
+        );
+    }
+
+    /// Reconfigure room size (`0..=1`), low-frequency `RT60` decay (`0.2..=12.0 s`),
+    /// air-absorption damping (`200..=0.45*sr Hz`), and Even/Odd pair diffusion
+    /// (`0..=1`) in place with zero allocations and without clearing modal state.
+    pub fn configure(&mut self, size: f64, decay_seconds: f64, damping_hz: f64, diffusion: f64) {
+        let sr = self.sample_rate;
+        let nyq_cap = 0.45 * sr;
+        let size = sanitize_clamp_f64(size, 0.0, 1.0, ROOM_DEFAULT_SIZE);
+        let decay_seconds = sanitize_clamp_f64(
+            decay_seconds,
+            ROOM_MIN_DECAY_SECONDS,
+            ROOM_MAX_DECAY_SECONDS,
+            ROOM_DEFAULT_DECAY_SECONDS,
+        );
+        let damping_hz = sanitize_clamp_f64(
+            damping_hz,
+            ROOM_MIN_DAMPING_HZ,
+            nyq_cap.max(ROOM_MIN_DAMPING_HZ),
+            ROOM_DEFAULT_DAMPING_HZ,
+        );
+        let diffusion = sanitize_clamp_f64(diffusion, 0.0, 1.0, ROOM_DEFAULT_DIFFUSION);
+
+        let freq_scale = 2.0_f64.powf(0.65 * (0.5 - size));
+        let stone_scale = (ROOM_DEFAULT_DECAY_SECONDS / decay_seconds).clamp(0.25, 2.5);
+        let diff_scale = 2.0 * diffusion;
+        let ln_1000 = 1000.0_f64.ln();
+        let h_half = 0.5 * self.h;
+
+        for j in 0..ROOM_HALF {
+            let f_e = (self.base_freqs[2 * j] * freq_scale).min(nyq_cap);
+            let f_o = (self.base_freqs[2 * j + 1] * freq_scale).min(nyq_cap);
+            let w_e = TAU * f_e;
+            let w_o = TAU * f_o;
+
+            // Half-step rotation, half-step stone drag, and half-step diffusion for symmetric Strang O(h^2).
+            let (sin_e, cos_e) = (w_e * h_half).sin_cos();
+            let (sin_o, cos_o) = (w_o * h_half).sin_cos();
+            self.ev_c[j] = cos_e;
+            self.ev_s[j] = sin_e;
+            self.od_c[j] = cos_o;
+            self.od_s[j] = sin_o;
+
+            let rt_e = room_mode_rt60(decay_seconds, damping_hz, f_e);
+            let rt_o = room_mode_rt60(decay_seconds, damping_hz, f_o);
+            let lam_e = ln_1000 / rt_e;
+            let lam_o = ln_1000 / rt_o;
+            self.ev_k[j] = (-lam_e * self.h).exp();
+            self.od_k[j] = (-lam_o * self.h).exp();
+            self.ev_sh[j] = (lam_e * self.h) / (2.0 * ROOM_PATM);
+            self.od_sh[j] = (lam_o * self.h) / (2.0 * ROOM_PATM);
+            self.ev_g[j] = (0.35 + 0.00018 * f_e) * stone_scale * h_half;
+            self.od_g[j] = (0.35 + 0.00018 * f_o) * stone_scale * h_half;
+
+            let d_rate = diff_scale * (4.2 + 12.0 * (j as f64 / ROOM_HALF as f64));
+            self.kd[j] = (-2.0 * d_rate * h_half).exp();
         }
     }
 

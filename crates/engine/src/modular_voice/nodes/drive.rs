@@ -1,25 +1,27 @@
-//! 2x oversampled multi-mode waveshaper voice node with asymmetry, DC blocker, and tone LPF.
+//! Native `1x`-rate cubic multi-mode waveshaper voice node with asymmetry, DC blocker, and tone LPF.
 
 use super::{
-    write_copy_module_normalized, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks,
-    VoiceModule,
+    write_copy_module_normalized, NodeInputs, ProcessCtx, TailBanks, TriggerCtx, TriggerState,
+    VoiceLocks, VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
+use cadence_core::dsp::math::LIN_FLOOR_F64;
 use cadence_core::dsp::{
-    db_to_lin_f64, mix_stereo_f64, sanitize_clamp_f32, sanitize_clamp_f64,
-    shape_drive_oversampled_2x_coeffs, smooth_step_f32, DcBlocker, DriveShaperCoeffs, Halfband2x,
-    Halfband2xDryAlign, LogSmoother, ModalResonator, TptOnePoleLpf, DRIVE_MAX_OUTPUT_DB,
-    DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ,
+    db_to_lin_f64, mix_stereo_f64, sanitize_clamp_f32, sanitize_clamp_f64, sanitize_sample_rate,
+    smooth_step_f32, DcBlocker, DriveShaperCoeffs, LogSmoother, Smoother, TptOnePoleLpf,
+    DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ,
 };
 use cadence_core::mixer::DriveMode;
 use cadence_core::rack::{DriveModule, ModuleKind, ModuleKindTag, ModuleParam};
+
+const MODE_XFADE_MS: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::modular_voice) struct DriveNode {
     current: DriveModule,
     pub target: DriveModule,
-    os: Halfband2x,
-    dry_align: Halfband2xDryAlign,
+    prev_mode: DriveMode,
+    mode_xfade: Smoother,
     tone_lpf: TptOnePoleLpf,
     dc_blocker: DcBlocker,
     tone: LogSmoother,
@@ -28,11 +30,13 @@ pub(in crate::modular_voice) struct DriveNode {
     cached_out_db_bits: u32,
     cached_out_gain: f64,
     cached_tone_key: (u64, u64),
+    cached_sr_bits: u64,
 }
 
 impl DriveNode {
     #[inline]
     pub(super) fn new(params: DriveModule, sample_rate: f64) -> Self {
+        let sr = sanitize_sample_rate(sample_rate);
         let init_drive = sanitize_clamp_f64(f64::from(params.drive), 0.0, 1.0, 0.0);
         let init_asym = sanitize_clamp_f64(f64::from(params.asymmetry), -1.0, 1.0, 0.0);
         let clamped_db = sanitize_clamp_f32(
@@ -50,16 +54,17 @@ impl DriveNode {
         Self {
             current: params,
             target: params,
-            os: Halfband2x::new(),
-            dry_align: Halfband2xDryAlign::new(),
-            tone_lpf: TptOnePoleLpf::new(sample_rate, tone_hz),
-            dc_blocker: DcBlocker::new(sample_rate),
-            cached_tone_key: (tone_hz.to_bits(), sample_rate.to_bits()),
+            prev_mode: params.mode,
+            mode_xfade: Smoother::new(1.0, MODE_XFADE_MS, sr),
+            tone_lpf: TptOnePoleLpf::new(sr, tone_hz),
+            dc_blocker: DcBlocker::new(sr),
+            cached_tone_key: (tone_hz.to_bits(), sr.to_bits()),
             tone,
             cached_shaper_key: (init_drive.to_bits(), init_asym.to_bits(), params.mode),
             cached_shaper: DriveShaperCoeffs::new(init_drive, init_asym, params.mode),
             cached_out_db_bits: clamped_db.to_bits(),
             cached_out_gain: db_to_lin_f64(f64::from(clamped_db)),
+            cached_sr_bits: sr.to_bits(),
         }
     }
 
@@ -130,6 +135,7 @@ impl VoiceModule for DriveNode {
 
     #[inline]
     fn on_trigger(&mut self, ctx: &TriggerCtx, _state: &mut TriggerState<'_>) {
+        let prev_mode = self.current.mode;
         let drv = self.target;
         if ctx.eff_legato {
             self.current.mode = drv.mode;
@@ -137,29 +143,45 @@ impl VoiceModule for DriveNode {
             self.current = drv;
         }
 
+        let sr = sanitize_sample_rate(ctx.sample_rate);
+        let sr_bits = sr.to_bits();
         if ctx.eff_retarget {
-            self.dc_blocker.set_sample_rate(ctx.sample_rate);
+            if sr_bits != self.cached_sr_bits {
+                self.cached_sr_bits = sr_bits;
+                self.mode_xfade = Smoother::new(1.0, MODE_XFADE_MS, sr);
+                self.prev_mode = drv.mode;
+            } else if prev_mode != drv.mode {
+                self.prev_mode = prev_mode;
+                self.mode_xfade.snap(0.0);
+                self.mode_xfade.set_target(1.0);
+            }
+            self.dc_blocker.set_sample_rate(sr);
             self.tone.set_target(f64::from(drv.tone_hz));
             if !ctx.eff_legato {
                 self.tone.snap_to_target();
                 let hz = self.tone.current();
-                self.tone_lpf.set_cutoff(ctx.sample_rate, hz);
-                self.cached_tone_key = (hz.to_bits(), ctx.sample_rate.to_bits());
+                self.tone_lpf.set_cutoff(sr, hz);
+                self.cached_tone_key = (hz.to_bits(), sr_bits);
             }
             return;
         }
 
-        self.os = Halfband2x::new();
-        self.dry_align = Halfband2xDryAlign::new();
+        self.prev_mode = drv.mode;
+        if sr_bits != self.cached_sr_bits {
+            self.cached_sr_bits = sr_bits;
+            self.mode_xfade = Smoother::new(1.0, MODE_XFADE_MS, sr);
+        } else {
+            self.mode_xfade.snap(1.0);
+        }
         self.tone = LogSmoother::new_clamped(
             f64::from(drv.tone_hz),
             f64::from(DRIVE_MIN_TONE_HZ),
             f64::from(DRIVE_MAX_TONE_HZ),
         );
         let hz = self.tone.current();
-        self.tone_lpf = TptOnePoleLpf::new(ctx.sample_rate, hz);
-        self.cached_tone_key = (hz.to_bits(), ctx.sample_rate.to_bits());
-        self.dc_blocker = DcBlocker::new(ctx.sample_rate);
+        self.tone_lpf = TptOnePoleLpf::new(sr, hz);
+        self.cached_tone_key = (hz.to_bits(), sr_bits);
+        self.dc_blocker = DcBlocker::new(sr);
     }
 
     #[inline]
@@ -188,14 +210,27 @@ impl VoiceModule for DriveNode {
         let cv_mono = inputs.cv_mono();
         let eff_drive = sanitize_clamp_f64(f64::from(drv.drive) + cv_mono, 0.0, 1.0, 0.0);
         let asym = sanitize_clamp_f64(f64::from(drv.asymmetry), -1.0, 1.0, 0.0);
-        let shaper_key = (eff_drive.to_bits(), asym.to_bits(), drv.mode);
-        if shaper_key != self.cached_shaper_key {
-            self.cached_shaper_key = shaper_key;
-            self.cached_shaper = DriveShaperCoeffs::new(eff_drive, asym, drv.mode);
-        }
-        let dry_aligned = self.dry_align.process_stereo(inputs.in_audio);
-        let shaped =
-            shape_drive_oversampled_2x_coeffs(&mut self.os, inputs.in_audio, self.cached_shaper);
+        let m_xf = self.mode_xfade.next();
+        let shaped = if eff_drive <= 0.0 || m_xf >= 1.0 - LIN_FLOOR_F64 {
+            self.prev_mode = drv.mode;
+            let shaper_key = (eff_drive.to_bits(), asym.to_bits(), drv.mode);
+            if shaper_key != self.cached_shaper_key {
+                self.cached_shaper_key = shaper_key;
+                self.cached_shaper = DriveShaperCoeffs::new(eff_drive, asym, drv.mode);
+            }
+            [
+                self.cached_shaper.shape(inputs.in_audio[0]),
+                self.cached_shaper.shape(inputs.in_audio[1]),
+            ]
+        } else {
+            let inv = 1.0 - m_xf;
+            let ca = DriveShaperCoeffs::new(eff_drive, asym, self.prev_mode);
+            let cb = DriveShaperCoeffs::new(eff_drive, asym, drv.mode);
+            [
+                ca.shape(inputs.in_audio[0]) * inv + cb.shape(inputs.in_audio[0]) * m_xf,
+                ca.shape(inputs.in_audio[1]) * inv + cb.shape(inputs.in_audio[1]) * m_xf,
+            ]
+        };
         let dc_free = self.dc_blocker.process_stereo(shaped);
         let toned = self.tone_lpf.process_stereo(dc_free);
         let clamped_db =
@@ -207,14 +242,11 @@ impl VoiceModule for DriveNode {
         }
         let out_g = self.cached_out_gain;
         let wet = [toned[0] * out_g, toned[1] * out_g];
-        mix_stereo_f64(dry_aligned, wet, f64::from(drv.mix))
+        mix_stereo_f64(inputs.in_audio, wet, f64::from(drv.mix))
     }
 
     #[inline]
-    fn is_tail_quiet(&self, _resonator_banks: &[ModalResonator]) -> bool {
-        self.os.quiet()
-            && self.dry_align.quiet()
-            && self.tone_lpf.quiet()
-            && self.dc_blocker.quiet()
+    fn is_tail_quiet(&self, _banks: TailBanks<'_>) -> bool {
+        self.tone_lpf.quiet() && self.dc_blocker.quiet()
     }
 }

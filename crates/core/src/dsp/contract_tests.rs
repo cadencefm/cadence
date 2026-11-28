@@ -174,19 +174,20 @@ fn filter_pattern(smooth_attack: bool) -> CompiledFilterPattern {
 
 fn alternate_filter_mode(mode: FilterMode) -> FilterMode {
     match mode {
-        FilterMode::LowPass => FilterMode::AcidLowPass,
+        FilterMode::ImLpf2 => FilterMode::DiodeLadder,
+        FilterMode::ImLpf3 => FilterMode::ImLpf4,
+        FilterMode::ImLpf4 => FilterMode::BandPass,
+        FilterMode::DiodeLadder => FilterMode::ImLpf2,
         FilterMode::BandPass => FilterMode::HighPass,
         FilterMode::HighPass => FilterMode::LowPass6,
-        FilterMode::AcidLowPass => FilterMode::BandPass,
-        FilterMode::LowPass6 => FilterMode::LowPass,
+        FilterMode::LowPass6 => FilterMode::ImLpf3,
     }
 }
 
 fn alternate_drive_mode(mode: DriveMode) -> DriveMode {
     match mode {
-        DriveMode::Tape => DriveMode::Fold,
-        DriveMode::HardClip => DriveMode::Tape,
-        DriveMode::Fold => DriveMode::HardClip,
+        DriveMode::AtomicJet => DriveMode::ShockPort,
+        DriveMode::ShockPort => DriveMode::AtomicJet,
     }
 }
 
@@ -239,7 +240,7 @@ fn all_effect_cases() -> Vec<EffectCase> {
                         size: 0.35,
                         decay_seconds: 0.25,
                         damping_hz: 6_000.0,
-                        predelay_ms: 8.0,
+                        diffusion: 0.35,
                         mix: 0.6,
                         width: 0.85,
                     }),
@@ -247,7 +248,7 @@ fn all_effect_cases() -> Vec<EffectCase> {
                         size: 0.72,
                         decay_seconds: 0.45,
                         damping_hz: 11_000.0,
-                        predelay_ms: 22.0,
+                        diffusion: 0.85,
                         mix: 0.9,
                         width: 0.25,
                     }),
@@ -335,6 +336,8 @@ fn all_effect_cases() -> Vec<EffectCase> {
                                 cutoff_hz: 620.0,
                                 resonance: 0.58,
                                 drive: 0.45,
+                                kerr_semitones: 4.5,
+                                spread: 0.55,
                                 mix: 0.8,
                                 env_pattern: 0,
                                 env_pattern_id: None,
@@ -350,6 +353,8 @@ fn all_effect_cases() -> Vec<EffectCase> {
                                 cutoff_hz: 2_800.0,
                                 resonance: 0.32,
                                 drive: 0.15,
+                                kerr_semitones: -3.5,
+                                spread: 0.25,
                                 mix: 1.0,
                                 env_pattern: 0,
                                 env_pattern_id: None,
@@ -372,6 +377,8 @@ fn all_effect_cases() -> Vec<EffectCase> {
                                 cutoff_hz: 420.0,
                                 resonance: 0.62,
                                 drive: 0.35,
+                                kerr_semitones: -5.0,
+                                spread: 0.7,
                                 mix: 0.9,
                                 env_pattern: 1,
                                 env_pattern_id: None,
@@ -387,6 +394,8 @@ fn all_effect_cases() -> Vec<EffectCase> {
                                 cutoff_hz: 3_200.0,
                                 resonance: 0.4,
                                 drive: 0.6,
+                                kerr_semitones: 6.0,
+                                spread: 0.3,
                                 mix: 0.75,
                                 env_pattern: 2,
                                 env_pattern_id: None,

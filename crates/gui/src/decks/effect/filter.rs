@@ -1,7 +1,7 @@
 //! Rhythmic Filter / PCF frequency response and step-envelope visualizer for the GPU Effect deck.
 use super::{
-    build_curve_pts, draw_card_header, draw_card_panel, draw_freq_ticks_and_grid,
-    draw_meter_bar_row, sample_curve_y, split_side_card,
+    build_curve_pts, draw_bipolar_meter_bar_row, draw_card_header, draw_card_panel,
+    draw_freq_ticks_and_grid, draw_meter_bar_row, sample_curve_y, split_side_card,
 };
 use crate::display::{DisplayList, Rect, TextAlign};
 use crate::theme::{Color, Theme};
@@ -20,6 +20,8 @@ pub(super) fn draw_filter_visual(
         mode_label,
         resonance,
         drive,
+        kerr_semitones,
+        spread,
         mix,
         curve_db,
         mod_curve_db,
@@ -32,10 +34,23 @@ pub(super) fn draw_filter_visual(
     else {
         return;
     };
-    let (freq_high_hz, resonance, drive, mix, mod_curve_db, cutoff_norm, mod_cutoff_norm, env) = (
+    let (
+        freq_high_hz,
+        resonance,
+        drive,
+        kerr_semitones,
+        spread,
+        mix,
+        mod_curve_db,
+        cutoff_norm,
+        mod_cutoff_norm,
+        env,
+    ) = (
         *freq_high_hz,
         *resonance,
         *drive,
+        *kerr_semitones,
+        *spread,
         *mix,
         mod_curve_db.as_deref(),
         *cutoff_norm,
@@ -196,34 +211,76 @@ pub(super) fn draw_filter_visual(
                 theme.accent.routing,
                 theme,
             );
-            let row_h = ((rbody.h - 10.0) / 3.0).clamp(20.0, 34.0);
-            draw_meter_bar_row(
-                dl,
-                Rect::new(rbody.x, rbody.y + 4.0, rbody.w, row_h),
-                "Resonance",
-                &format!("{:.0}%", resonance * 100.0),
-                EffectParam::Resonance.normalize(resonance),
-                theme.accent.warning_key,
-                theme,
-            );
-            draw_meter_bar_row(
-                dl,
-                Rect::new(rbody.x, rbody.y + 4.0 + row_h + 4.0, rbody.w, row_h),
-                "Pre-Drive",
-                &format!("{:.0}%", drive * 100.0),
-                drive,
-                theme.accent.alert,
-                theme,
-            );
-            draw_meter_bar_row(
-                dl,
-                Rect::new(rbody.x, rbody.y + 4.0 + (row_h + 4.0) * 2.0, rbody.w, row_h),
-                "Wet Mix",
-                &format!("{:.0}%", mix * 100.0),
-                mix,
-                theme.accent.focus,
-                theme,
-            );
+            if !rbody.is_empty() {
+                dl.push_clip(rbody);
+                let gap = if rbody.h >= 120.0 { 4.0 } else { 2.0 };
+                let row_h = ((rbody.h - 4.0 - gap * 4.0) / 5.0).clamp(16.0, 28.0);
+                let step = row_h + gap;
+                let y0 = rbody.y + 3.0;
+                let mut draw_row = |idx: usize, f: &dyn Fn(&mut DisplayList, Rect)| {
+                    let y = y0 + step * idx as f32;
+                    if y + row_h <= rbody.bottom() + 1.0 {
+                        f(dl, Rect::new(rbody.x, y, rbody.w, row_h));
+                    }
+                };
+                draw_row(0, &|dl, r| {
+                    draw_meter_bar_row(
+                        dl,
+                        r,
+                        "Resonance",
+                        &format!("{:.0}%", resonance * 100.0),
+                        EffectParam::Resonance.normalize(resonance),
+                        theme.accent.warning_key,
+                        theme,
+                    );
+                });
+                draw_row(1, &|dl, r| {
+                    draw_meter_bar_row(
+                        dl,
+                        r,
+                        "Drive",
+                        &format!("{:.0}%", drive * 100.0),
+                        drive,
+                        theme.accent.alert,
+                        theme,
+                    );
+                });
+                draw_row(2, &|dl, r| {
+                    let kerr_txt = EffectParam::Kerr.format_native(kerr_semitones);
+                    draw_bipolar_meter_bar_row(
+                        dl,
+                        r,
+                        "Kerr",
+                        &kerr_txt,
+                        (kerr_semitones / 12.0).clamp(-1.0, 1.0),
+                        theme.accent.modulation,
+                        theme,
+                    );
+                });
+                draw_row(3, &|dl, r| {
+                    draw_meter_bar_row(
+                        dl,
+                        r,
+                        "Spread",
+                        &format!("{:.0}%", spread * 100.0),
+                        spread,
+                        theme.accent.focus,
+                        theme,
+                    );
+                });
+                draw_row(4, &|dl, r| {
+                    draw_meter_bar_row(
+                        dl,
+                        r,
+                        "Wet Mix",
+                        &format!("{:.0}%", mix * 100.0),
+                        mix,
+                        theme.accent.routing,
+                        theme,
+                    );
+                });
+                dl.pop_clip();
+            }
         }
     }
 }

@@ -169,7 +169,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.08,
               "asymmetry": 0.03,
               "tone_hz": 6500.0,

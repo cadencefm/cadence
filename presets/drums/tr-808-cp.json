@@ -42,6 +42,8 @@
               "cutoff_hz": 935.0,
               "resonance": 0.56,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -56,6 +58,8 @@
               "cutoff_hz": 1900.0,
               "resonance": 0.25,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -118,7 +122,7 @@
             "name": "808 Tape",
             "kind": {
               "type": "drive",
-              "mode": "tape",
+              "mode": "atomic_jet",
               "drive": 0.08,
               "asymmetry": 0.0,
               "tone_hz": 5500.0,

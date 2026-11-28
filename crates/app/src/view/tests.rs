@@ -546,7 +546,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         TriggerMode, VcoModule, Waveform,
     };
 
-    // Build a Rack with VCO A (Saw), VCO B (Saw), Filter (AcidLowPass), Env (Gate), Drive, and LoFi.
+    // Build a Rack with VCO A (Saw), VCO B (Saw), Filter (DiodeLadder), Env (Gate), Drive, and LoFi.
     let mut rack = RackPatch::default_synth();
     let z = &mut rack.zones[0];
     z.modules.clear();
@@ -562,9 +562,11 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         ..Default::default()
     };
     let filt = FilterModule {
-        mode: FilterMode::AcidLowPass,
+        mode: FilterMode::DiodeLadder,
         cutoff_hz: 1_200.0,
         resonance: 0.72,
+        kerr_semitones: 3.5,
+        spread: 0.45,
         mix: 0.85,
         ..FilterModule::default()
     };
@@ -666,9 +668,16 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         other => panic!("expected Vco visual, got {other:?}"),
     }
 
-    // 2. Filter curve matches cadence_core::dsp::filter_mix_magnitude_db with zero drift.
+    // 2. Filter curve matches cadence_core::dsp::filter_mix_magnitude_db with zero drift, and surfaces Kerr/Spread.
     match get_visual(&mut app, 3) {
-        ModuleVisualView::Filter { curve, .. } => {
+        ModuleVisualView::Filter {
+            curve,
+            kerr_semitones,
+            spread,
+            ..
+        } => {
+            assert!((kerr_semitones - 3.5).abs() < 1e-5);
+            assert!((spread - 0.45).abs() < 1e-5);
             let high_hz = 20_000.0_f32;
             for (i, &db) in curve.iter().enumerate() {
                 let x = i as f32 / (curve.len() - 1) as f32;
@@ -985,7 +994,7 @@ fn macro_bindings_project_live_curves_across_rack_effect_mixer_and_loop_wrap() {
         name: "Macro Filter".into(),
         bypassed: false,
         kind: EffectKind::Filter(FilterPatch {
-            mode: FilterMode::LowPass,
+            mode: FilterMode::ImLpf2,
             cutoff_hz: 400.0,
             resonance: 0.1,
             mix: 1.0,
@@ -1614,7 +1623,7 @@ fn delay_and_drive_modes_have_full_app_symmetry_across_controls_commands_macros_
     app.execute_command(&format!("fx {drive_id}")).unwrap();
     let dctrls = app.control_descriptors_for(Detail::Effect(drive_id));
     assert_eq!(dctrls[0].label, "Mode");
-    assert_eq!(dctrls[0].display, "Tape");
+    assert_eq!(dctrls[0].display, "Atomic Jet");
     app.control_cursor = 0;
     assert_eq!(
         app.learn_target_from_focus().map(|(t, _)| t),
@@ -1625,25 +1634,21 @@ fn delay_and_drive_modes_have_full_app_symmetry_across_controls_commands_macros_
             }
         })
     );
-    app.execute_command("param mode hard_clip").unwrap();
+    app.execute_command("param mode shock_port").unwrap();
     assert!(matches!(
         app.effect(drive_id).unwrap().1.kind,
-        EffectKind::Drive(p) if p.mode == DriveMode::HardClip
+        EffectKind::Drive(p) if p.mode == DriveMode::ShockPort
     ));
-    app.execute_command("param drive_mode fold").unwrap();
+    app.execute_command("param drive_mode atomic_jet").unwrap();
     assert!(matches!(
         app.effect(drive_id).unwrap().1.kind,
-        EffectKind::Drive(p) if p.mode == DriveMode::Fold
+        EffectKind::Drive(p) if p.mode == DriveMode::AtomicJet
     ));
 
     // 3. Macro binding with contextual `mode` drives live DriveVisual mode via live_params!
     app.execute_command("macro 1 bind fx ModeDrive mode 0 1")
         .unwrap();
-    for (val, expected) in [
-        ("0", DriveMode::Tape),
-        ("0.5", DriveMode::HardClip),
-        ("1", DriveMode::Fold),
-    ] {
+    for (val, expected) in [("0", DriveMode::AtomicJet), ("1", DriveMode::ShockPort)] {
         app.execute_command(&format!("macro 1 {val}")).unwrap();
         let fv_macro = app.frame_view(&snap, "ok");
         let vis = fv_macro
@@ -2325,4 +2330,168 @@ fn pattern_view_projects_paused_next_step_and_distinguishes_song_usage_states() 
         pattern_view_of(&fx_app, &past_end_snap).playback_status,
         "At song end · drives M1"
     );
+}
+
+#[test]
+fn cubic_filter_kerr_spread_and_reverb_diffusion_have_control_command_and_live_macro_symmetry() {
+    use cadence_core::mixer::{EffectDevice, EffectKind, EffectParam};
+    use cadence_core::rack::{FilterMode, ModuleKind};
+
+    let mut project = Project::demo();
+    let filt_id = project.max_id() + 1;
+    let rev_id = filt_id + 1;
+    project.mixer.master.inserts.clear();
+    let mut flt_dev = EffectDevice::filter(filt_id);
+    flt_dev.name = "CubicFilter".into();
+    let mut rev_dev = EffectDevice::reverb(rev_id);
+    rev_dev.name = "ModalRoom".into();
+    project.mixer.master.inserts.push(flt_dev);
+    project.mixer.master.inserts.push(rev_dev);
+    project.validate().unwrap();
+
+    let (inst_id, zone_id, filter_mod_id) = project
+        .instruments
+        .iter()
+        .find_map(|i| {
+            let z = i.rack.zones.first()?;
+            let fm = z
+                .modules
+                .iter()
+                .find(|m| matches!(m.kind, ModuleKind::Filter(_)))?;
+            Some((i.id, z.id, fm.id))
+        })
+        .expect("demo instrument with Filter module");
+
+    let mut app = App::new_in_memory(project, "cubic-sym.json".into()).unwrap();
+    let snap = AudioSnapshot {
+        sample_rate: 48_000,
+        ..AudioSnapshot::default()
+    };
+
+    // 1. Insert Filter controls, :param, and Macro live projection for Kerr & Spread.
+    app.execute_command(&format!("fx {filt_id}")).unwrap();
+    let fctrls = app.control_descriptors_for(Detail::Effect(filt_id));
+    assert!(fctrls.iter().any(|c| c.label == "Kerr"));
+    assert!(fctrls.iter().any(|c| c.label == "Spread"));
+    app.execute_command("param mode lp24").unwrap();
+    app.execute_command("param kerr +6st").unwrap();
+    app.execute_command("param spread 60%").unwrap();
+    assert!(matches!(
+        app.effect(filt_id).unwrap().1.kind,
+        EffectKind::Filter(p)
+            if p.mode == FilterMode::ImLpf4
+                && (p.kerr_semitones - 6.0).abs() < 1e-4
+                && (p.spread - 0.60).abs() < 1e-4
+    ));
+    app.execute_command("macro 1 bind fx CubicFilter kerr 0 1")
+        .unwrap();
+    app.execute_command("macro 1 bind fx CubicFilter spread 0 1")
+        .unwrap();
+    app.execute_command("macro 1 1").unwrap();
+    let fv_flt = app.frame_view(&snap, "ok");
+    let flt_vis = fv_flt
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Effect(e) => Some(&e.visual),
+            _ => None,
+        })
+        .expect("Filter EffectDeckView");
+    match flt_vis {
+        EffectVisualView::Filter {
+            kerr_semitones,
+            spread,
+            summary,
+            ..
+        } => {
+            assert!((*kerr_semitones - 12.0).abs() < 1e-3);
+            assert!((*spread - 1.0).abs() < 1e-3);
+            assert!(summary.contains("Kerr +12.0st"), "summary={summary}");
+            assert!(summary.contains("Spr 100%"), "summary={summary}");
+        }
+        other => panic!("expected Filter visual, got {other:?}"),
+    }
+
+    // 2. Reverb controls, :param, and Macro live projection for Diffusion (no Predelay).
+    app.execute_command(&format!("fx {rev_id}")).unwrap();
+    let rctrls = app.control_descriptors_for(Detail::Effect(rev_id));
+    assert!(rctrls.iter().any(|c| c.label == "Diffusion"));
+    assert!(!rctrls.iter().any(|c| c.label.contains("Predelay")));
+    app.execute_command("param diffusion 85%").unwrap();
+    assert!(matches!(
+        app.effect(rev_id).unwrap().1.kind,
+        EffectKind::Reverb(p) if (p.diffusion - 0.85).abs() < 1e-4
+    ));
+    app.execute_command("macro 2 bind fx ModalRoom diffusion 0 1")
+        .unwrap();
+    app.execute_command("macro 2 0.25").unwrap();
+    let fv_rev = app.frame_view(&snap, "ok");
+    let rev_vis = fv_rev
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Effect(e) => Some(&e.visual),
+            _ => None,
+        })
+        .expect("Reverb EffectDeckView");
+    match rev_vis {
+        EffectVisualView::Reverb {
+            diffusion, summary, ..
+        } => {
+            assert!((*diffusion - 0.25).abs() < 1e-3);
+            assert!(summary.contains("Diff 25%"), "summary={summary}");
+        }
+        other => panic!("expected Reverb visual, got {other:?}"),
+    }
+
+    // 3. Rack Filter module controls and Macro live projection for Kerr & Spread.
+    app.open_instrument(inst_id).unwrap();
+    app.focus_rack_module_panel(inst_id, filter_mod_id);
+    let mctrls = app.control_descriptors_for(Detail::Instrument(inst_id));
+    assert!(mctrls.iter().any(|c| c.label == "Kerr"));
+    assert!(mctrls.iter().any(|c| c.label == "Spread"));
+    let inst_name = app.instrument(inst_id).unwrap().name.clone();
+    let mod_name = app
+        .instrument(inst_id)
+        .unwrap()
+        .rack
+        .zone(zone_id)
+        .unwrap()
+        .module(filter_mod_id)
+        .unwrap()
+        .name
+        .clone();
+    app.execute_command(&format!(
+        "macro 3 bind module {inst_name}.{mod_name} kerr 0 1"
+    ))
+    .unwrap();
+    app.execute_command(&format!(
+        "macro 3 bind module {inst_name}.{mod_name} spread 0 1"
+    ))
+    .unwrap();
+    app.execute_command("macro 3 0.75").unwrap();
+    let fv_inst = app.frame_view(&snap, "ok");
+    match fv_inst
+        .decks
+        .iter()
+        .find_map(|d| match &d.view {
+            DeckView::Instrument(i) => Some(&i.visual),
+            _ => None,
+        })
+        .expect("InstrumentDeckView")
+    {
+        InstrumentVisualView::Rack(r) => match &r.visual {
+            ModuleVisualView::Filter {
+                kerr_semitones,
+                spread,
+                ..
+            } => {
+                assert!((*kerr_semitones - 6.0).abs() < 1e-2);
+                assert!((*spread - 0.75).abs() < 1e-2);
+            }
+            other => panic!("expected Rack Filter visual, got {other:?}"),
+        },
+        other => panic!("expected Rack visual, got {other:?}"),
+    }
+    let _ = EffectParam::Diffusion;
 }

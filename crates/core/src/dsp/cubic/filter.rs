@@ -16,10 +16,10 @@ use std::f64::consts::{FRAC_1_SQRT_2, PI};
 const Q_BUTTER_2: f64 = FRAC_1_SQRT_2;
 
 /// 4-pole Butterworth Stage 1 quality factor `1 / (2 * cos(3 * pi / 8))`.
-const Q_BUTTER_4A: f64 = 1.306_562_964_876_376_6;
+pub(crate) const Q_BUTTER_4A: f64 = 1.306_562_964_876_376_6;
 
 /// 4-pole Butterworth Stage 2 quality factor `1 / (2 * cos(pi / 8))`.
-const Q_BUTTER_4B: f64 = 0.541_196_100_146_197;
+pub(crate) const Q_BUTTER_4B: f64 = 0.541_196_100_146_197;
 
 /// `sin(pi / 8)`, equal to `w_0 / w_c` for 4-pole Butterworth Stage 2.
 const SIN_PI_8: f64 = 0.382_683_432_365_089_8;
@@ -213,10 +213,27 @@ impl ImLpfCascade {
         self.sample_rate
     }
 
-    /// Select filter pole order without allocating.
+    /// Select filter pole order without allocating, clearing inactive downstream stage state.
     #[inline]
     pub fn set_poles(&mut self, poles: ImLpfPoles) {
-        self.poles = poles;
+        if poles != self.poles {
+            match poles {
+                ImLpfPoles::Two => {
+                    self.stage2.reset();
+                    self.real_stage = 0.0;
+                    self.x1 = 0.0;
+                    self.y1 = 0.0;
+                }
+                ImLpfPoles::Three => {
+                    self.stage2.reset();
+                    self.x1 = 0.0;
+                }
+                ImLpfPoles::Four => {
+                    self.real_stage = 0.0;
+                }
+            }
+            self.poles = poles;
+        }
     }
 
     /// Active filter pole order.
@@ -329,6 +346,12 @@ impl ImLpfCascade {
             + self.x1 * self.x1
             + self.y1 * self.y1
             + self.real_stage * self.real_stage
+    }
+
+    /// Whether all filter stages have decayed below the `-140 dB` silence floor.
+    #[inline]
+    pub fn quiet(&self) -> bool {
+        self.energy() < 1e-14
     }
 }
 
@@ -562,12 +585,13 @@ impl DiodeLadderFilter {
         self.v[3]
     }
 
-    /// Total squared capacitor voltage energy across all four ladder stages.
+    /// Total squared state energy across all four ladder stages and post-sat feedback HPF.
     #[inline]
     pub fn energy(&self) -> f64 {
         self.v[0] * self.v[0]
             + self.v[1] * self.v[1]
             + self.v[2] * self.v[2]
             + self.v[3] * self.v[3]
+            + self.dc * self.dc
     }
 }

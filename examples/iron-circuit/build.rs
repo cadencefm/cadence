@@ -7,12 +7,12 @@
 //! - Unified modular `RackPatch` instruments together: dual drum kits (`TR-808` + `TR-909` with
 //!   per-zone/module P-locks & continuous modulations), standalone sampler (`Electro Stab`
 //!   using `../../examples/demo/samples/brass-pad.wav`), and 3 sculpted modular synth Racks
-//!   (`Acid 303` with native `AcidLowPass` velocity accent, `Fold Bass`, `Gate Pad`).
+//!   (`Acid 303` with native `DiodeLadder` velocity accent, `Fold Bass`, `Gate Pad`).
 //! - Nested `Group -> Group` DAG routing:
 //!   `808 Kit` + `909 Kit` -> `Percussion` Group -> `Rhythm` Group (joined by `Fold Bass`) -> `Master`,
 //!   plus `Acid 303` + `Electro Stab` + `Gate Pad` -> `Synths` Group (sidechain `Duck` off `808 Kick`).
-//! - All 8 native FX & modes: `Drive(HardClip)` on `Acid 303`, `Drive(Fold)` on `Fold Bass`,
-//!   `Drive(Tape)` on `Percussion` & `Master`, rhythmic `Filter` (`FilterEnv` custom pattern) on
+//! - All 8 native FX & modes: `Drive(ShockPort)` on `Acid 303` & `Fold Bass`,
+//!   `Drive(AtomicJet)` on `Percussion` & `Master`, rhythmic `Filter` (`FilterEnv` custom pattern) on
 //!   `Gate Pad`, `Delay(Stereo)` 3/16 (`Dub Tape`) + `Delay(PingPong)` 6/16 (`PingPong`) + `Reverb`
 //!   (`Room`), `Chorus`, `Compressor`, `Eq`, and `Master` `Limiter` (`-0.8 dBFS`).
 //! - All 8 assignable Project Macros (`M1..M8`) populated (with inverted bindings on `M6` & `M8`)
@@ -206,10 +206,12 @@ fn sample_zone(
                 KIT_FILTER_MOD,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz,
                     resonance: 0.0,
                     drive: 0.0,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.0,
                     vel_amount: 0.0,
                     mix: 1.0,
@@ -617,10 +619,12 @@ fn electro_stab_rack() -> RackPatch {
                 2,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 3600.0,
                     resonance: 0.24,
                     drive: 0.0,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.0,
                     vel_amount: 0.0,
                     mix: 1.0,
@@ -665,7 +669,7 @@ fn electro_stab_rack() -> RackPatch {
 }
 
 fn acid_303_rack() -> RackPatch {
-    // Authentic TB-303 Acid Lead: single raw Saw into 4-pole nonlinear AcidLowPass
+    // Authentic TB-303 Acid Lead: single raw Saw into 4-pole nonlinear DiodeLadder
     // with mono legato glide and native velocity > 0.85 accent squelch!
     let zone = RackZone {
         id: 1,
@@ -699,10 +703,12 @@ fn acid_303_rack() -> RackPatch {
                 ACID_FILTER_MOD,
                 "Acid Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::AcidLowPass,
+                    mode: FilterMode::DiodeLadder,
                     cutoff_hz: 420.0,
                     resonance: 0.72,
                     drive: 0.32,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.28,
                     vel_amount: 2.35, // Accents (vel >= 0.94) trigger authentic 303 wow + snappy decay!
                     mix: 1.0,
@@ -760,7 +766,7 @@ fn acid_303_rack() -> RackPatch {
 }
 
 fn fold_bass_rack() -> RackPatch {
-    // Funky West-Coast Triangle+Sine electro bass designed to bloom through Drive(Fold).
+    // Funky Triangle+Sine electro bass designed to bloom through Drive(ShockPort).
     let zone = RackZone {
         id: 1,
         name: "Fold Bass".into(),
@@ -803,10 +809,12 @@ fn fold_bass_rack() -> RackPatch {
                 FOLD_FILTER_MOD,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 680.0,
                     resonance: 0.22,
                     drive: 0.16,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.18,
                     vel_amount: 0.0,
                     mix: 1.0,
@@ -910,10 +918,12 @@ fn gate_pad_rack() -> RackPatch {
                 3,
                 "Filter",
                 ModuleKind::Filter(FilterModule {
-                    mode: FilterMode::LowPass,
+                    mode: FilterMode::ImLpf2,
                     cutoff_hz: 5600.0,
                     resonance: 0.14,
                     drive: 0.08,
+                    kerr_semitones: 0.0,
+                    spread: 0.0,
                     key_tracking: 0.28,
                     vel_amount: 0.0,
                     mix: 1.0,
@@ -1044,7 +1054,7 @@ fn build_iron_circuit() -> Result<Project> {
             fx_perc_tape,
             "Perc Tape",
             EffectKind::Drive(DrivePatch {
-                mode: DriveMode::Tape,
+                mode: DriveMode::AtomicJet,
                 drive: 0.24,
                 asymmetry: 0.0,
                 tone_hz: 14_500.0,
@@ -1154,7 +1164,7 @@ fn build_iron_circuit() -> Result<Project> {
             size: 0.54,
             decay_seconds: 1.45,
             damping_hz: 4800.0,
-            predelay_ms: 14.0,
+            diffusion: 0.45,
             mix: 1.0,
             width: 0.86,
         }),
@@ -1230,7 +1240,7 @@ fn build_iron_circuit() -> Result<Project> {
             fx_fold_drive,
             "West Fold",
             EffectKind::Drive(DrivePatch {
-                mode: DriveMode::Fold,
+                mode: DriveMode::ShockPort,
                 drive: 0.34,
                 asymmetry: 0.0,
                 tone_hz: 2600.0,
@@ -1263,7 +1273,7 @@ fn build_iron_circuit() -> Result<Project> {
             fx_303_drive,
             "303 Diode",
             EffectKind::Drive(DrivePatch {
-                mode: DriveMode::HardClip,
+                mode: DriveMode::ShockPort,
                 drive: 0.38,
                 asymmetry: 0.0,
                 tone_hz: 3900.0,
@@ -1347,10 +1357,12 @@ fn build_iron_circuit() -> Result<Project> {
             fx_pad_filter,
             "Pad Gate",
             EffectKind::Filter(FilterPatch {
-                mode: FilterMode::LowPass,
+                mode: FilterMode::ImLpf2,
                 cutoff_hz: 640.0,
                 resonance: 0.36,
                 drive: 0.16,
+                kerr_semitones: 0.0,
+                spread: 0.0,
                 mix: 1.0,
                 env_pattern: 0,
                 env_pattern_id: Some(pat_pad_gate_groove),
@@ -1395,7 +1407,7 @@ fn build_iron_circuit() -> Result<Project> {
                     fx_master_tape,
                     "Master Tape",
                     EffectKind::Drive(DrivePatch {
-                        mode: DriveMode::Tape,
+                        mode: DriveMode::AtomicJet,
                         drive: 0.14,
                         asymmetry: 0.0,
                         tone_hz: 16_800.0,
@@ -2970,7 +2982,7 @@ fn build_iron_circuit() -> Result<Project> {
             pattern: pat_303_line,
             instrument: inst_303,
             transpose: 0,
-            velocity_scale: 1.0, // Preserves exact >= 0.95 native AcidLowPass accents!
+            velocity_scale: 1.0, // Preserves exact >= 0.95 native DiodeLadder accents!
             parameter_links: Vec::new(),
         },
         Part {

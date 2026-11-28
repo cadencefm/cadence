@@ -67,6 +67,8 @@
               "cutoff_hz": 1600.0,
               "resonance": 0.32,
               "drive": 0.28,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
@@ -118,6 +120,8 @@
               "cutoff_hz": 1600.0,
               "resonance": 0.32,
               "drive": 0.0,
+              "kerr_semitones": 0.0,
+              "spread": 0.0,
               "key_tracking": 0.0,
               "vel_amount": 0.0,
               "mix": 1.0
