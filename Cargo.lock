@@ -476,7 +476,7 @@ checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
 name = "cadence"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cadence-app",
@@ -495,7 +495,7 @@ dependencies = [
 
 [[package]]
 name = "cadence-app"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cadence-core",
@@ -508,7 +508,7 @@ dependencies = [
 
 [[package]]
 name = "cadence-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "hound",
@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "cadence-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cadence-core",
@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "cadence-formats"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cadence-core",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "cadence-gui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
