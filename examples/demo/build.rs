@@ -561,7 +561,9 @@ fn perc_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Triangle,
+                    waveform: Waveform::BareCubic,
+                    reach: 0.35,
+                    shape: 0.0,
                     level: 0.72,
                     ..VcoModule::default()
                 }),
@@ -699,7 +701,7 @@ fn bass_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     fine_cents: -4.0,
                     level: 0.62,
                     ..VcoModule::default()
@@ -709,7 +711,7 @@ fn bass_rack() -> RackPatch {
                 2,
                 "VCO B",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Pulse,
+                    waveform: Waveform::MobiusPwm,
                     fine_cents: 4.0,
                     pulse_width: 0.40,
                     level: 0.32,
@@ -818,7 +820,7 @@ fn supersaw_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     fine_cents: -5.0,
                     level: 0.42,
                     unison_voices: 5,
@@ -831,7 +833,7 @@ fn supersaw_rack() -> RackPatch {
                 2,
                 "VCO B",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     fine_cents: 5.0,
                     level: 0.40,
                     unison_voices: 5,
@@ -947,7 +949,7 @@ fn lead_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     fine_cents: -4.0,
                     level: 0.56,
                     unison_voices: 5,
@@ -960,7 +962,7 @@ fn lead_rack() -> RackPatch {
                 2,
                 "VCO B",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     tune_semitones: 12.0, // Octave shimmer stack!
                     fine_cents: 4.0,
                     pulse_width: 0.38,
@@ -1099,7 +1101,9 @@ fn arp_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Triangle,
+                    waveform: Waveform::BareCubic,
+                    reach: 0.35,
+                    shape: 0.0,
                     level: 0.64,
                     ..VcoModule::default()
                 }),
@@ -1108,7 +1112,7 @@ fn arp_rack() -> RackPatch {
                 2,
                 "VCO B",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     tune_semitones: 12.0,
                     fine_cents: 4.0,
                     level: 1.0,
@@ -1366,7 +1370,7 @@ fn fx_sweep_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     fine_cents: -8.0,
                     level: 0.22,
                     unison_voices: 3,
@@ -1379,7 +1383,7 @@ fn fx_sweep_rack() -> RackPatch {
                 2,
                 "VCO B",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     tune_semitones: 7.0, // Perfect-fifth harmonic lift
                     fine_cents: 8.0,
                     level: 0.15,

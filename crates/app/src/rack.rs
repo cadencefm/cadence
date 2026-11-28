@@ -4,8 +4,9 @@ use super::*;
 use crate::layout::{DeckKind, Target};
 use cadence_core::rack::{
     cable_default_amount, compile_zone_graph, format_cable_amount, parse_cable_amount, InPort,
-    ModuleKindTag, PanelPin, PatchCable, RackModule, RackPatch, RackZone, MAX_CABLES_PER_ZONE,
-    MAX_MODULES_PER_ZONE, MAX_PANEL_PINS, MAX_RESONATORS_PER_ZONE, PATCHBAY_COLUMNS,
+    ModuleKindTag, PanelPin, PatchCable, RackModule, RackPatch, RackZone, MAX_AEROS_PER_ZONE,
+    MAX_CABLES_PER_ZONE, MAX_MODULES_PER_ZONE, MAX_PANEL_PINS, MAX_RESONATORS_PER_ZONE,
+    PATCHBAY_COLUMNS,
 };
 
 cadence_core::define_choice_enum! {
@@ -1112,6 +1113,18 @@ impl App {
             "Zone '{}' already has the maximum {MAX_MODULES_PER_ZONE} modules",
             zone.name
         );
+        if kind == ModuleKindTag::Aero {
+            let aero_count = zone
+                .modules
+                .iter()
+                .filter(|m| m.kind.tag() == ModuleKindTag::Aero)
+                .count();
+            ensure!(
+                aero_count < MAX_AEROS_PER_ZONE,
+                "Zone '{}' already has the maximum {MAX_AEROS_PER_ZONE} Aero modules",
+                zone.name
+            );
+        }
         if kind == ModuleKindTag::Resonator {
             let res_count = zone
                 .modules
@@ -1444,10 +1457,10 @@ impl App {
             "add" => {
                 ensure!(
                     args.len() >= 2,
-                    "Usage: :mod add <vco|sampler|noise|env|lfo|filter|vca|drive|lofi|resonator> [NAME]"
+                    "Usage: :mod add <vco|aero|sampler|noise|env|lfo|filter|vca|drive|lofi|resonator> [NAME]"
                 );
                 let kind = ModuleKindTag::parse(&args[1]).with_context(|| {
-                    "Unknown module kind · use vco, sampler, noise, env, lfo, filter, vca, drive, lofi, or resonator"
+                    "Unknown module kind · use vco, aero, sampler, noise, env, lfo, filter, vca, drive, lofi, or resonator"
                 })?;
                 let name = if args.len() >= 3 {
                     Some(args[2..].join(" "))
@@ -1713,9 +1726,10 @@ mod tests {
     use crate::view::{DeckView, InstrumentVisualView, ModuleVisualView};
     use cadence_core::presets::InstrumentPreset;
     use cadence_core::rack::{
-        module_sample_key, DriveModule, EnvModule, FilterModule, InPort, LfoModule, LoFiModule,
-        ModuleKind, NoiseModule, OutModule, PanelPin, PatchCable, RackModule, RackPatch,
-        RackTemplate, ResonatorModule, SamplerModule, VcaModule, VcoModule,
+        module_sample_key, AeroMode, AeroModule, BodyGeometry, DriveModule, EnvModule,
+        FilterModule, InPort, LfoModule, LoFiModule, ModuleKind, NoiseModule, OutModule, PanelPin,
+        PatchCable, RackModule, RackPatch, RackTemplate, ResonatorModule, SamplerModule, VcaModule,
+        VcoModule,
     };
     use cadence_core::runtime::AudioSnapshot;
     use cadence_core::sampler::SampleLoopMode;
@@ -2254,11 +2268,12 @@ mod tests {
     }
 
     #[test]
-    fn all_twelve_module_visual_views_produce_finite_dsp_curves() {
+    fn all_module_visual_views_produce_finite_dsp_curves() {
         let mut rack = RackPatch::default_synth();
         let z = &mut rack.zones[0];
         z.modules = vec![
             RackModule::new(1, "VCO", ModuleKind::Vco(VcoModule::default())),
+            RackModule::new(12, "Aero", ModuleKind::Aero(AeroModule::default())),
             RackModule::new(2, "Sampler", ModuleKind::Sampler(SamplerModule::default())),
             RackModule::new(3, "Noise", ModuleKind::Noise(NoiseModule::default())),
             RackModule::new(4, "Env", ModuleKind::Env(EnvModule::default())),
@@ -2276,6 +2291,7 @@ mod tests {
         ];
         z.cables = vec![
             PatchCable::new(1, 1, 6, InPort::In, 1.0),
+            PatchCable::new(5, 12, 6, InPort::In, 0.8),
             PatchCable::new(2, 6, 7, InPort::In, 1.0),
             PatchCable::new(3, 1, 7, InPort::Cv, 0.8), // Audio-rate RingMod CV!
             PatchCable::new(4, 7, 11, InPort::In, 1.0),
@@ -2289,8 +2305,8 @@ mod tests {
         let mut app = App::new_in_memory(proj, "all-vis.json".into()).unwrap();
         app.open_instrument(inst_id).unwrap();
 
-        let mut seen = [false; 12];
-        for slot in 0..12 {
+        let mut seen = [false; 13];
+        for slot in 0..13 {
             app.rack_ui.panel_slot = slot;
             let rv = instrument_rack_view(&app);
             match rv.visual {
@@ -2309,24 +2325,43 @@ mod tests {
                     assert!(curve.iter().all(|v| v.is_finite()));
                     seen[1] = true;
                 }
-                ModuleVisualView::Sampler { .. } => {
+                ModuleVisualView::Aero {
+                    mode,
+                    geometry,
+                    mode_bars,
+                    ..
+                } => {
+                    assert_eq!(mode, AeroMode::FlueJet);
+                    assert_eq!(geometry, BodyGeometry::Harmonic);
+                    assert!(
+                        !mode_bars.is_empty()
+                            && mode_bars.iter().all(|(x, a)| {
+                                x.is_finite()
+                                    && a.is_finite()
+                                    && (0.0..=1.0).contains(x)
+                                    && (0.0..=1.0).contains(a)
+                            })
+                    );
                     seen[2] = true;
+                }
+                ModuleVisualView::Sampler { .. } => {
+                    seen[3] = true;
                 }
                 ModuleVisualView::Noise { band_curve, .. } => {
                     assert!(!band_curve.is_empty() && band_curve.iter().all(|v| v.is_finite()));
-                    seen[3] = true;
+                    seen[4] = true;
                 }
                 ModuleVisualView::Env { curve, .. } => {
                     assert!(!curve.is_empty());
-                    seen[4] = true;
+                    seen[5] = true;
                 }
                 ModuleVisualView::Lfo { curve, .. } => {
                     assert!(!curve.is_empty() && curve.iter().all(|v| v.is_finite()));
-                    seen[5] = true;
+                    seen[6] = true;
                 }
                 ModuleVisualView::Filter { curve, .. } => {
                     assert!(!curve.is_empty() && curve.iter().all(|v| v.is_finite()));
-                    seen[6] = true;
+                    seen[7] = true;
                 }
                 ModuleVisualView::Vca {
                     ring_mod,
@@ -2337,19 +2372,19 @@ mod tests {
                     assert!(
                         !transfer_curve.is_empty() && transfer_curve.iter().all(|v| v.is_finite())
                     );
-                    seen[7] = true;
+                    seen[8] = true;
                 }
                 ModuleVisualView::Drive { transfer_curve, .. } => {
                     assert!(
                         !transfer_curve.is_empty() && transfer_curve.iter().all(|v| v.is_finite())
                     );
-                    seen[8] = true;
+                    seen[9] = true;
                 }
                 ModuleVisualView::LoFi { transfer_curve, .. } => {
                     assert!(
                         !transfer_curve.is_empty() && transfer_curve.iter().all(|v| v.is_finite())
                     );
-                    seen[9] = true;
+                    seen[10] = true;
                 }
                 ModuleVisualView::Resonator { modes, .. } => {
                     assert!(
@@ -2358,17 +2393,17 @@ mod tests {
                                 .iter()
                                 .all(|(x, h, d)| x.is_finite() && h.is_finite() && d.is_finite())
                     );
-                    seen[10] = true;
+                    seen[11] = true;
                 }
                 ModuleVisualView::Out { voice_summary, .. } => {
                     assert!(!voice_summary.is_empty());
-                    seen[11] = true;
+                    seen[12] = true;
                 }
             }
         }
         assert!(
             seen.iter().all(|&s| s),
-            "all 12 ModuleVisualView variants must be covered: {seen:?}"
+            "all 13 ModuleVisualView variants must be covered: {seen:?}"
         );
     }
 
@@ -2651,15 +2686,48 @@ mod tests {
             );
         }
 
-        // 2. Add Module picker hotkey `0` selects #10 (`Resonator`) directly!
+        // 2. Add Module picker hotkey `2` selects #2 (`Aero`) and `0` selects #10 (`LoFi`) directly;
+        //    searching `/res` adds `Resonator`, and `MAX_AEROS_PER_ZONE` caps Aero modules cleanly!
+        app.press_keys("a2").unwrap();
+        assert!(
+            app.instrument(mod_id).unwrap().rack.zones[0]
+                .modules
+                .iter()
+                .any(|m| m.kind.tag() == ModuleKindTag::Aero),
+            "Pressing `a` then `2` must add Aero (#2)"
+        );
         app.press_keys("a0").unwrap();
         assert!(
             app.instrument(mod_id).unwrap().rack.zones[0]
                 .modules
                 .iter()
-                .any(|m| m.kind.tag() == ModuleKindTag::Resonator),
-            "Pressing `a` then `0` must add Resonator (#10)"
+                .any(|m| m.kind.tag() == ModuleKindTag::LoFi),
+            "Pressing `a` then `0` must add Lo-Fi (#10)"
         );
+        app.press_keys("a/res<Enter><Enter>").unwrap();
+        assert!(
+            app.instrument(mod_id).unwrap().rack.zones[0]
+                .modules
+                .iter()
+                .any(|m| m.kind.tag() == ModuleKindTag::Resonator),
+            "Filtering Add Module picker for `res` must add Resonator"
+        );
+        // Enforce MAX_AEROS_PER_ZONE via `:mod add aero` (already have 1; adding 3 succeeds, 5th fails).
+        for idx in 2..=MAX_AEROS_PER_ZONE {
+            app.execute_command(&format!("mod add aero Wind{idx}"))
+                .unwrap();
+        }
+        let err = app
+            .execute_command("mod add aero OverflowWind")
+            .expect_err("exceeding MAX_AEROS_PER_ZONE must fail cleanly");
+        assert!(
+            format!("{err:#}").contains("Aero"),
+            "cap error must mention Aero, got: {err:#}"
+        );
+        // Undo extra Aeros so subsequent assertions start clean.
+        for _ in 2..=MAX_AEROS_PER_ZONE {
+            app.apply(Action::Undo).unwrap();
+        }
 
         // 3. `B` targets the currently focused Sampler module on Panel (when 2 Sampler modules exist)!
         app.execute_command("mod add sampler SampA").unwrap();
@@ -2915,5 +2983,210 @@ mod tests {
         // Switching away to Panel disables watch target cleanly.
         app.rack_ui.tab = RackTab::Panel;
         assert_eq!(app.active_patchbay_target(), None);
+    }
+
+    #[test]
+    fn cubic_vco_capacitor_env_and_aero_palette_hints_and_live_mod_project_cleanly() {
+        use cadence_core::macros::{MacroBinding, MacroControl};
+        use cadence_core::rack::{EnvMode, TriggerMode, Waveform};
+
+        let mut app = App::new_in_memory(Project::demo(), "cubic-rack.json".into()).unwrap();
+        let inst_id = app.project().instruments[0].id;
+        app.open_instrument(inst_id).unwrap();
+
+        // 1. Fuzzy Action Palette exposes and executes `Add Rack Module: Aero` into column 0 (SOURCES).
+        app.press_keys(":add rack module aero").unwrap();
+        let pal = app.palette_view().expect("palette open");
+        assert!(
+            pal.items.iter().any(|i| i.label == "Add Rack Module: Aero"),
+            "Palette must expose Add Rack Module: Aero, got: {:?}",
+            pal.items.iter().map(|i| &i.label).collect::<Vec<_>>()
+        );
+        app.press_keys("<Enter>").unwrap();
+        let (zone_id, aero_id, env_id, vco_id) = {
+            let z0 = &app.instrument(inst_id).unwrap().rack.zones[0];
+            let aero_mod = z0
+                .modules
+                .iter()
+                .find(|m| m.kind.tag() == ModuleKindTag::Aero)
+                .expect("Aero added from Fuzzy Action Palette");
+            let aero_id = aero_mod.id;
+            assert_eq!(
+                aero_mod.kind.column(),
+                0,
+                "Aero must live in SOURCES column"
+            );
+            let cols = patchbay_columns(z0);
+            assert!(
+                cols[0].contains(&aero_id),
+                "Patchbay column 0 must include Aero"
+            );
+            let env_id = z0
+                .modules
+                .iter()
+                .find(|m| m.kind.tag() == ModuleKindTag::Env)
+                .expect("Env in default synth")
+                .id;
+            let vco_id = z0
+                .modules
+                .iter()
+                .find(|m| m.kind.tag() == ModuleKindTag::Vco)
+                .expect("Vco in default synth")
+                .id;
+            (z0.id, aero_id, env_id, vco_id)
+        };
+
+        // 2. Patch cables cleanly to all 3 Aero input ports (`pitch_cv`, `trig_in`, `cv`).
+        app.execute_command(&format!("patch m{env_id} m{aero_id}.cv 65%"))
+            .unwrap();
+        app.execute_command(&format!("patch m{env_id} m{aero_id}.pitch_cv +12st"))
+            .unwrap();
+        app.execute_command(&format!("patch m{env_id} m{aero_id}.trig_in 1.0"))
+            .unwrap();
+
+        // 3. `param_units_hint` covers Unit::{BipolarPercent, Pascals, Decimal} and cubic choice enums.
+        let hint = |module: u16, param: ModuleParam| {
+            app.param_units_hint(ParamAddress::Module {
+                instrument: inst_id,
+                zone: zone_id,
+                module,
+                param,
+            })
+        };
+        assert!(hint(vco_id, ModuleParam::Waveform).contains("mobius_jet"));
+        assert!(hint(vco_id, ModuleParam::Chirality).contains("-100%..+100%"));
+        assert!(hint(env_id, ModuleParam::EnvMode).contains("capacitor"));
+        assert!(hint(env_id, ModuleParam::TriggerMode).contains("additive"));
+        assert!(hint(env_id, ModuleParam::CubicLimit).contains("0..10"));
+        assert!(hint(aero_id, ModuleParam::AeroMode).contains("flue_jet"));
+        assert!(hint(aero_id, ModuleParam::Geometry).contains("stopped"));
+        assert!(hint(aero_id, ModuleParam::BeatPressure).contains("200..8000 Pa"));
+        assert!(hint(aero_id, ModuleParam::Absorption).contains("0..0.5"));
+
+        // 4. Live macro modulation updates VCO reach/shape/chirality, Env cubic_limit, and Aero brightness/kerr!
+        let mut p = app.project().clone();
+        p.macros.push(MacroControl {
+            index: 0,
+            name: "Cubic".into(),
+            value: 1.0,
+            bindings: vec![
+                MacroBinding {
+                    target: ParamAddress::Module {
+                        instrument: inst_id,
+                        zone: zone_id,
+                        module: vco_id,
+                        param: ModuleParam::Reach,
+                    },
+                    min: 0.2,
+                    max: 0.95,
+                },
+                MacroBinding {
+                    target: ParamAddress::Module {
+                        instrument: inst_id,
+                        zone: zone_id,
+                        module: vco_id,
+                        param: ModuleParam::Chirality,
+                    },
+                    min: 0.0,
+                    max: 0.75,
+                },
+                MacroBinding {
+                    target: ParamAddress::Module {
+                        instrument: inst_id,
+                        zone: zone_id,
+                        module: env_id,
+                        param: ModuleParam::CubicLimit,
+                    },
+                    min: 0.0,
+                    max: 0.5,
+                },
+                MacroBinding {
+                    target: ParamAddress::Module {
+                        instrument: inst_id,
+                        zone: zone_id,
+                        module: aero_id,
+                        param: ModuleParam::Brightness,
+                    },
+                    min: 0.1,
+                    max: 0.9,
+                },
+                MacroBinding {
+                    target: ParamAddress::Module {
+                        instrument: inst_id,
+                        zone: zone_id,
+                        module: aero_id,
+                        param: ModuleParam::Kerr,
+                    },
+                    min: 0.5,
+                    max: 0.75,
+                },
+            ],
+        });
+        if let Some(inst) = p.instruments.iter_mut().find(|i| i.id == inst_id) {
+            if let Some(ModuleKind::Env(e)) =
+                inst.rack.zones[0].module_mut(env_id).map(|m| &mut m.kind)
+            {
+                e.mode = EnvMode::Capacitor;
+                e.trigger_mode = TriggerMode::Additive;
+            }
+            if let Some(ModuleKind::Vco(v)) =
+                inst.rack.zones[0].module_mut(vco_id).map(|m| &mut m.kind)
+            {
+                v.waveform = Waveform::MobiusPwm;
+            }
+        }
+        let mut live_app = App::new_in_memory(p, "cubic-live.json".into()).unwrap();
+        live_app.open_instrument(inst_id).unwrap();
+
+        live_app.focus_rack_module_panel(inst_id, vco_id);
+        match instrument_rack_view(&live_app).visual {
+            ModuleVisualView::Vco {
+                waveform,
+                reach,
+                chirality,
+                ..
+            } => {
+                assert_eq!(waveform, Waveform::MobiusPwm);
+                assert!(reach > 0.90, "live reach must reflect Macro 1, got {reach}");
+                assert!(
+                    chirality > 0.40,
+                    "live chirality must reflect Macro 1, got {chirality}"
+                );
+            }
+            other => panic!("expected Vco visual, got {other:?}"),
+        }
+
+        live_app.focus_rack_module_panel(inst_id, env_id);
+        match instrument_rack_view(&live_app).visual {
+            ModuleVisualView::Env {
+                mode,
+                trigger_mode,
+                cubic_limit,
+                ..
+            } => {
+                assert_eq!(mode, EnvMode::Capacitor);
+                assert_eq!(trigger_mode, TriggerMode::Additive);
+                assert!(
+                    (cubic_limit - 5.0).abs() < 0.05,
+                    "live cubic_limit must reflect Macro 1 (0.5 -> 5.0), got {cubic_limit}"
+                );
+            }
+            other => panic!("expected Env visual, got {other:?}"),
+        }
+
+        live_app.focus_rack_module_panel(inst_id, aero_id);
+        match instrument_rack_view(&live_app).visual {
+            ModuleVisualView::Aero {
+                brightness,
+                kerr_semitones,
+                mode_bars,
+                ..
+            } => {
+                assert!((brightness - 0.9).abs() < 0.02);
+                assert!((kerr_semitones - 6.0).abs() < 0.1);
+                assert!(!mode_bars.is_empty());
+            }
+            other => panic!("expected Aero visual, got {other:?}"),
+        }
     }
 }

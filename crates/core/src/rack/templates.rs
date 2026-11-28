@@ -26,7 +26,7 @@ impl RackPatch {
     }
 
     /// Bare neutral subtractive synth Rack:
-    /// `VCO 1 (Saw) -> Filter (LP12) -> VCA -> Out`, `Amp Env -> VCA.Cv`, `Filter Env -> Filter.Cv`,
+    /// `VCO 1 (Mobius Jet) -> Filter (LP12) -> VCA -> Out`, `Amp Env -> VCA.Cv`, `Filter Env -> Filter.Cv`,
     /// with curated top-level `panel_pins`.
     pub fn default_synth() -> Self {
         let zone = RackZone {
@@ -66,9 +66,7 @@ impl RackPatch {
                         sustain: 0.7,
                         release_ms: 180.0,
                         trigger_mode: TriggerMode::Gate,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(
@@ -82,9 +80,7 @@ impl RackPatch {
                         sustain: 0.0,
                         release_ms: 150.0,
                         trigger_mode: TriggerMode::Gate,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(6, "Out", ModuleKind::Out(OutModule::default())),
@@ -160,9 +156,7 @@ impl RackPatch {
                         sustain: 0.85,
                         release_ms: 140.0,
                         trigger_mode: TriggerMode::Gate,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(5, "Out", ModuleKind::Out(OutModule::default())),
@@ -270,7 +264,7 @@ impl RackPatch {
                     1,
                     "VCO",
                     ModuleKind::Vco(VcoModule {
-                        waveform: Waveform::Saw,
+                        waveform: Waveform::MobiusJet,
                         level: 0.85,
                         ..VcoModule::default()
                     }),
@@ -300,25 +294,22 @@ impl RackPatch {
                         sustain: 0.45,
                         release_ms: 55.0,
                         trigger_mode: TriggerMode::Gate,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(
                     5,
                     "Filter Env",
                     ModuleKind::Env(EnvModule {
-                        mode: EnvMode::Adsr,
-                        attack_ms: 1.0,
-                        hold_ms: 0.0,
+                        mode: EnvMode::Capacitor,
+                        attack_ms: 2.2,
+                        hold_ms: 4.0,
                         decay_ms: 260.0,
                         sustain: 0.0,
                         release_ms: 60.0,
-                        trigger_mode: TriggerMode::Gate,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        cubic_limit: 0.45,
+                        trigger_mode: TriggerMode::OneShot,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(6, "Out", ModuleKind::Out(OutModule::default())),
@@ -377,7 +368,7 @@ impl RackPatch {
                     1,
                     "VCO A",
                     ModuleKind::Vco(VcoModule {
-                        waveform: Waveform::Pulse,
+                        waveform: Waveform::MobiusPwm,
                         pulse_width: 0.42,
                         level: 0.65,
                         ..VcoModule::default()
@@ -387,7 +378,7 @@ impl RackPatch {
                     2,
                     "VCO B",
                     ModuleKind::Vco(VcoModule {
-                        waveform: Waveform::Saw,
+                        waveform: Waveform::MobiusJet,
                         fine_cents: 5.0,
                         level: 0.30,
                         ..VcoModule::default()
@@ -426,9 +417,7 @@ impl RackPatch {
                         sustain: 0.65,
                         release_ms: 240.0,
                         trigger_mode: TriggerMode::Gate,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(
@@ -442,9 +431,7 @@ impl RackPatch {
                         sustain: 0.0,
                         release_ms: 150.0,
                         trigger_mode: TriggerMode::Gate,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(
@@ -564,9 +551,7 @@ impl RackPatch {
                         sustain: 0.9,
                         release_ms: 120.0,
                         trigger_mode: TriggerMode::Gate,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(6, "Out", ModuleKind::Out(OutModule::default())),
@@ -638,9 +623,7 @@ impl RackPatch {
                         sustain: 0.0,
                         release_ms: 20.0,
                         trigger_mode: TriggerMode::OneShot,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(
@@ -666,9 +649,7 @@ impl RackPatch {
                         sustain: 0.0,
                         release_ms: 45.0,
                         trigger_mode: TriggerMode::OneShot,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(
@@ -693,9 +674,7 @@ impl RackPatch {
                         sustain: 0.0,
                         release_ms: 5.0,
                         trigger_mode: TriggerMode::OneShot,
-                        delay_ms: 0.0,
-                        bursts: 1,
-                        burst_spacing_ms: 10.0,
+                        ..EnvModule::default()
                     }),
                 ),
                 RackModule::new(9, "Out", ModuleKind::Out(OutModule::default())),

@@ -82,7 +82,7 @@ fn matches_preset_category(item: &PresetBrowserItem, category: &str) -> bool {
                 && patch.zones.first().is_some_and(|z| {
                     z.modules
                         .iter()
-                        .any(|m| matches!(m.kind, ModuleKind::Vco(_)))
+                        .any(|m| matches!(m.kind, ModuleKind::Vco(_) | ModuleKind::Aero(_)))
                 }))
         }
         "Sampler" => {
@@ -182,6 +182,10 @@ fn summarize_rack_brief(patch: &RackPatch) -> String {
                 lead = Some(v.waveform.label().to_string());
                 break;
             }
+            ModuleKind::Aero(a) => {
+                lead = Some(format!("{} {}", a.mode.label(), a.geometry.label()));
+                break;
+            }
             _ => {}
         }
     }
@@ -253,6 +257,14 @@ fn describe_rack_details(patch: &RackPatch) -> Vec<String> {
                         v.fine_cents,
                         v.level * 100.0
                     )),
+                    ModuleKind::Aero(a) => lines.push(format!(
+                        "{}: {} · {} · {}m · drv {:.0}%",
+                        m.name,
+                        a.mode.label(),
+                        a.geometry.label(),
+                        a.atoms,
+                        a.drive * 100.0
+                    )),
                     ModuleKind::Filter(f) => lines.push(format!(
                         "{}: {} · {} · res {:.0}%",
                         m.name,
@@ -278,7 +290,10 @@ fn describe_rack_details(patch: &RackPatch) -> Vec<String> {
                 .find(|m| {
                     matches!(
                         m.kind,
-                        ModuleKind::Sampler(_) | ModuleKind::Vco(_) | ModuleKind::Noise(_)
+                        ModuleKind::Sampler(_)
+                            | ModuleKind::Vco(_)
+                            | ModuleKind::Aero(_)
+                            | ModuleKind::Noise(_)
                     )
                 })
                 .map_or("Modular", |m| m.kind.tag().label());
@@ -419,10 +434,12 @@ impl App {
             self.status = format!("{} has no zones to audition", inst.name);
             return Ok(Outcome::default());
         };
-        let has_synth_src = zone
-            .modules
-            .iter()
-            .any(|m| matches!(m.kind, ModuleKind::Vco(_) | ModuleKind::Noise(_)));
+        let has_synth_src = zone.modules.iter().any(|m| {
+            matches!(
+                m.kind,
+                ModuleKind::Vco(_) | ModuleKind::Aero(_) | ModuleKind::Noise(_)
+            )
+        });
         let samplers: Vec<u16> = zone
             .modules
             .iter()

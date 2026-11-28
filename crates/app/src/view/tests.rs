@@ -535,18 +535,22 @@ fn loop_clear_inline_mini_tabbed_help_and_settings_modal() {
 
 #[test]
 fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
+    use cadence_core::dsp::cubic::modal::body_ratio;
     use cadence_core::dsp::{
-        drive_transfer_sample, eval_modular_env_curve, filter_mix_magnitude_db,
-        lofi_transfer_sample, norm_to_log, resonator_mode_descriptors,
+        drive_transfer_sample, eval_modular_env_curve, filter_mix_magnitude_db, ideal_waveform,
+        lfo_shape_sample, lofi_transfer_sample, log_to_norm, norm_to_log, phase_wrap,
+        resonator_mode_descriptors,
     };
     use cadence_core::material::Edit;
     use cadence_core::rack::{
-        DriveModule, EnvModule, FilterMode, FilterModule, InPort, LoFiModule, ModuleKind,
-        PatchCable, PitchTracking, RackModule, RackPatch, ResonatorMode, ResonatorModule,
-        TriggerMode, VcoModule, Waveform,
+        AeroMode, AeroModule, BodyGeometry, DriveModule, EnvMode, EnvModule, FilterMode,
+        FilterModule, InPort, LfoModule, LfoShape, LoFiModule, ModuleKind, PatchCable,
+        PitchTracking, RackModule, RackPatch, ResonatorMode, ResonatorModule, TriggerMode,
+        VcoModule, Waveform,
     };
 
-    // Build a Rack with VCO A (Saw), VCO B (Saw), Filter (DiodeLadder), Env (Gate), Drive, and LoFi.
+    // Build a Rack with VCO A (MobiusJet), VCO B (BareCubic), Aero (BrassReed), Filter (DiodeLadder),
+    // Env (Capacitor + Additive), LFO (Triangle), Drive, LoFi, and Resonator.
     let mut rack = RackPatch::default_synth();
     let z = &mut rack.zones[0];
     z.modules.clear();
@@ -554,12 +558,35 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
     rack.panel_pins.clear();
 
     let vco_a = VcoModule {
-        waveform: Waveform::Saw,
+        waveform: Waveform::MobiusJet,
+        reach: 0.90,
+        shape: 0.45,
+        chirality: -0.35,
+        pulse_width: 0.32,
         ..Default::default()
     };
     let vco_b = VcoModule {
-        waveform: Waveform::Saw,
+        waveform: Waveform::BareCubic,
+        reach: 0.85,
+        shape: 0.60,
         ..Default::default()
+    };
+    let aero = AeroModule {
+        mode: AeroMode::BrassReed,
+        geometry: BodyGeometry::Stopped,
+        atoms: 10,
+        pitch_tracking: PitchTracking::Fixed,
+        fixed_hz: 220.0,
+        drive: 0.72,
+        embouchure: 0.60,
+        p_beat_pa: 2_100.0,
+        brightness: 0.68,
+        absorption: 0.06,
+        radiation: 0.25,
+        kerr_semitones: 2.5,
+        triad_amount: 0.40,
+        spread: 0.45,
+        ..AeroModule::default()
     };
     let filt = FilterModule {
         mode: FilterMode::DiodeLadder,
@@ -571,12 +598,21 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         ..FilterModule::default()
     };
     let env = EnvModule {
-        attack_ms: 8.0,
+        mode: EnvMode::Capacitor,
+        attack_ms: 2.0,
+        hold_ms: 4.0,
         decay_ms: 220.0,
-        sustain: 0.55,
-        release_ms: 320.0,
-        trigger_mode: TriggerMode::Gate,
+        sustain: 0.0,
+        release_ms: 120.0,
+        cubic_limit: 2.5,
+        trigger_mode: TriggerMode::Additive,
+        bursts: 2,
         ..EnvModule::default()
+    };
+    let lfo = LfoModule {
+        shape: LfoShape::Triangle,
+        bipolar: true,
+        ..LfoModule::default()
     };
     let drive = DriveModule {
         drive: 0.65,
@@ -603,8 +639,10 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
     z.modules = vec![
         RackModule::new(1, "VCO A", ModuleKind::Vco(vco_a)),
         RackModule::new(2, "VCO B", ModuleKind::Vco(vco_b)),
+        RackModule::new(9, "Brass Aero", ModuleKind::Aero(aero)),
         RackModule::new(3, "Filter", ModuleKind::Filter(filt)),
-        RackModule::new(4, "Amp Env", ModuleKind::Env(env)),
+        RackModule::new(4, "Cap Env", ModuleKind::Env(env)),
+        RackModule::new(10, "Tri LFO", ModuleKind::Lfo(lfo)),
         RackModule::new(5, "Drive", ModuleKind::Drive(drive)),
         RackModule::new(6, "LoFi", ModuleKind::LoFi(lofi)),
         RackModule::new(8, "Plate Res", ModuleKind::Resonator(res)),
@@ -612,6 +650,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
     ];
     z.cables = vec![
         PatchCable::new(1, 1, 3, InPort::In, 1.0),
+        PatchCable::new(7, 9, 3, InPort::In, 0.8),
         PatchCable::new(2, 3, 5, InPort::In, 1.0),
         PatchCable::new(3, 5, 6, InPort::In, 1.0),
         PatchCable::new(4, 6, 8, InPort::In, 1.0),
@@ -650,22 +689,85 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         }
     };
 
-    // 1. VCO A Saw has NO right-edge wrap spike.
+    // 1. VCO A cubic MobiusJet matches ideal_waveform exactly and surfaces reach/shape/chirality/pw.
     match get_visual(&mut app, 1) {
         ModuleVisualView::Vco {
-            curve, fm_active, ..
+            waveform,
+            reach,
+            shape,
+            chirality,
+            pulse_width,
+            curve,
+            fm_active,
+            ..
         } => {
             assert!(!fm_active);
+            assert_eq!(waveform, Waveform::MobiusJet);
+            assert!((reach - 0.90).abs() < 1e-5);
+            assert!((shape - 0.45).abs() < 1e-5);
+            assert!((chirality - (-0.35)).abs() < 1e-5);
+            assert!((pulse_width - 0.32).abs() < 1e-5);
             assert_eq!(curve.len(), 96);
-            assert!((curve[0] - (-1.0)).abs() < 1e-5);
-            assert!(
-                *curve.last().unwrap() > 0.90,
-                "Saw right edge must NOT wrap back to -1.0, got {}",
-                curve.last().unwrap()
-            );
-            assert!(curve[95] > curve[94]);
+            for (i, &y) in curve.iter().enumerate() {
+                let ph = phase_wrap((i as f64 / 96.0) * 2.0) as f32;
+                let expected = ideal_waveform(
+                    vco_a.waveform,
+                    ph,
+                    vco_a.reach,
+                    vco_a.shape,
+                    vco_a.pulse_width,
+                );
+                assert!((y - expected).abs() < 1e-5, "VCO curve drift at i={i}");
+            }
         }
         other => panic!("expected Vco visual, got {other:?}"),
+    }
+
+    // 1b. Aero BrassReed projects exact Stopped body_ratio positions and normalized modal bars.
+    match get_visual(&mut app, 9) {
+        ModuleVisualView::Aero {
+            mode,
+            geometry,
+            atoms,
+            p_beat_pa,
+            kerr_semitones,
+            triad_amount,
+            mode_bars,
+            ..
+        } => {
+            assert_eq!(mode, AeroMode::BrassReed);
+            assert_eq!(geometry, BodyGeometry::Stopped);
+            assert_eq!(atoms, 10);
+            assert!((p_beat_pa - 2_100.0).abs() < 1e-3);
+            assert!((kerr_semitones - 2.5).abs() < 1e-5);
+            assert!((triad_amount - 0.40).abs() < 1e-5);
+            assert_eq!(mode_bars.len(), 10);
+            for (k, &(x, a)) in mode_bars.iter().enumerate() {
+                let hz =
+                    (220.0 * body_ratio(geometry.to_cubic(), k, 10)).clamp(20.0, 20_000.0) as f32;
+                let expected_x = log_to_norm(hz, 20.0, 20_000.0);
+                assert!((x - expected_x).abs() < 1e-5);
+                assert!((0.0..=1.0).contains(&a));
+            }
+            assert!(
+                mode_bars.iter().any(|&(_, a)| (a - 1.0).abs() < 1e-5),
+                "Aero mode bars must normalize tallest partial to 1.0"
+            );
+        }
+        other => panic!("expected Aero visual, got {other:?}"),
+    }
+
+    // 1c. LFO Triangle matches cadence_core::dsp::lfo_shape_sample exactly.
+    match get_visual(&mut app, 10) {
+        ModuleVisualView::Lfo { curve, .. } => {
+            assert_eq!(curve.len(), 96);
+            for (i, &y) in curve.iter().enumerate() {
+                let ph = phase_wrap((i as f64 / 96.0) * 2.0) as f32;
+                let expected = lfo_shape_sample(LfoShape::Triangle, ph);
+                assert!((y - expected).abs() < 1e-5, "LFO drift at i={i}");
+            }
+        }
+        other => panic!("expected Lfo visual, got {other:?}"),
     }
 
     // 2. Filter curve matches cadence_core::dsp::filter_mix_magnitude_db with zero drift, and surfaces Kerr/Spread.
@@ -700,9 +802,18 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         other => panic!("expected Filter visual, got {other:?}"),
     }
 
-    // 3. Env matches cadence_core::dsp::eval_modular_env_curve exactly.
+    // 3. Env matches cadence_core::dsp::eval_modular_env_curve exactly and surfaces Capacitor/Additive/cubic_limit.
     match get_visual(&mut app, 4) {
-        ModuleVisualView::Env { curve, .. } => {
+        ModuleVisualView::Env {
+            mode,
+            trigger_mode,
+            cubic_limit,
+            curve,
+            ..
+        } => {
+            assert_eq!(mode, EnvMode::Capacitor);
+            assert_eq!(trigger_mode, TriggerMode::Additive);
+            assert!((cubic_limit - 2.5).abs() < 1e-5);
             let expected = eval_modular_env_curve(env.to_dsp_params(), instrument::RACK_ENV_POINTS);
             assert_eq!(curve, expected);
         }
@@ -759,7 +870,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
     }
 
     // 5. Patched FM (`VCO B -> VCO A.FmIn`) distinguishes 48st (16:1) vs 36st (8:1) and -36st vs -24st,
-    //    and VCO phase_deg shifts waveform start (90° Triangle -> 0.0 rising, 180° -> +1.0 peak).
+    //    and VCO phase_deg shifts waveform start (0° Sine -> 0.0 rising, 90° -> +1.0 falling).
     let sample_fm = |semi: f32| {
         let mut r = rack.clone();
         if let ModuleKind::Vco(v) = &mut r.zones[0].modules[0].kind {
@@ -817,14 +928,14 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         .chain(fm_lo_eighth.iter())
         .all(|v| v.is_finite() && (-1.2..=1.2).contains(v)));
 
-    // Phase offset check (Triangle shares sin(2πφ) phase: 0°→0 rising, 90°→+1, 180°→0 falling)
+    // Phase offset check (Sine shares sin(2πφ) phase: 0°→0 rising, 90°→+1 falling)
     let mut r_ph = rack;
     if let ModuleKind::Vco(v) = &mut r_ph.zones[0].modules[0].kind {
-        v.waveform = Waveform::Triangle;
+        v.waveform = Waveform::Sine;
         v.phase_deg = 0.0;
     }
     if let ModuleKind::Vco(v) = &mut r_ph.zones[0].modules[1].kind {
-        v.waveform = Waveform::Triangle;
+        v.waveform = Waveform::Sine;
         v.phase_deg = 90.0;
     }
     let mut p_ph = Project::demo();
@@ -839,7 +950,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         ModuleVisualView::Vco { curve, .. } => {
             assert!(
                 curve[0].abs() < 1e-5 && curve[1] > curve[0],
-                "0° Triangle must start at 0.0 rising: {:?}",
+                "0° Sine must start at 0.0 rising: {:?}",
                 &curve[..4]
             );
         }
@@ -849,7 +960,7 @@ fn rack_module_visual_curves_match_core_dsp_and_phase_bounds() {
         ModuleVisualView::Vco { curve, .. } => {
             assert!(
                 (curve[0] - 1.0).abs() < 1e-5 && curve[1] < curve[0],
-                "90° Triangle must start at +1.0 falling: {:?}",
+                "90° Sine must start at +1.0 falling: {:?}",
                 &curve[..4]
             );
         }

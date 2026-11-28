@@ -1,11 +1,11 @@
-//! GPU visualizers for all `ModuleVisualView` variants (`PinnedOverview`, `Vco`, `Sampler`,
-//! `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`).
+//! GPU visualizers for all `ModuleVisualView` variants (`PinnedOverview`, `Vco`, `Aero`,
+//! `Sampler`, `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`).
 mod plots;
 
 use self::plots::{
-    draw_bipolar_transfer_plot, draw_env_plot, draw_filter_plot, draw_noise_band_plot,
-    draw_out_summary_card, draw_resonator_plot, draw_sampler_plot, draw_vca_transfer_plot,
-    draw_wave_plot, OutSummarySpec, SamplerPlotSpec,
+    draw_aero_bore_plot, draw_bipolar_transfer_plot, draw_env_plot, draw_filter_plot,
+    draw_noise_band_plot, draw_out_summary_card, draw_resonator_plot, draw_sampler_plot,
+    draw_vca_transfer_plot, draw_wave_plot, OutSummarySpec, SamplerPlotSpec,
 };
 use super::{
     draw_badge_header, draw_card_panel, draw_live_scope_card, draw_simple_card_header,
@@ -16,7 +16,7 @@ use crate::theme::{Color, Theme};
 use cadence_app::view::ModuleVisualView;
 use cadence_core::mixer::DriveMode;
 use cadence_core::params::{format_hz, format_pan};
-use cadence_core::rack::ModuleKindTag;
+use cadence_core::rack::{AeroMode, BodyGeometry, EnvMode, ModuleKindTag, TriggerMode, Waveform};
 use cadence_core::sampler::SampleLoopMode;
 
 pub(super) fn draw_module_visual(
@@ -31,6 +31,7 @@ pub(super) fn draw_module_visual(
     match visual {
         ModuleVisualView::PinnedOverview { .. } => draw_pinned_overview(dl, area, visual, theme),
         ModuleVisualView::Vco { .. } => draw_vco_visual(dl, area, visual, theme),
+        ModuleVisualView::Aero { .. } => draw_aero_visual(dl, area, visual, theme),
         ModuleVisualView::Sampler { .. } => draw_sampler_visual(dl, area, visual, theme),
         ModuleVisualView::Noise { .. } => draw_noise_visual(dl, area, visual, theme),
         ModuleVisualView::Env { .. } => draw_env_visual(dl, area, visual, theme),
@@ -42,6 +43,18 @@ pub(super) fn draw_module_visual(
         ModuleVisualView::Resonator { .. } => draw_resonator_visual(dl, area, visual, theme),
         ModuleVisualView::Out { .. } => draw_out_visual(dl, area, visual, theme),
     }
+}
+
+/// Compute symmetric vertical headroom bounds for any cubic/Hardy VCO curve.
+fn wave_plot_bounds(curve: &[f32]) -> [f32; 2] {
+    let peak = curve
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .map(f32::abs)
+        .fold(1.0_f32, f32::max);
+    let y_lim = (peak * 1.15).max(1.2);
+    [-y_lim, y_lim]
 }
 
 /// Shared primary card + optional right-hand live dry scope layout used by module visualizers.
@@ -125,7 +138,7 @@ fn draw_pinned_overview(
                     dl,
                     plot,
                     osc_curve,
-                    [-1.2, 1.2],
+                    wave_plot_bounds(osc_curve),
                     theme.accent.routing,
                     true,
                     theme,
@@ -181,8 +194,13 @@ fn draw_pinned_overview(
 
 fn draw_vco_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, theme: &Theme) {
     let ModuleVisualView::Vco {
-        label,
+        name,
+        waveform,
         waveform_label,
+        reach,
+        shape,
+        chirality,
+        pulse_width,
         curve,
         fm_active,
         unison_voices,
@@ -202,8 +220,32 @@ fn draw_vco_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, 
         } else {
             theme.accent.routing
         };
+        let rch_text = format!("RCH {:.0}%", reach * 100.0);
+        let shp_text = format!("SHP {:.0}%", shape * 100.0);
+        let pwm_text = format!("PWM {:.0}%", pulse_width * 100.0);
+        let chi_text = format!("CHI {:+.0}%", chirality * 100.0);
         let uni_text = format!("UNI {unison_voices}x");
         let mut badges: Vec<(&str, Color)> = vec![(waveform_label, wave_col)];
+        if *waveform != Waveform::Sine && *reach > 0.005 {
+            badges.push((&rch_text, theme.accent.focus));
+        }
+        if matches!(
+            waveform,
+            Waveform::MobiusJet
+                | Waveform::MobiusPwm
+                | Waveform::BareCubic
+                | Waveform::Dipole
+                | Waveform::Poisson
+        ) && *shape > 0.005
+        {
+            badges.push((&shp_text, theme.accent.routing));
+        }
+        if *waveform == Waveform::MobiusPwm {
+            badges.push((&pwm_text, theme.accent.warning_key));
+        }
+        if chirality.abs() >= 0.005 {
+            badges.push((&chi_text, theme.accent.modulation));
+        }
         if *fm_active {
             badges.push(("FM", theme.accent.modulation));
         }
@@ -213,8 +255,86 @@ fn draw_vco_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, 
         if !*active {
             badges.push(("MUTED", theme.text.muted));
         }
-        draw_badge_header(dl, hdr, &badges, label, None, wave_col, theme);
-        draw_wave_plot(dl, plot, curve, [-1.2, 1.2], wave_col, *active, theme);
+        draw_badge_header(dl, hdr, &badges, name, None, wave_col, theme);
+        draw_wave_plot(
+            dl,
+            plot,
+            curve,
+            wave_plot_bounds(curve),
+            wave_col,
+            *active,
+            theme,
+        );
+    });
+}
+
+fn draw_aero_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, theme: &Theme) {
+    let ModuleVisualView::Aero {
+        name,
+        mode,
+        geometry,
+        atoms,
+        base_hz,
+        drive,
+        p_beat_pa,
+        brightness,
+        absorption,
+        kerr_semitones,
+        triad_amount,
+        mode_bars,
+        live_waveform,
+        ..
+    } = visual
+    else {
+        return;
+    };
+
+    draw_module_card_with_scope(dl, area, live_waveform, theme, |dl, hdr, plot| {
+        let base_accent = module_tag_accent(ModuleKindTag::Aero, theme);
+        let (mode_badge, mode_accent) = match *mode {
+            AeroMode::FlueJet => ("FLUE JET", base_accent),
+            AeroMode::BrassReed => ("BRASS REED", theme.accent.warning_key),
+        };
+        let geom_badge = match *geometry {
+            BodyGeometry::Harmonic => "HARMONIC",
+            BodyGeometry::Stopped => "STOPPED",
+            BodyGeometry::Membrane => "MEMBRANE",
+            BodyGeometry::Bar => "BAR",
+            BodyGeometry::Plate => "PLATE",
+            BodyGeometry::Cluster => "CLUSTER",
+        };
+        let beat_txt = format!("BEAT {p_beat_pa:.0}Pa");
+        let kerr_txt = format!("KERR {kerr_semitones:+.1}st");
+        let triad_txt = format!("TRIAD {:.0}%", triad_amount * 100.0);
+        let mut badges: Vec<(&str, Color)> = vec![
+            ("AERO", base_accent),
+            (mode_badge, mode_accent),
+            (geom_badge, theme.accent.focus),
+        ];
+        if *mode == AeroMode::BrassReed {
+            badges.push((beat_txt.as_str(), theme.accent.edit));
+        }
+        if kerr_semitones.abs() >= 0.05 {
+            badges.push((kerr_txt.as_str(), theme.accent.modulation));
+        }
+        if *triad_amount >= 0.005 {
+            badges.push((triad_txt.as_str(), theme.accent.playhead));
+        }
+        let right = format!(
+            "{} · {atoms}m · drv {:.0}%",
+            format_hz(*base_hz),
+            drive * 100.0
+        );
+        draw_badge_header(dl, hdr, &badges, name, Some(&right), mode_accent, theme);
+        draw_aero_bore_plot(
+            dl,
+            plot,
+            mode_bars,
+            *brightness,
+            *absorption,
+            mode_accent,
+            theme,
+        );
     });
 }
 
@@ -321,7 +441,10 @@ fn draw_noise_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView
 fn draw_env_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, theme: &Theme) {
     let ModuleVisualView::Env {
         label,
+        mode,
         mode_label,
+        trigger_mode,
+        cubic_limit,
         curve,
         bursts,
         live_waveform,
@@ -333,8 +456,19 @@ fn draw_env_visual(dl: &mut DisplayList, area: Rect, visual: &ModuleVisualView, 
 
     draw_module_card_with_scope(dl, area, live_waveform, theme, |dl, hdr, plot| {
         let accent = theme.accent.playhead;
+        let lim_txt = format!("LIM {cubic_limit:.1}");
         let burst_txt = format!("{bursts}x BURST");
-        let mut badges: Vec<(&str, Color)> = vec![("ENV", accent), (*mode_label, accent)];
+        let (mode_pill, mode_col) = match *mode {
+            EnvMode::Capacitor => ("CAPACITOR", theme.accent.focus),
+            _ => (*mode_label, accent),
+        };
+        let mut badges: Vec<(&str, Color)> = vec![("ENV", accent), (mode_pill, mode_col)];
+        if *trigger_mode == TriggerMode::Additive {
+            badges.push(("ADDITIVE", theme.accent.modulation));
+        }
+        if *cubic_limit >= 0.01 {
+            badges.push((&lim_txt, theme.accent.warning_key));
+        }
         if *bursts > 1 {
             badges.push((&burst_txt, theme.accent.warning_key));
         }

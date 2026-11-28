@@ -1,6 +1,7 @@
 //! Self-contained per-module voice nodes, uniform [`VoiceModule`] lifecycle trait,
 //! and exhaustive zero-cost static dispatch (`dispatch_module_node!`).
 
+mod aero;
 mod drive;
 mod env;
 mod filter;
@@ -13,6 +14,7 @@ mod sampler;
 mod vca;
 mod vco;
 
+pub(super) use aero::AeroNode;
 pub(super) use drive::DriveNode;
 pub(super) use env::EnvNode;
 pub(super) use filter::FilterNode;
@@ -26,6 +28,7 @@ pub(super) use vca::VcaNode;
 pub(super) use vco::VcoNode;
 
 use super::{ModuleParams, VoiceLockKey};
+use cadence_core::dsp::cubic::{BrassReed, BrassReedConfig, FlueJet, FlueJetConfig};
 use cadence_core::dsp::{
     midi_to_hz, sanitize_clamp_f64, sanitize_sample_rate, semitones_to_ratio_f64, stereo_mid_f64,
     ModalResonator, MultiModeFilter,
@@ -34,6 +37,51 @@ use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking};
 use cadence_core::runtime::SampleBank;
 use cadence_core::sampler::SampleData;
 use std::sync::Arc;
+
+/// Heap-hosted physical wind-source bank pairing [`FlueJet`] and [`BrassReed`] with their
+/// configured sample rate for zero-allocation real-time triggering and mode switching.
+#[derive(Debug)]
+pub(super) struct AeroBankSlot {
+    pub flue: Box<FlueJet>,
+    pub reed: Box<BrassReed>,
+    sr_bits: u64,
+}
+
+impl AeroBankSlot {
+    pub(super) fn new(sample_rate: f64) -> Self {
+        let sr = sanitize_sample_rate(sample_rate);
+        Self {
+            flue: FlueJet::new_boxed(sr, FlueJetConfig::default()),
+            reed: BrassReed::new_boxed(sr, BrassReedConfig::default()),
+            sr_bits: sr.to_bits(),
+        }
+    }
+
+    /// Ensure both wind engines match `sample_rate`, reconstructing only on rate change.
+    /// Returns `true` when reconstructed (leaving all state zeroed).
+    #[inline]
+    pub(super) fn sync_sample_rate(&mut self, sample_rate: f64) -> bool {
+        let sr = sanitize_sample_rate(sample_rate);
+        let bits = sr.to_bits();
+        if bits != self.sr_bits {
+            self.flue = FlueJet::new_boxed(sr, FlueJetConfig::default());
+            self.reed = BrassReed::new_boxed(sr, BrassReedConfig::default());
+            self.sr_bits = bits;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Reset both wind engines for a fresh trigger at `sample_rate`.
+    #[inline]
+    pub(super) fn reset_for_rate(&mut self, sample_rate: f64) {
+        if !self.sync_sample_rate(sample_rate) {
+            self.flue.reset();
+            self.reed.reset();
+        }
+    }
+}
 
 /// Heap-hosted stereo [`MultiModeFilter`] slot pairing DSP state with its configured sample rate.
 #[derive(Clone, Copy, Debug)]
@@ -81,6 +129,7 @@ impl FilterBankSlot {
 pub(super) struct TailBanks<'a> {
     pub resonator_banks: &'a [ModalResonator],
     pub filter_banks: &'a [FilterBankSlot],
+    pub aero_banks: &'a [AeroBankSlot],
 }
 
 /// Rising/falling gate trigger threshold for `InPort::TrigIn` edge detection.
@@ -181,7 +230,6 @@ pub(super) struct TriggerCtx {
     pub phase_reset: bool,
     pub eff_retarget: bool,
     pub eff_legato: bool,
-    pub has_fm_in: bool,
     pub has_trig_in: bool,
     pub has_cv: bool,
     pub acid_vel_amount: Option<f32>,
@@ -192,6 +240,8 @@ pub(super) struct TriggerState<'a> {
     pub resonator_banks: &'a mut [ModalResonator],
     pub next_res_bank: usize,
     pub filter_banks: &'a mut [FilterBankSlot],
+    pub aero_banks: &'a mut [AeroBankSlot],
+    pub next_aero_bank: usize,
 }
 
 /// Summed stereo audio and CV inputs gathered from a module's incoming patch cables.
@@ -229,6 +279,7 @@ pub(super) struct ProcessCtx<'a> {
     pub preview: Option<&'a Arc<SampleData>>,
     pub resonator_banks: &'a mut [ModalResonator],
     pub filter_banks: &'a mut [FilterBankSlot],
+    pub aero_banks: &'a mut [AeroBankSlot],
 }
 
 /// Delegate normalized parameter writes on a `Copy` module struct straight to
@@ -254,7 +305,7 @@ pub(super) fn write_copy_module_normalized<T: Copy>(
     }
 }
 
-/// Uniform zero-cost lifecycle contract implemented by all 11 modular voice nodes.
+/// Uniform zero-cost lifecycle contract implemented by all 12 modular voice nodes.
 pub(super) trait VoiceModule {
     fn tag(&self) -> ModuleKindTag;
     fn target_params(&self) -> ModuleParams;
@@ -297,6 +348,7 @@ pub(super) trait VoiceModule {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum ModuleNode {
     Vco(VcoNode),
+    Aero(AeroNode),
     Sampler(SamplerNode),
     Noise(NoiseNode),
     Env(EnvNode),
@@ -315,11 +367,12 @@ impl Default for ModuleNode {
     }
 }
 
-/// Exhaustive zero-cost static dispatch across all 11 [`ModuleNode`] variants.
+/// Exhaustive zero-cost static dispatch across all 12 [`ModuleNode`] variants.
 macro_rules! dispatch_module_node {
     ($node:expr, |$inner:ident| $body:expr) => {
         match $node {
             ModuleNode::Vco($inner) => $body,
+            ModuleNode::Aero($inner) => $body,
             ModuleNode::Sampler($inner) => $body,
             ModuleNode::Noise($inner) => $body,
             ModuleNode::Env($inner) => $body,
@@ -339,6 +392,7 @@ impl ModuleNode {
     pub(super) fn from_kind(kind: &ModuleKind, sample_rate: f64) -> Self {
         match kind {
             ModuleKind::Vco(m) => Self::Vco(VcoNode::new(*m)),
+            ModuleKind::Aero(m) => Self::Aero(AeroNode::new(*m, sample_rate)),
             ModuleKind::Sampler(m) => Self::Sampler(SamplerNode::new(m.params(), sample_rate)),
             ModuleKind::Noise(m) => Self::Noise(NoiseNode::new(*m, sample_rate)),
             ModuleKind::Env(m) => Self::Env(EnvNode::new(*m, sample_rate)),
@@ -358,6 +412,7 @@ impl ModuleNode {
     pub(super) fn stage_from_kind(&mut self, kind: &ModuleKind, sample_rate: f64) {
         match (self, kind) {
             (Self::Vco(n), ModuleKind::Vco(m)) => n.target = *m,
+            (Self::Aero(n), ModuleKind::Aero(m)) => n.target = *m,
             (Self::Sampler(n), ModuleKind::Sampler(m)) => n.target = m.params(),
             (Self::Noise(n), ModuleKind::Noise(m)) => n.target = *m,
             (Self::Env(n), ModuleKind::Env(m)) => n.target = *m,

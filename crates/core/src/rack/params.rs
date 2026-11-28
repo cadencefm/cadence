@@ -16,8 +16,8 @@ use crate::params::{
 };
 use crate::rack::modules::{ModuleKindTag, OUT_MAX_GAIN_DB, OUT_MIN_GAIN_DB};
 use crate::rack::types::{
-    FilterMode, LfoShape, NoiseColor, PitchTracking, RackPatch, RackZone, ResonatorMode,
-    TriggerMode, Unit, UpdatePolicy, VoiceMode, VoiceSettings, Waveform,
+    AeroMode, BodyGeometry, FilterMode, LfoShape, NoiseColor, PitchTracking, RackPatch, RackZone,
+    ResonatorMode, TriggerMode, Unit, UpdatePolicy, VoiceMode, VoiceSettings, Waveform,
 };
 use crate::sampler::SampleLoopMode;
 use anyhow::{anyhow, ensure, Context, Result};
@@ -439,6 +439,8 @@ macro_rules! define_choice_kinds {
 
 define_choice_kinds!(
     Waveform,
+    AeroMode,
+    BodyGeometry,
     PitchTracking,
     SampleLoopMode,
     NoiseColor,
@@ -528,7 +530,7 @@ macro_rules! define_module_params {
             $variant:ident => ($name:literal, $label:literal, $policy:ident, $domain:tt, $unit:ident)
         ),+ $(,)?
     ) => {
-        /// Self-describing parameter identifier across all 11 Eurorack [`crate::rack::ModuleKind`]s.
+        /// Self-describing parameter identifier across all 12 Eurorack [`crate::rack::ModuleKind`]s.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
         #[serde(rename_all = "snake_case")]
         #[repr(u8)]
@@ -562,8 +564,11 @@ macro_rules! define_module_params {
 }
 
 define_module_params! {
-    // VCO (0..11)
+    // VCO
     Waveform       => ("waveform",         "Wave",          OnTrigger,  (Choice Waveform),                                   Plain),
+    Reach          => ("reach",            "Reach",         Continuous, (Linear 0.0, 0.995),                                 Percent),
+    Shape          => ("shape",            "Shape",         Continuous, (Linear 0.0, 1.0),                                   Percent),
+    Chirality      => ("chirality",        "Chirality",     Continuous, (Linear -1.0, 1.0),                                  BipolarPercent),
     Tune           => ("tune",             "Tune",          Continuous, (Linear -48.0, 48.0),                                Semitones),
     Fine           => ("fine",             "Fine",          Continuous, (Linear -100.0, 100.0),                              Cents),
     PulseWidth     => ("pulse_width",      "Pulse Width",   Continuous, (Linear 0.05, 0.95),                                 Percent),
@@ -574,7 +579,7 @@ define_module_params! {
     UnisonVoices   => ("unison_voices",    "Unison",        OnTrigger,  (Int 1, 7),                                          Plain),
     UnisonDetune   => ("unison_detune",    "Detune",        Continuous, (Linear 0.0, 50.0),                                  Cents),
     UnisonWidth    => ("unison_width",     "Width",         Continuous, (Linear 0.0, 1.0),                                   Percent),
-    // Sampler (11..20)
+    // Sampler
     RootMidi       => ("root_midi",        "Root",          OnTrigger,  (Int 0, 127),                                        Note),
     CoarseTune     => ("coarse_tune",      "Coarse",        Continuous, (Int -48, 48),                                       Semitones),
     SampleStart    => ("sample_start",     "Start",         OnTrigger,  Frame,                                               Plain),
@@ -584,29 +589,30 @@ define_module_params! {
     LoopEnd        => ("loop_end",         "Loop End",      OnTrigger,  Frame,                                               Plain),
     LoopXfade      => ("loop_xfade",       "Loop XFade",    Structural, (Linear 0.0, 100.0),                                 Ms),
     OneShot        => ("one_shot",         "One-Shot",      Structural, Boolean,                                             Plain),
-    // Noise (20..23)
+    // Noise
     NoiseColor     => ("noise_color",      "Color",         OnTrigger,  (Choice NoiseColor),                                 Plain),
     HighpassHz     => ("highpass_hz",      "Highpass",      Continuous, (Log 20.0, 18_000.0),                                Hz),
     LowpassHz      => ("lowpass_hz",       "Lowpass",       Continuous, (Log 20.0, 20_000.0),                                Hz),
-    // Env (23..33)
+    // Env
     EnvMode        => ("env_mode",         "Env Mode",      OnTrigger,  (Choice EnvMode),                                    Plain),
     Attack         => ("attack",           "Attack",        OnTrigger,  (Log 0.1, 10_000.0),                                 Ms),
     Hold           => ("hold",             "Hold",          OnTrigger,  (Linear 0.0, 500.0),                                 Ms),
     Decay          => ("decay",            "Decay",         OnTrigger,  (Log 1.0, 20_000.0),                                 Ms),
     Sustain        => ("sustain",          "Sustain",       Continuous, (Linear 0.0, 1.0),                                   Percent),
     Release        => ("release",          "Release",       OnTrigger,  (Log 1.0, 20_000.0),                                 Ms),
+    CubicLimit     => ("cubic_limit",      "Limit",         Continuous, (Linear 0.0, 10.0),                                  Decimal),
     TriggerMode    => ("trigger_mode",     "Trigger",       OnTrigger,  (Choice TriggerMode),                                Plain),
     DelayMs        => ("delay_ms",         "Pre-Delay",     OnTrigger,  (Linear 0.0, 500.0),                                 Ms),
     Bursts         => ("bursts",           "Bursts",        OnTrigger,  (Int 1, 8),                                          Plain),
     BurstSpacingMs => ("burst_spacing_ms", "Burst Spacing", OnTrigger,  (Linear 2.0, 50.0),                                  Ms),
-    // LFO (33..39)
+    // LFO
     LfoShape       => ("lfo_shape",        "Shape",         OnTrigger,  (Choice LfoShape),                                   Plain),
     LfoRate        => ("lfo_rate",         "Rate",          Continuous, (Log 0.01, 40.0),                                    Hz),
     LfoSync        => ("lfo_sync",         "Sync",          OnTrigger,  Boolean,                                             Plain),
     LfoDivision    => ("lfo_division",     "Division",      OnTrigger,  Division,                                            Plain),
     LfoRetrigger   => ("lfo_retrigger",    "Retrigger",     OnTrigger,  Boolean,                                             Plain),
     LfoBipolar     => ("lfo_bipolar",      "Bipolar",       OnTrigger,  Boolean,                                             Plain),
-    // Filter (39..47)
+    // Filter
     FilterMode     => ("filter_mode",      "Mode",          OnTrigger,  (Choice FilterMode),                                 Plain),
     Cutoff         => ("cutoff",           "Cutoff",        Continuous, (Log 20.0, 20_000.0),                                Hz),
     Resonance      => ("resonance",        "Resonance",     Continuous, (Linear 0.0, 0.95),                                  Percent),
@@ -615,27 +621,36 @@ define_module_params! {
     KeyTrack       => ("key_track",        "Key Track",     Continuous, (Linear 0.0, 1.0),                                   Percent),
     VelAmount      => ("vel_amount",       "Vel Mod",       Continuous, (Linear 0.0, 4.0),                                   Octaves),
     Mix            => ("mix",              "Mix",           Continuous, (Linear 0.0, 1.0),                                   Percent),
-    // VCA (46..48)
+    // VCA
     VcaGain        => ("vca_gain",         "Gain",          Continuous, (Linear 0.0, 2.0),                                   Percent),
     VcaBias        => ("vca_bias",         "Bias",          Continuous, (Linear 0.0, 1.0),                                   Percent),
-    // Drive (48..52)
+    // Drive
     DriveMode      => ("drive_mode",       "Mode",          OnTrigger,  (Choice DriveMode),                                  Plain),
-    Asymmetry      => ("asymmetry",        "Asymmetry",     Continuous, (Linear -1.0, 1.0),                                  Percent),
+    Asymmetry      => ("asymmetry",        "Asymmetry",     Continuous, (Linear -1.0, 1.0),                                  BipolarPercent),
     ToneHz         => ("tone_hz",          "Tone",          Continuous, (Log DRIVE_MIN_TONE_HZ, DRIVE_MAX_TONE_HZ),          Hz),
     OutputDb       => ("output_db",        "Output",        Continuous, (Linear DRIVE_MIN_OUTPUT_DB, DRIVE_MAX_OUTPUT_DB),   Db),
-    // LoFi (52..54)
+    // LoFi
     Bits           => ("bits",             "Bits",          Continuous, (Linear LOFI_MIN_BITS, LOFI_MAX_BITS),               Bits),
     SampleRateHz   => ("sample_rate_hz",   "Clock",         Continuous, (Log LOFI_MIN_RATE_HZ, LOFI_MAX_RATE_HZ),            Hz),
-    // Out (54..57)
+    // Out
     GainDb         => ("gain_db",          "Gain",          Continuous, (Linear OUT_MIN_GAIN_DB, OUT_MAX_GAIN_DB),           Db),
     Pan            => ("pan",              "Pan",           Continuous, (Linear -1.0, 1.0),                                  Pan),
     Spread         => ("spread",           "Spread",        Continuous, (Linear 0.0, 1.0),                                   Percent),
-    // Resonator (57..62)
+    // Resonator
     ResonatorMode  => ("resonator_mode",   "Mode",          OnTrigger,  (Choice ResonatorMode),                              Plain),
     Structure      => ("structure",        "Structure",     Continuous, (Linear 0.0, 1.0),                                   Percent),
     ResonatorDecay => ("resonator_decay",  "Decay",         Continuous, (Log RESONATOR_MIN_DECAY_MS, RESONATOR_MAX_DECAY_MS), Ms),
     Brightness     => ("brightness",       "Brightness",    Continuous, (Linear 0.0, 1.0),                                   Percent),
     Position       => ("position",         "Position",      Continuous, (Linear 0.0, 1.0),                                   Percent),
+    // Aero (and shared physical modal parameters)
+    AeroMode       => ("aero_mode",        "Mode",          OnTrigger,  (Choice AeroMode),                                   Plain),
+    Geometry       => ("geometry",         "Geometry",      OnTrigger,  (Choice BodyGeometry),                               Plain),
+    Atoms          => ("atoms",            "Modes",         OnTrigger,  (Int 1, 48),                                         Plain),
+    Embouchure     => ("embouchure",       "Embouchure",    Continuous, (Linear 0.0, 1.0),                                   Percent),
+    BeatPressure   => ("p_beat_pa",        "Beat Pa",       Continuous, (Log 200.0, 8_000.0),                                Pascals),
+    Absorption     => ("absorption",       "Damping",       Continuous, (Linear 0.0, 0.5),                                   Decimal),
+    Radiation      => ("radiation",        "Radiation",     Continuous, (Linear 0.0, 1.0),                                   Percent),
+    TriadAmount    => ("triad_amount",     "Triads",        Continuous, (Linear 0.0, 1.0),                                   Percent),
 }
 
 macro_rules! match_module_param_aliases {
@@ -770,6 +785,7 @@ impl ModuleParam {
         }
         match self.unit() {
             Unit::Percent => format!("{:.0}%", v * 100.0),
+            Unit::BipolarPercent => format!("{:+.0}%", v * 100.0),
             Unit::Hz => {
                 if self == Self::LfoRate {
                     format!("{v:.2} Hz")
@@ -795,6 +811,14 @@ impl ModuleParam {
                     format!("{v:.1} bit")
                 }
             }
+            Unit::Pascals => format!("{v:.0} Pa"),
+            Unit::Decimal => {
+                if self == Self::Absorption {
+                    format!("{v:.3}")
+                } else {
+                    format!("{v:.2}")
+                }
+            }
             Unit::Plain => format!("{v:.0}"),
         }
     }
@@ -816,7 +840,10 @@ impl ModuleParam {
         let key = normalize_choice_token(input);
         let candidate = match_module_param_aliases!(kind, key.as_str(), {
             Vco => {
-                Waveform:      "wave" | "shape" | "waveform",
+                Waveform:      "wave" | "waveform",
+                Reach:         "reach" | "rho",
+                Shape:         "shape" | "curve" | "curvature" | "k",
+                Chirality:     "chirality" | "chi" | "quad",
                 Tune:          "tune" | "pitch" | "semi" | "semitones",
                 Fine:          "fine" | "cents",
                 PulseWidth:    "pw" | "pulse_width" | "width",
@@ -827,6 +854,25 @@ impl ModuleParam {
                 UnisonVoices:  "unison" | "unison_voices" | "voices",
                 UnisonDetune:  "detune" | "unison_detune",
                 UnisonWidth:   "unison_width" | "spread",
+            },
+            Aero => {
+                AeroMode:      "mode" | "aero_mode" | "type",
+                Geometry:      "geometry" | "geom" | "body" | "bore",
+                Atoms:         "atoms" | "modes" | "count",
+                VcoPitchTrack: "pitch_track" | "pitch_tracking" | "track",
+                Tune:          "tune" | "pitch" | "semi" | "semitones",
+                Fine:          "fine" | "cents",
+                FixedHz:       "fixed" | "fixed_hz" | "freq" | "hz",
+                Drive:         "drive" | "pressure" | "blow",
+                Embouchure:    "embouchure" | "emb" | "lip" | "stiffness",
+                BeatPressure:  "beat" | "beat_pa" | "p_beat" | "p_beat_pa",
+                Brightness:    "bright" | "brightness" | "tone",
+                Absorption:    "absorption" | "absorb" | "damp" | "damping",
+                Radiation:     "radiation" | "rad" | "air",
+                Kerr:          "kerr" | "bend" | "dispersion",
+                TriadAmount:   "triads" | "triad" | "triad_amount",
+                Spread:        "spread" | "width" | "quad",
+                Level:         "level" | "gain" | "amp",
             },
             Sampler => {
                 RootMidi:    "root" | "root_midi" | "root_note",
@@ -854,6 +900,7 @@ impl ModuleParam {
                 Decay:          "decay" | "dec" | "decay_ms",
                 Sustain:        "sustain" | "sus",
                 Release:        "release" | "rel" | "release_ms",
+                CubicLimit:     "limit" | "cubic_limit" | "g_cubic",
                 TriggerMode:    "trigger" | "trig" | "trigger_mode",
                 DelayMs:        "delay" | "pre_delay" | "predelay" | "delay_ms",
                 Bursts:         "bursts" | "burst" | "count",
@@ -972,13 +1019,15 @@ impl ModuleParam {
         }
 
         let compact = raw.to_ascii_lowercase().replace(' ', "");
-        const UNITS: [(&str, f32, Unit); 11] = [
+        const UNITS: [(&str, f32, Unit); 13] = [
             ("cents", 1.0, Unit::Cents),
             ("khz", 1000.0, Unit::Hz),
+            ("kpa", 1000.0, Unit::Pascals),
             ("deg", 1.0, Unit::Degrees),
             ("oct", 1.0, Unit::Octaves),
             ("hz", 1.0, Unit::Hz),
             ("ms", 1.0, Unit::Ms),
+            ("pa", 1.0, Unit::Pascals),
             ("st", 1.0, Unit::Semitones),
             ("ct", 1.0, Unit::Cents),
             ("°", 1.0, Unit::Degrees),
@@ -989,7 +1038,9 @@ impl ModuleParam {
         let mut scale = 1.0;
         for (suffix, multiplier, unit) in UNITS {
             if let Some(v) = compact.strip_suffix(suffix) {
-                ensure!(unit == self.unit(), "Wrong unit for {}", self.label());
+                let unit_ok = unit == self.unit()
+                    || (unit == Unit::Percent && self.unit() == Unit::BipolarPercent);
+                ensure!(unit_ok, "Wrong unit for {}", self.label());
                 number = v;
                 scale = multiplier;
                 break;
@@ -1039,7 +1090,16 @@ impl ModuleParam {
                     let step = if coarse { 45.0 } else { 5.0 };
                     (value / step).round() * step + d * step
                 }
-                Unit::Percent => nudge_quantized(value, dir, 100.0, 1.0, 5.0, coarse),
+                Unit::Percent | Unit::BipolarPercent => {
+                    nudge_quantized(value, dir, 100.0, 1.0, 5.0, coarse)
+                }
+                Unit::Decimal => {
+                    if self == Self::Absorption {
+                        nudge_quantized(value, dir, 200.0, 1.0, 10.0, coarse)
+                    } else {
+                        nudge_quantized(value, dir, 20.0, 1.0, 10.0, coarse)
+                    }
+                }
                 Unit::Pan => nudge_quantized(value, dir, 50.0, 1.0, 5.0, coarse),
                 Unit::Octaves => nudge_quantized(value, dir, 20.0, 1.0, 10.0, coarse),
                 Unit::Db | Unit::Bits => nudge_quantized(value, dir, 2.0, 1.0, 4.0, coarse),

@@ -69,6 +69,7 @@
               "decay_ms": 65.0,
               "sustain": 0.0,
               "release_ms": 5.0,
+              "cubic_limit": 0.0,
               "trigger_mode": "one_shot",
               "delay_ms": 0.0,
               "bursts": 1,

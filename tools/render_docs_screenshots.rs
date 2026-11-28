@@ -206,15 +206,21 @@ fn decode_mit_sample_scope(rel_wav: &str) -> Vec<f32> {
     out
 }
 
-/// Synthesize a realistic dry scope trace for Anthem Lead (detuned Saw + Pulse + Sub)
+/// Synthesize a realistic dry scope trace for Anthem Lead (detuned Mobius Jet + Mobius PWM + Sub)
 /// directly via `cadence_core::dsp::ideal_waveform`.
 fn anthem_lead_dry_scope() -> Vec<f32> {
     (0..256)
         .map(|i| {
             let phase = (i as f32 / 256.0) * 3.0;
-            let osc_a = ideal_waveform(Waveform::Saw, phase % 1.0, 0.5) * 0.50;
-            let osc_b = ideal_waveform(Waveform::Pulse, (phase * 1.008 + 0.17) % 1.0, 0.38) * 0.36;
-            let sub = ideal_waveform(Waveform::Sine, (phase * 0.5) % 1.0, 0.5) * 0.14;
+            let osc_a = ideal_waveform(Waveform::MobiusJet, phase % 1.0, 0.92, 0.5, 0.5) * 0.50;
+            let osc_b = ideal_waveform(
+                Waveform::MobiusPwm,
+                (phase * 1.008 + 0.17) % 1.0,
+                0.92,
+                0.5,
+                0.38,
+            ) * 0.36;
+            let sub = ideal_waveform(Waveform::Sine, (phase * 0.5) % 1.0, 0.92, 0.5, 0.5) * 0.14;
             (osc_a + osc_b + sub).clamp(-0.95, 0.95)
         })
         .collect()

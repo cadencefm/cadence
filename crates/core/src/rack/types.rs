@@ -16,6 +16,7 @@ pub const MAX_ZONES: usize = 32;
 pub const MAX_CHOKE_GROUPS: u8 = 8;
 pub const MAX_MODULES_PER_ZONE: usize = 24;
 pub const MAX_RESONATORS_PER_ZONE: usize = 4;
+pub const MAX_AEROS_PER_ZONE: usize = 4;
 pub const MAX_CABLES_PER_ZONE: usize = 64;
 pub const MAX_PANEL_PINS: usize = 16;
 
@@ -112,13 +113,74 @@ pub fn module_sample_key(inst_id: u64, zone_id: u16, module_id: u16) -> u64 {
 }
 
 crate::define_choice_enum! {
+    /// Pure `1x`-rate cubic algebraic and Hardy-space waveforms for [`crate::rack::VcoModule`].
     #[derive(Default)]
     pub enum Waveform {
-        Sine => ("sine", "Sine", ["0", "sin"]),
-        Triangle => ("triangle", "Triangle", ["1", "tri"]),
         #[default]
-        Saw => ("saw", "Saw", ["2", "sawtooth"]),
-        Pulse => ("pulse", "Pulse", ["3", "square", "sqr"]),
+        MobiusJet => ("mobius_jet", "Mobius Jet", ["0", "mobius", "jet", "smooth", "saw", "sawtooth"]),
+        MobiusPwm => ("mobius_pwm", "Mobius PWM", ["1", "pwm", "pulse", "square", "sqr"]),
+        BareCubic => ("bare_cubic", "Bare Cubic", ["2", "bare", "cubic", "triangle", "tri"]),
+        HardySaw  => ("hardy_saw",  "Hardy Saw",  ["3", "hardy"]),
+        Sine      => ("sine",       "Sine",       ["4", "sin"]),
+        Szego     => ("szego",      "Szego",      ["5", "szegő"]),
+        Dipole    => ("dipole",     "Dipole",     ["6", "clarinet", "reed"]),
+        Poisson   => ("poisson",    "Poisson",    ["7", "formant"]),
+    }
+}
+
+impl Waveform {
+    /// Convert to the `no_std`-ready primitive enum in `crate::dsp::cubic::exciter`.
+    #[inline]
+    pub const fn to_cubic(self) -> crate::dsp::cubic::CubicWaveform {
+        match self {
+            Self::MobiusJet => crate::dsp::cubic::CubicWaveform::MobiusJet,
+            Self::MobiusPwm => crate::dsp::cubic::CubicWaveform::MobiusPwm,
+            Self::BareCubic => crate::dsp::cubic::CubicWaveform::BareCubic,
+            Self::HardySaw => crate::dsp::cubic::CubicWaveform::HardySaw,
+            Self::Sine => crate::dsp::cubic::CubicWaveform::Sine,
+            Self::Szego => crate::dsp::cubic::CubicWaveform::Szego,
+            Self::Dipole => crate::dsp::cubic::CubicWaveform::Dipole,
+            Self::Poisson => crate::dsp::cubic::CubicWaveform::Poisson,
+        }
+    }
+}
+
+crate::define_choice_enum! {
+    /// Physical wind-excitation mode for [`crate::rack::AeroModule`].
+    #[derive(Default)]
+    pub enum AeroMode {
+        #[default]
+        FlueJet => ("flue_jet", "Flue Jet", ["0", "flue", "jet", "pipe", "flute"]),
+        BrassReed => ("brass_reed", "Brass Reed", ["1", "reed", "brass", "horn", "organ"]),
+    }
+}
+
+crate::define_choice_enum! {
+    /// Modal eigenfrequency geometry shared by [`crate::rack::AeroModule`] and modal bodies.
+    #[derive(Default)]
+    pub enum BodyGeometry {
+        #[default]
+        Harmonic => ("harmonic", "Harmonic", ["0", "open", "cyl", "string"]),
+        Stopped => ("stopped", "Stopped", ["1", "odd", "clarinet"]),
+        Membrane => ("membrane", "Membrane", ["2", "mem", "drum", "skin"]),
+        Bar => ("bar", "Bar", ["3", "beam", "marimba"]),
+        Plate => ("plate", "Plate", ["4", "plt", "cymbal", "gong"]),
+        Cluster => ("cluster", "Cluster", ["5", "doublet", "chorus"]),
+    }
+}
+
+impl BodyGeometry {
+    /// Convert to the `no_std`-ready primitive enum in `crate::dsp::cubic::modal`.
+    #[inline]
+    pub const fn to_cubic(self) -> crate::dsp::cubic::BodyGeometry {
+        match self {
+            Self::Harmonic => crate::dsp::cubic::BodyGeometry::Harmonic,
+            Self::Stopped => crate::dsp::cubic::BodyGeometry::Stopped,
+            Self::Membrane => crate::dsp::cubic::BodyGeometry::Membrane,
+            Self::Bar => crate::dsp::cubic::BodyGeometry::Bar,
+            Self::Plate => crate::dsp::cubic::BodyGeometry::Plate,
+            Self::Cluster => crate::dsp::cubic::BodyGeometry::Cluster,
+        }
     }
 }
 
@@ -188,6 +250,7 @@ crate::define_choice_enum! {
         #[default]
         Gate => ("gate", "Gate", ["0", "adsr"]),
         OneShot => ("one_shot", "One-shot", ["1", "oneshot", "perc", "trigger"]),
+        Additive => ("additive", "Additive", ["2", "add", "stack", "accent"]),
     }
 }
 
@@ -221,7 +284,9 @@ impl UpdatePolicy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unit {
     Plain,
+    Decimal,
     Percent,
+    BipolarPercent,
     Hz,
     Ms,
     Semitones,
@@ -232,6 +297,7 @@ pub enum Unit {
     Db,
     Pan,
     Bits,
+    Pascals,
 }
 
 crate::define_choice_enum! {
@@ -260,15 +326,15 @@ crate::define_choice_enum! {
     pub enum InPort {
         /// Stereo audio input (multiple incoming cables sum).
         In => ("in", "Audio In", ["audio", "audio_in", "sig"]),
-        /// Modulation / control CV (Filter cutoff octaves, VCA gain/RingMod, Drive CV, Out CV).
+        /// Modulation / control CV (Aero blow drive, Filter cutoff octaves, VCA gain/RingMod, Drive CV, Out CV).
         Cv => ("cv", "CV", ["mod", "cutoff", "gain", "amp"]),
-        /// Pitch modulation in semitones (VCO, Sampler).
+        /// Pitch modulation in semitones (VCO, Aero, Sampler, Resonator).
         PitchCv => ("pitch_cv", "Pitch CV", ["pitch", "v_oct", "voct", "freq"]),
         /// Audio-rate through-zero linear FM (VCO).
         FmIn => ("fm_in", "FM In", ["fm", "lin_fm"]),
-        /// Pulse-width modulation (VCO).
-        PwCv => ("pw_cv", "PW CV", ["pw", "pwm"]),
-        /// Gate / trigger input (Env, Sampler; defaults to voice gate if unpatched).
+        /// Pulse-width / spectral-reach modulation (VCO).
+        PwCv => ("pw_cv", "PW CV", ["pw", "pwm", "reach"]),
+        /// Gate / trigger input (Env, Aero, Sampler; defaults to voice gate if unpatched).
         TrigIn => ("trig_in", "Trig In", ["trig", "gate", "trigger"]),
     }
 }
@@ -899,6 +965,7 @@ impl RackZone {
         let mut mod_ids = HashSet::with_capacity(self.modules.len());
         let mut out_count = 0usize;
         let mut resonator_count = 0usize;
+        let mut aero_count = 0usize;
         for m in &self.modules {
             m.validate()
                 .with_context(|| format!("Zone '{}'", self.name))?;
@@ -914,6 +981,9 @@ impl RackZone {
             if matches!(m.kind, ModuleKind::Resonator(_)) {
                 resonator_count += 1;
             }
+            if matches!(m.kind, ModuleKind::Aero(_)) {
+                aero_count += 1;
+            }
         }
         ensure!(
             out_count == 1,
@@ -923,6 +993,11 @@ impl RackZone {
         ensure!(
             resonator_count <= MAX_RESONATORS_PER_ZONE,
             "Zone '{}' exceeds maximum of {MAX_RESONATORS_PER_ZONE} Resonator modules (found {resonator_count})",
+            self.name
+        );
+        ensure!(
+            aero_count <= MAX_AEROS_PER_ZONE,
+            "Zone '{}' exceeds maximum of {MAX_AEROS_PER_ZONE} Aero modules (found {aero_count})",
             self.name
         );
 

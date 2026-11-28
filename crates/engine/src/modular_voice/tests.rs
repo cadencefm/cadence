@@ -294,7 +294,7 @@ fn audio_rate_fm_and_four_quadrant_ring_mod_generate_exact_sidebands() {
     let sr = 48_000.0;
     let bank = Vec::new();
 
-    // 1. Audio-rate 2x through-zero linear FM: 660 Hz Sine modulating 440 Hz Sine.
+    // 1. Audio-rate 1x through-zero linear FM: 660 Hz Sine modulating 440 Hz Sine.
     let fm_zone = build_zone(
         vec![
             RackModule::new(
@@ -1072,8 +1072,8 @@ fn acid_303_accent_boosts_cutoff_and_snaps_filter_env_decay() {
         "Acid accent must open cutoff dramatically: norm={cut_norm} Hz vs acc={cut_acc} Hz"
     );
 
-    // After 140 ms (~6720 frames), accented Filter Env has decayed faster via acid_filter_decay_ms!
-    for _ in 0..6720 {
+    // After 220 ms (~10560 frames), accented Capacitor Filter Env has decayed faster via acid_filter_decay_ms!
+    for _ in 0..10_560 {
         v_norm.next_frame(&bank, None);
         v_acc.next_frame(&bank, None);
     }
@@ -1113,7 +1113,7 @@ fn continuous_updates_respect_per_voice_locks_and_on_trigger_policy() {
 
     // Edit base zone: lower cutoff to 200 Hz, change waveform (OnTrigger), raise resonance (unlocked Continuous), zero cable #5.
     if let ModuleKind::Vco(ref mut vco) = zone.modules[0].kind {
-        vco.waveform = Waveform::Pulse;
+        vco.waveform = Waveform::MobiusPwm;
     }
     if let ModuleKind::Filter(ref mut flt) = zone.modules[1].kind {
         flt.cutoff_hz = 200.0;
@@ -1127,7 +1127,7 @@ fn continuous_updates_respect_per_voice_locks_and_on_trigger_policy() {
     }
 
     // Locked Filter Cutoff stayed at 7000 Hz, unlocked Resonance moved to 0.75,
-    // OnTrigger Waveform stayed Saw, and locked Cable #5 stayed +2.0 oct!
+    // OnTrigger Waveform stayed MobiusJet, and locked Cable #5 stayed +2.0 oct!
     match voice.module_target_params(2).unwrap() {
         ModuleParams::Filter(f) => {
             assert!(
@@ -1146,7 +1146,7 @@ fn continuous_updates_respect_per_voice_locks_and_on_trigger_policy() {
     match voice.module_target_params(1).unwrap() {
         ModuleParams::Vco(v) => assert_eq!(
             v.waveform,
-            Waveform::Saw,
+            Waveform::MobiusJet,
             "OnTrigger waveform must not mutate mid-voice"
         ),
         _ => panic!("expected Vco"),
@@ -2944,13 +2944,14 @@ fn synthetic_rack_zone_for_module_kind(tag: ModuleKindTag) -> RackZone {
         decay_ms: 40.0,
         sustain: 0.65,
         release_ms: 20.0,
+        cubic_limit: 0.0,
         trigger_mode: TriggerMode::Gate,
         delay_ms: 0.0,
         bursts: 1,
         burst_spacing_ms: 10.0,
     };
     let base_vco = || VcoModule {
-        waveform: Waveform::Saw,
+        waveform: Waveform::MobiusJet,
         unison_voices: 3,
         unison_detune_cents: 14.0,
         unison_width: 0.8,
@@ -2970,6 +2971,29 @@ fn synthetic_rack_zone_for_module_kind(tag: ModuleKindTag) -> RackZone {
                 PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
                 PatchCable::new(3, 2, 4, InPort::In, 1.0),
             ],
+        ),
+        ModuleKindTag::Aero => build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "Aero",
+                    ModuleKind::Aero(AeroModule {
+                        mode: AeroMode::BrassReed,
+                        geometry: BodyGeometry::Harmonic,
+                        atoms: 10,
+                        drive: 0.8,
+                        embouchure: 0.55,
+                        p_beat_pa: 1_500.0,
+                        brightness: 0.6,
+                        radiation: 0.35,
+                        spread: 0.4,
+                        level: 0.9,
+                        ..AeroModule::default()
+                    }),
+                ),
+                RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
         ),
         ModuleKindTag::Sampler => build_zone(
             vec![
@@ -3303,7 +3327,37 @@ fn all_module_kinds_and_modes_satisfy_render_block_parity_and_zero_alloc() {
         }
         cases.push((format!("ResonatorMode::{res_mode:?}"), z, false));
     }
-    // 7. Feedback z^-1 loop topology (VCO self-FM + Filter -> Drive -> Filter.In).
+    // 7. Exhaustive AeroMode::ALL (including Mono legato retarget).
+    for &aero_mode in AeroMode::ALL {
+        let mut z = synthetic_rack_zone_for_module_kind(ModuleKindTag::Aero);
+        if let ModuleKind::Aero(ref mut aero) = z.modules[0].kind {
+            aero.mode = aero_mode;
+        }
+        cases.push((format!("AeroMode::{aero_mode:?}"), z, false));
+    }
+    // 8. Exhaustive Waveform::ALL and EnvMode::ALL.
+    for &waveform in Waveform::ALL {
+        let mut z = synthetic_rack_zone_for_module_kind(ModuleKindTag::Vco);
+        if let ModuleKind::Vco(ref mut vco) = z.modules[0].kind {
+            vco.waveform = waveform;
+            vco.chirality = 0.45;
+        }
+        cases.push((format!("Waveform::{waveform:?}"), z, false));
+    }
+    for &env_mode in EnvMode::ALL {
+        let mut z = synthetic_rack_zone_for_module_kind(ModuleKindTag::Env);
+        if let ModuleKind::Env(ref mut env) = z.modules[2].kind {
+            env.mode = env_mode;
+            env.cubic_limit = 0.75;
+            env.trigger_mode = if env_mode == EnvMode::Capacitor {
+                TriggerMode::Additive
+            } else {
+                TriggerMode::OneShot
+            };
+        }
+        cases.push((format!("EnvMode::{env_mode:?}"), z, false));
+    }
+    // 9. Feedback z^-1 loop topology (VCO self-FM + Filter -> Drive -> Filter.In).
     let fb_zone = build_zone(
         vec![
             RackModule::new(1, "VCO", ModuleKind::Vco(VcoModule::default())),
@@ -3671,7 +3725,7 @@ fn filter_node_supports_cubic_poles_diode_kerr_spread_and_click_free_mode_switch
     // 2. DiodeLadder driven resonant sweep stays bounded and DC-free.
     let z_diode = make_filter_zone(
         180.0,
-        Waveform::Saw,
+        Waveform::MobiusJet,
         0.8,
         FilterModule {
             mode: FilterMode::DiodeLadder,
@@ -3812,7 +3866,7 @@ fn filter_node_supports_cubic_poles_diode_kerr_spread_and_click_free_mode_switch
     // Verify continuous updates respect per-voice locks on `Kerr` and `Spread`.
     let mut z_live = make_filter_zone(
         440.0,
-        Waveform::Saw,
+        Waveform::MobiusJet,
         0.7,
         FilterModule {
             mode: FilterMode::ImLpf2,
@@ -4138,5 +4192,754 @@ fn drive_node_native_rate_atomic_jet_and_shock_port_match_core_shaper() {
     assert!(
         max_step < 0.08,
         "legato mode crossfade between AtomicJet and ShockPort produced click step {max_step}"
+    );
+}
+
+#[test]
+fn vco_node_cubic_waveforms_chirality_dual_pw_cv_and_native_tz_fm() {
+    use cadence_core::dsp::{lin_to_db_f64, VCO_MAX_REACH};
+    let sr = 48_000.0;
+    let bank: SampleBank = Vec::new();
+    let warmup = 4_800usize;
+    let measure = 4_800usize;
+
+    // 1. All 8 cubic/Hardy waveforms render finite, non-silent output with zero RT allocations.
+    let mut reusable = ModularVoice::new_boxed_inactive(sr);
+    for &wf in Waveform::ALL {
+        let z = build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "VCO",
+                    ModuleKind::Vco(VcoModule {
+                        waveform: wf,
+                        reach: 0.9,
+                        shape: 0.5,
+                        chirality: 0.0,
+                        pulse_width: 0.35,
+                        pitch_tracking: PitchTracking::Fixed,
+                        fixed_hz: 220.0,
+                        level: 0.8,
+                        ..VcoModule::default()
+                    }),
+                ),
+                RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+        );
+        let g = compile_zone_graph(&z).unwrap();
+        let zspec = spec(&z, &g, sr, 120.0);
+        let mut peak = 0.0_f32;
+        assert_no_heap_operations(|| {
+            reusable.begin_trigger_from_zone(&zspec);
+            reusable.finalize_trigger(start(60, None), false, false);
+            for _ in 0..2_048 {
+                let f = reusable.next_frame(&bank, None);
+                assert!(f[0].is_finite() && f[1].is_finite(), "{wf:?}: non-finite");
+                assert!(
+                    (f[0] - f[1]).abs() < 1e-6,
+                    "{wf:?}: chirality=0 must stay centered mono"
+                );
+                peak = peak.max(f[0].abs());
+            }
+        });
+        assert!(peak > 0.15, "{wf:?}: expected audible output, got {peak}");
+    }
+
+    // 2. Chirality (-1, 0, +1) produces constant stereo RMS power, opposite Side polarity,
+    //    and smooth continuous updates honoring per-voice VoiceLocks on Reach/Shape/Chirality.
+    let measure_chi = |chirality: f32| -> (f64, f64, Vec<f64>) {
+        let z = build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "VCO",
+                    ModuleKind::Vco(VcoModule {
+                        waveform: Waveform::Szego,
+                        reach: 0.88,
+                        shape: 0.5,
+                        chirality,
+                        pitch_tracking: PitchTracking::Fixed,
+                        fixed_hz: 250.0,
+                        level: 0.75,
+                        ..VcoModule::default()
+                    }),
+                ),
+                RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+        );
+        let g = compile_zone_graph(&z).unwrap();
+        let mut v = ModularVoice::new_boxed(&spec(&z, &g, sr, 120.0), start(60, None));
+        let mut stereo_e = 0.0_f64;
+        let mut side_e = 0.0_f64;
+        let mut side_trace = Vec::with_capacity(measure);
+        for i in 0..(warmup + measure) {
+            let f = v.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+            if i >= warmup {
+                let l = f64::from(f[0]);
+                let r = f64::from(f[1]);
+                let side = 0.5 * (l - r);
+                stereo_e += 0.5 * (l * l + r * r);
+                side_e += side * side;
+                side_trace.push(side);
+            }
+        }
+        (
+            (stereo_e / measure as f64).sqrt(),
+            (side_e / measure as f64).sqrt(),
+            side_trace,
+        )
+    };
+    let (rms_0, side_0, _) = measure_chi(0.0);
+    let (rms_pos, side_pos, trace_pos) = measure_chi(1.0);
+    let (rms_neg, side_neg, trace_neg) = measure_chi(-1.0);
+    assert!(side_0 < 1e-6, "chirality=0 must have zero Side: {side_0}");
+    assert!(
+        side_pos > 0.1 && side_neg > 0.1,
+        "chirality=±1 must generate quadrature Side energy: +{side_pos}, -{side_neg}"
+    );
+    assert!(
+        lin_to_db_f64(rms_pos / rms_0).abs() < 0.1 && lin_to_db_f64(rms_neg / rms_0).abs() < 0.1,
+        "chirality must preserve constant stereo RMS: rms_0={rms_0}, rms_pos={rms_pos}, rms_neg={rms_neg}"
+    );
+    let polarity_err: f64 = trace_pos
+        .iter()
+        .zip(&trace_neg)
+        .map(|(a, b)| (a + b).abs())
+        .fold(0.0_f64, f64::max);
+    assert!(
+        polarity_err < 1e-4,
+        "chirality +1 and -1 must invert Side polarity: max err={polarity_err}"
+    );
+
+    // Continuous updates smooth Reach/Shape/Chirality and honor per-voice locks.
+    let mut z_lock = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "VCO",
+                ModuleKind::Vco(VcoModule {
+                    waveform: Waveform::MobiusJet,
+                    reach: 0.5,
+                    shape: 0.25,
+                    chirality: 0.1,
+                    ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+    );
+    let g_lock = compile_zone_graph(&z_lock).unwrap();
+    let mut v_lock = ModularVoice::new_boxed_inactive(sr);
+    v_lock.begin_trigger_from_zone(&spec(&z_lock, &g_lock, sr, 120.0));
+    v_lock.apply_trigger_module_param(
+        1,
+        ModuleParam::Reach,
+        ModuleParam::Reach.normalize(0.82),
+        0,
+        true,
+    );
+    v_lock.finalize_trigger(start(60, None), false, false);
+    if let ModuleKind::Vco(ref mut vco) = z_lock.modules[0].kind {
+        vco.reach = 0.2;
+        vco.shape = 0.85;
+        vco.chirality = -0.75;
+    }
+    v_lock.update_continuous_from_zone(&z_lock, 0.0, 0.0, 120.0);
+    let ModuleParams::Vco(vco_target) = v_lock.module_target_params(1).unwrap() else {
+        panic!("expected Vco target");
+    };
+    assert!(
+        (vco_target.reach - 0.82).abs() < 1e-3,
+        "locked Reach must survive continuous update: {}",
+        vco_target.reach
+    );
+    assert!(
+        (vco_target.shape - 0.85).abs() < 1e-4 && (vco_target.chirality + 0.75).abs() < 1e-4,
+        "unlocked Shape/Chirality must follow continuous update: {vco_target:?}"
+    );
+
+    // 3. Dual-purpose PwCv:
+    //    - On MobiusPwm: modulates pulse_width (shifts 50% square -> asymmetric PWM with strong H2).
+    //    - On non-PWM waveforms (MobiusJet): modulates reach (boosts H2/H3 brightness from low reach).
+    let measure_pw_cv = |wf: Waveform, reach: f32, pw: f32, pw_cv_amt: f32| -> (f64, f64, f64) {
+        let mut modules = vec![
+            RackModule::new(
+                1,
+                "VCO",
+                ModuleKind::Vco(VcoModule {
+                    waveform: wf,
+                    reach,
+                    shape: 0.4,
+                    pulse_width: pw,
+                    pitch_tracking: PitchTracking::Fixed,
+                    fixed_hz: 200.0,
+                    level: 0.8,
+                    ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+        ];
+        let mut cables = vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)];
+        if pw_cv_amt.abs() > 0.0 {
+            modules.push(RackModule::new(
+                3,
+                "CvEnv",
+                ModuleKind::Env(EnvModule {
+                    mode: EnvMode::HoldDecay,
+                    attack_ms: 0.1,
+                    hold_ms: 500.0,
+                    decay_ms: 100.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..EnvModule::default()
+                }),
+            ));
+            cables.push(PatchCable::new(2, 3, 1, InPort::PwCv, pw_cv_amt));
+        }
+        let z = build_zone(modules, cables);
+        let g = compile_zone_graph(&z).unwrap();
+        let mut v = ModularVoice::new_boxed(&spec(&z, &g, sr, 120.0), start(60, None));
+        let mut buf = Vec::with_capacity(measure);
+        for i in 0..(warmup + measure) {
+            let f = v.next_frame(&bank, None);
+            if i >= warmup {
+                buf.push(f64::from(f[0]));
+            }
+        }
+        (
+            dft_power(&buf, 200.0, sr),
+            dft_power(&buf, 400.0, sr),
+            dft_power(&buf, 600.0, sr),
+        )
+    };
+    let (pwm0_h1, pwm0_h2, _) = measure_pw_cv(Waveform::MobiusPwm, 0.9, 0.5, 0.0);
+    let (pwm1_h1, pwm1_h2, _) = measure_pw_cv(Waveform::MobiusPwm, 0.9, 0.5, 0.30);
+    assert!(
+        pwm0_h2 < pwm0_h1 * 1e-6 && pwm1_h2 > pwm1_h1 * 0.01 && pwm1_h2 > pwm0_h2 * 1e6,
+        "MobiusPwm PwCv must shift duty from symmetric square to asymmetric PWM: base={pwm0_h2}/{pwm0_h1}, mod={pwm1_h2}/{pwm1_h1}"
+    );
+    let (jet0_h1, _, jet0_h3) = measure_pw_cv(Waveform::MobiusJet, 0.2, 0.5, 0.0);
+    let (jet1_h1, _, jet1_h3) = measure_pw_cv(Waveform::MobiusJet, 0.2, 0.5, 0.45);
+    let (jet_max_h1, _, jet_max_h3) =
+        measure_pw_cv(Waveform::MobiusJet, VCO_MAX_REACH as f32, 0.5, 0.45);
+    assert!(
+        (jet1_h3 / jet1_h1) > (jet0_h3 / jet0_h1) * 10.0,
+        "non-PWM PwCv must boost harmonic reach brightness: base={}/{}, mod={}/{}",
+        jet0_h3,
+        jet0_h1,
+        jet1_h3,
+        jet1_h1
+    );
+    assert!(
+        jet_max_h1.is_finite() && jet_max_h3.is_finite() && jet_max_h1 > 1e-3,
+        "PwCv above VCO_MAX_REACH must clamp cleanly without instability"
+    );
+
+    // 4. Native 1x through-zero linear FM generates symmetric sidebands with zero RT allocations.
+    //    Use incommensurate carrier (3000 Hz) and modulator (700 Hz) so lower sidebands do not
+    //    fold across 0 Hz onto the k = ±1 sidebands at 2300 Hz and 3700 Hz.
+    let fm_zone = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "Carrier",
+                ModuleKind::Vco(VcoModule {
+                    waveform: Waveform::Sine,
+                    pitch_tracking: PitchTracking::Fixed,
+                    fixed_hz: 3_000.0,
+                    level: 0.9,
+                    ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(
+                2,
+                "Mod",
+                ModuleKind::Vco(VcoModule {
+                    waveform: Waveform::Sine,
+                    pitch_tracking: PitchTracking::Fixed,
+                    fixed_hz: 700.0,
+                    level: 1.0,
+                    ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(3, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 2, 1, InPort::FmIn, 0.35),
+            PatchCable::new(2, 1, 3, InPort::In, 1.0),
+        ],
+    );
+    let g_fm = compile_zone_graph(&fm_zone).unwrap();
+    let fm_spec = spec(&fm_zone, &g_fm, sr, 120.0);
+    let mut fm_buf = Vec::with_capacity(measure);
+    assert_no_heap_operations(|| {
+        reusable.begin_trigger_from_zone(&fm_spec);
+        reusable.finalize_trigger(start(60, None), false, false);
+        for i in 0..(warmup + measure) {
+            let f = reusable.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+            if i >= warmup {
+                fm_buf.push(f64::from(f[0]));
+            }
+        }
+    });
+    let sb_lo = dft_power(&fm_buf, 2_300.0, sr);
+    let sb_hi = dft_power(&fm_buf, 3_700.0, sr);
+    let sym_db = lin_to_db_f64((sb_hi / sb_lo).sqrt()).abs();
+    assert!(
+        sb_lo > 1e-3 && sb_hi > 1e-3 && sym_db < 0.25,
+        "1x TZ-FM sidebands at 2300/3700 Hz must be strong and symmetric: lo={sb_lo}, hi={sb_hi}, sym={sym_db:.3} dB"
+    );
+}
+
+#[test]
+fn env_node_capacitor_additive_stacking_and_continuous_cubic_limit() {
+    let sr = 48_000.0;
+    let bank: SampleBank = Vec::new();
+
+    // 1. EnvMode::Capacitor + TriggerMode::Additive stacks voltage on rapid TrigIn pulses,
+    //    and cubic_limit self-limits stacked peaks cleanly vs linear RC (cubic_limit = 0.0).
+    let run_cap_stack = |cubic_limit: f32| -> (f64, f64) {
+        let z = build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "Clock",
+                    ModuleKind::Lfo(LfoModule {
+                        shape: LfoShape::Square,
+                        rate_hz: 20.0, // 50 ms period: triggers at 0 ms and 50 ms
+                        retrigger: true,
+                        bipolar: true,
+                        ..LfoModule::default()
+                    }),
+                ),
+                RackModule::new(
+                    2,
+                    "CapEnv",
+                    ModuleKind::Env(EnvModule {
+                        mode: EnvMode::Capacitor,
+                        attack_ms: 2.0,
+                        hold_ms: 4.0,
+                        decay_ms: 700.0,
+                        sustain: 0.0,
+                        release_ms: 50.0,
+                        cubic_limit,
+                        trigger_mode: TriggerMode::Additive,
+                        ..EnvModule::default()
+                    }),
+                ),
+                RackModule::new(3, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::TrigIn, 1.0)],
+        );
+        let g = compile_zone_graph(&z).unwrap();
+        let mut v = ModularVoice::new_boxed(&spec(&z, &g, sr, 120.0), start(60, None));
+        let mut peak1 = 0.0_f64;
+        let mut peak2 = 0.0_f64;
+        // 50 ms = 2400 frames; 1st pulse peaks around frame 200, 2nd pulse peaks around frame 2600.
+        for i in 0..3_600 {
+            let _ = v.next_frame(&bank, None);
+            let (_, lvl) = v.env_stage_and_level(2).unwrap();
+            assert!(lvl.is_finite() && lvl >= 0.0);
+            if i < 1_200 {
+                peak1 = peak1.max(lvl);
+            } else if i >= 2_400 {
+                peak2 = peak2.max(lvl);
+            }
+        }
+        (peak1, peak2)
+    };
+    let (lin_p1, lin_p2) = run_cap_stack(0.0);
+    let (lim_p1, lim_p2) = run_cap_stack(6.0);
+    assert!(
+        lin_p1 > 0.7 && lin_p2 > lin_p1 + 0.45 && lin_p2 > 1.2,
+        "Additive Capacitor must stack charge above 1.0 on rapid pulses: p1={lin_p1:.4}, p2={lin_p2:.4}"
+    );
+    assert!(
+        lim_p2 > lim_p1 && lim_p2 < lin_p2 - 0.1,
+        "cubic_limit must self-limit stacked Capacitor peak: linear={lin_p2:.4}, limited={lim_p2:.4}"
+    );
+
+    // 2. Continuous CubicLimit updates smooth live, respect per-voice VoiceLocks,
+    //    and TriggerMode::Additive ignores normal note_off while choking on force_release.
+    let mut cap_zone = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "VCO",
+                ModuleKind::Vco(VcoModule {
+                    waveform: Waveform::Sine,
+                    level: 0.8,
+                    ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(2, "VCA", ModuleKind::Vca(VcaModule::default())),
+            RackModule::new(
+                3,
+                "AmpCap",
+                ModuleKind::Env(EnvModule {
+                    mode: EnvMode::Capacitor,
+                    attack_ms: 2.0,
+                    hold_ms: 4.0,
+                    decay_ms: 900.0,
+                    cubic_limit: 0.0,
+                    trigger_mode: TriggerMode::Additive,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(4, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 2, InPort::In, 1.0),
+            PatchCable::new(2, 3, 2, InPort::Cv, 1.0),
+            PatchCable::new(3, 2, 4, InPort::In, 1.0),
+        ],
+    );
+    let g_cap = compile_zone_graph(&cap_zone).unwrap();
+
+    // Unlocked continuous update raises CubicLimit -> accelerates discharge compared to locked 0.0!
+    let mut v_locked = ModularVoice::new_boxed_inactive(sr);
+    v_locked.begin_trigger_from_zone(&spec(&cap_zone, &g_cap, sr, 120.0));
+    v_locked.apply_trigger_module_param(
+        3,
+        ModuleParam::CubicLimit,
+        ModuleParam::CubicLimit.normalize(0.0),
+        0,
+        true,
+    );
+    v_locked.finalize_trigger(start(60, None), false, false);
+
+    let mut v_live = ModularVoice::new_boxed_inactive(sr);
+    v_live.begin_trigger_from_zone(&spec(&cap_zone, &g_cap, sr, 120.0));
+    v_live.finalize_trigger(start(60, None), false, false);
+
+    // Charge for 6 ms, then raise zone cubic_limit to 8.0 and push continuous update.
+    for _ in 0..288 {
+        v_locked.next_frame(&bank, None);
+        v_live.next_frame(&bank, None);
+    }
+    if let ModuleKind::Env(ref mut env) = cap_zone.modules[2].kind {
+        env.cubic_limit = 8.0;
+    }
+    assert_no_heap_operations(|| {
+        v_locked.update_continuous_from_zone(&cap_zone, 0.0, 0.0, 120.0);
+        v_live.update_continuous_from_zone(&cap_zone, 0.0, 0.0, 120.0);
+        for _ in 0..4_800 {
+            v_locked.next_frame(&bank, None);
+            v_live.next_frame(&bank, None);
+        }
+    });
+    let ModuleParams::Env(locked_t) = v_locked.module_target_params(3).unwrap() else {
+        panic!("expected Env");
+    };
+    let ModuleParams::Env(live_t) = v_live.module_target_params(3).unwrap() else {
+        panic!("expected Env");
+    };
+    assert!(locked_t.cubic_limit < 1e-4, "locked CubicLimit drifted");
+    assert!(
+        (live_t.cubic_limit - 8.0).abs() < 1e-4,
+        "unlocked CubicLimit missed continuous update"
+    );
+    let lvl_locked = v_locked.env_stage_and_level(3).unwrap().1;
+    let lvl_live = v_live.env_stage_and_level(3).unwrap().1;
+    assert!(
+        lvl_live < lvl_locked * 0.75,
+        "continuous CubicLimit=8.0 must discharge capacitor faster than locked 0.0: live={lvl_live:.4}, locked={lvl_locked:.4}"
+    );
+
+    // Normal note_off preserves TriggerMode::Additive natural decay; force_release chokes cleanly!
+    v_locked.note_off();
+    for _ in 0..480 {
+        v_locked.next_frame(&bank, None);
+    }
+    assert!(
+        v_locked.is_active() && v_locked.env_stage_and_level(3).unwrap().1 > 0.3,
+        "normal note_off must honor TriggerMode::Additive one-shot decay"
+    );
+    v_locked.force_release();
+    for _ in 0..1_000 {
+        v_locked.next_frame(&bank, None);
+    }
+    assert_eq!(
+        v_locked.env_stage_and_level(3).unwrap().0,
+        AdsrStage::Done,
+        "force_release must choke TriggerMode::Additive envelope within ~20 ms"
+    );
+    for _ in 0..24_000 {
+        v_locked.next_frame(&bank, None);
+        if !v_locked.is_active() {
+            break;
+        }
+    }
+    assert!(
+        !v_locked.is_active(),
+        "force_release must retire TriggerMode::Additive voice cleanly after Out DC settle"
+    );
+}
+
+#[test]
+fn aero_node_flue_jet_and_brass_reed_oscillate_retire_on_bore_tail_and_zero_alloc() {
+    let sr = 48_000.0;
+    let bank: SampleBank = Vec::new();
+
+    // 1. Both FlueJet and BrassReed in `[Aero -> Out]` (zero Env/Vca) self-oscillate at the
+    //    tracked fundamental (A4 = 440 Hz, MIDI 69), bypass Out's 15 ms fallback gate chop on
+    //    note_off so the physical bore tail rings out, retire automatically on `is_quiet()`,
+    //    and run with zero RT heap allocations.
+    let mut reusable = ModularVoice::new_boxed_inactive(sr);
+    for &mode in AeroMode::ALL {
+        let (radiation, atoms) = match mode {
+            AeroMode::FlueJet => (0.15, 6),
+            AeroMode::BrassReed => (0.5, 10),
+        };
+        let z = build_zone(
+            vec![
+                RackModule::new(
+                    1,
+                    "Aero",
+                    ModuleKind::Aero(AeroModule {
+                        mode,
+                        geometry: BodyGeometry::Harmonic,
+                        atoms,
+                        pitch_tracking: PitchTracking::Chromatic,
+                        drive: 0.8,
+                        embouchure: 0.6,
+                        p_beat_pa: 1_500.0,
+                        brightness: 0.55,
+                        absorption: 0.045,
+                        radiation,
+                        kerr_semitones: 0.0,
+                        triad_amount: 0.2,
+                        spread: 0.4,
+                        level: 0.9,
+                        ..AeroModule::default()
+                    }),
+                ),
+                RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+            ],
+            vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+        );
+        let g = compile_zone_graph(&z).unwrap();
+        assert_eq!(g.aero_slots.len(), 1);
+        assert!(g.lifetime_envs.is_empty());
+
+        let zspec = spec(&z, &g, sr, 120.0);
+        let mut osc_buf = Vec::with_capacity(8_000);
+        let mut stereo_diff = 0.0_f64;
+        let mut post_40ms_peak = 0.0_f32;
+        let mut retired_after_release = None;
+
+        assert_no_heap_operations(|| {
+            reusable.begin_trigger_from_zone(&zspec);
+            reusable.finalize_trigger(start(69, None), false, false);
+
+            // Blow for 350 ms (16,800 frames) and capture steady oscillation window.
+            for i in 0..16_800 {
+                let f = reusable.next_frame(&bank, None);
+                assert!(
+                    f[0].is_finite() && f[1].is_finite(),
+                    "{mode:?}: non-finite held output"
+                );
+                if i >= 8_800 {
+                    osc_buf.push(f64::from(f[0]));
+                    stereo_diff += f64::from((f[0] - f[1]).abs());
+                }
+            }
+            assert!(
+                reusable.is_active(),
+                "{mode:?}: voice must stay active while held"
+            );
+
+            // Release blowing gate: Out's 15 ms fallback gate must be bypassed so bore rings > 40 ms!
+            reusable.note_off();
+            for step in 0..(sr as usize * 8) {
+                if !reusable.is_active() {
+                    retired_after_release = Some(step);
+                    break;
+                }
+                let f = reusable.next_frame(&bank, None);
+                assert!(
+                    f[0].is_finite() && f[1].is_finite(),
+                    "{mode:?}: non-finite tail output"
+                );
+                if (1_920..4_800).contains(&step) {
+                    post_40ms_peak = post_40ms_peak.max(f[0].abs()).max(f[1].abs());
+                }
+            }
+        });
+
+        // Allow realistic physical jet/reed pitch pulling (±15 Hz around 440 Hz).
+        let p_fund = (425..=455)
+            .step_by(3)
+            .map(|hz| dft_power(&osc_buf, f64::from(hz), sr))
+            .fold(0.0_f64, f64::max);
+        let p_off = dft_power(&osc_buf, 311.0, sr);
+        assert!(
+            p_fund > 1e-4 && p_fund > p_off * 10.0,
+            "{mode:?}: expected strong ~440 Hz oscillation (fund={p_fund:.3e} vs off={p_off:.3e})"
+        );
+        assert!(
+            stereo_diff > 1.0,
+            "{mode:?}: spread=0.4 must produce quadrature stereo image (diff={stereo_diff})"
+        );
+        assert!(
+            post_40ms_peak > 1e-3,
+            "{mode:?}: natural bore tail must outlive 15 ms fallback gate past 40 ms (peak={post_40ms_peak})"
+        );
+        assert!(
+            retired_after_release.is_some(),
+            "{mode:?}: voice failed to retire automatically after bore tail decayed"
+        );
+    }
+
+    // 2. TrigIn gates wind excitation, Cv modulates drive, PitchCv shifts pitch,
+    //    and choke() / force_release() terminate smoothly with zero RT allocations.
+    let trig_zone = build_zone(
+        vec![
+            RackModule::new(
+                1,
+                "GateEnv",
+                ModuleKind::Env(EnvModule {
+                    mode: EnvMode::HoldDecay,
+                    attack_ms: 0.1,
+                    hold_ms: 120.0,
+                    decay_ms: 20.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(
+                2,
+                "DriveEnv",
+                ModuleKind::Env(EnvModule {
+                    mode: EnvMode::HoldDecay,
+                    attack_ms: 0.1,
+                    hold_ms: 200.0,
+                    decay_ms: 20.0,
+                    trigger_mode: TriggerMode::OneShot,
+                    ..EnvModule::default()
+                }),
+            ),
+            RackModule::new(
+                3,
+                "Reed",
+                ModuleKind::Aero(AeroModule {
+                    mode: AeroMode::BrassReed,
+                    drive: 0.35,
+                    radiation: 0.5,
+                    level: 0.9,
+                    ..AeroModule::default()
+                }),
+            ),
+            RackModule::new(4, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![
+            PatchCable::new(1, 1, 3, InPort::TrigIn, 1.0),
+            PatchCable::new(2, 2, 3, InPort::Cv, 0.5),
+            PatchCable::new(3, 2, 3, InPort::PitchCv, 12.0), // +1 octave -> A3 (220) -> A4 (440)
+            PatchCable::new(4, 3, 4, InPort::In, 1.0),
+        ],
+    );
+    let g_trig = compile_zone_graph(&trig_zone).unwrap();
+    let tspec = spec(&trig_zone, &g_trig, sr, 120.0);
+    let mut trig_buf = Vec::with_capacity(4_000);
+    assert_no_heap_operations(|| {
+        reusable.begin_trigger_from_zone(&tspec);
+        reusable.finalize_trigger(start(57, None), false, false);
+        for i in 0..5_500 {
+            let f = reusable.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+            if i >= 1_500 {
+                trig_buf.push(f64::from(f[0]));
+            }
+        }
+        // Choke must fade smoothly to near-silence within ~20 ms and retire cleanly (zero allocs).
+        reusable.choke(sr);
+        let mut post_choke_peak = 0.0_f32;
+        for step in 0..24_000 {
+            let f = reusable.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+            if step >= 1_000 {
+                post_choke_peak = post_choke_peak.max(f[0].abs()).max(f[1].abs());
+            }
+            if !reusable.is_active() {
+                break;
+            }
+        }
+        assert!(
+            post_choke_peak < 1e-3,
+            "choke() must attenuate Aero output within ~20 ms (post_choke_peak={post_choke_peak})"
+        );
+    });
+    let p440 = dft_power(&trig_buf, 440.0, sr);
+    let p220 = dft_power(&trig_buf, 220.0, sr);
+    assert!(
+        p440 > p220 * 5.0 && p440 > 1e-4,
+        "Aero PitchCv (+12 st) + TrigIn + Cv must oscillate at 440 Hz (p440={p440:.3e} vs p220={p220:.3e})"
+    );
+    assert!(
+        !reusable.is_active(),
+        "choke() must silence and retire Aero voice promptly"
+    );
+
+    // 3. Continuous parameter updates on Aero honor per-voice VoiceLocks and force_release retires promptly.
+    let mut lock_zone = build_zone(
+        vec![
+            RackModule::new(1, "Aero", ModuleKind::Aero(AeroModule::default())),
+            RackModule::new(2, "Out", ModuleKind::Out(OutModule::default())),
+        ],
+        vec![PatchCable::new(1, 1, 2, InPort::In, 1.0)],
+    );
+    let g_lock = compile_zone_graph(&lock_zone).unwrap();
+    let lspec = spec(&lock_zone, &g_lock, sr, 120.0);
+    assert_no_heap_operations(|| {
+        reusable.begin_trigger_from_zone(&lspec);
+        reusable.apply_trigger_module_param(
+            1,
+            ModuleParam::Drive,
+            ModuleParam::Drive.normalize(0.85),
+            0,
+            true,
+        );
+        reusable.finalize_trigger(start(60, None), false, false);
+        for _ in 0..2_048 {
+            let _ = reusable.next_frame(&bank, None);
+        }
+    });
+    if let ModuleKind::Aero(ref mut a) = lock_zone.modules[0].kind {
+        a.drive = 0.15;
+        a.embouchure = 0.9;
+        a.radiation = 0.0;
+    }
+    assert_no_heap_operations(|| {
+        reusable.update_continuous_from_zone(&lock_zone, 0.0, 0.0, 120.0);
+        reusable.force_release();
+        for _ in 0..24_000 {
+            let f = reusable.next_frame(&bank, None);
+            assert!(f[0].is_finite() && f[1].is_finite());
+            if !reusable.is_active() {
+                break;
+            }
+        }
+    });
+    let ModuleParams::Aero(aero_target) = reusable.module_target_params(1).unwrap() else {
+        panic!("expected Aero target");
+    };
+    assert!(
+        (aero_target.drive - 0.85).abs() < 1e-4,
+        "locked Aero Drive must survive continuous update: {}",
+        aero_target.drive
+    );
+    assert!(
+        (aero_target.embouchure - 0.9).abs() < 1e-4,
+        "unlocked Aero Embouchure must follow continuous update: {}",
+        aero_target.embouchure
+    );
+    assert!(
+        !reusable.is_active(),
+        "force_release must retire Aero voice promptly even when radiation=0.0"
     );
 }

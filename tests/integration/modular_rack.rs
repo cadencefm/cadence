@@ -159,7 +159,9 @@ fn build_tr909_low_tom_rack(noise_level: f32) -> RackPatch {
                 1,
                 "Body VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Triangle,
+                    waveform: Waveform::BareCubic,
+                    reach: 0.35,
+                    shape: 0.0,
                     pitch_tracking: PitchTracking::Fixed,
                     fixed_hz: 105.0,
                     level: 0.65,
@@ -187,6 +189,7 @@ fn build_tr909_low_tom_rack(noise_level: f32) -> RackPatch {
                     decay_ms: 35.0,
                     sustain: 0.0,
                     release_ms: 10.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::OneShot,
                     delay_ms: 0.0,
                     bursts: 1,
@@ -219,6 +222,7 @@ fn build_tr909_low_tom_rack(noise_level: f32) -> RackPatch {
                     decay_ms: 240.0,
                     sustain: 0.0,
                     release_ms: 20.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::OneShot,
                     delay_ms: 0.0,
                     bursts: 1,
@@ -261,6 +265,7 @@ fn build_tr909_low_tom_rack(noise_level: f32) -> RackPatch {
                     decay_ms: 11.0,
                     sustain: 0.0,
                     release_ms: 5.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::OneShot,
                     delay_ms: 0.0,
                     bursts: 1,
@@ -435,6 +440,7 @@ fn native_single_rack_tr909_clap_renders_four_distinct_bursts_and_delayed_tail()
                     decay_ms: 7.5,
                     sustain: 0.0,
                     release_ms: 5.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::OneShot,
                     delay_ms: 0.0,
                     bursts: 4,
@@ -452,6 +458,7 @@ fn native_single_rack_tr909_clap_renders_four_distinct_bursts_and_delayed_tail()
                     decay_ms: 260.0,
                     sustain: 0.0,
                     release_ms: 20.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::OneShot,
                     delay_ms: 34.0,
                     bursts: 1,
@@ -756,7 +763,7 @@ fn lofi_ring_mod_z1_feedback_and_env_pitched_sampler_work_end_to_end() {
                         1,
                         "VCO",
                         ModuleKind::Vco(VcoModule {
-                            waveform: Waveform::Saw,
+                            waveform: Waveform::MobiusJet,
                             level: 0.55,
                             ..VcoModule::default()
                         }),
@@ -890,6 +897,7 @@ fn lofi_ring_mod_z1_feedback_and_env_pitched_sampler_work_end_to_end() {
                         decay_ms: 50.0,
                         sustain: 0.0,
                         release_ms: 10.0,
+                        cubic_limit: 0.0,
                         trigger_mode: TriggerMode::OneShot,
                         delay_ms: 0.0,
                         bursts: 1,
@@ -1120,6 +1128,7 @@ fn render_kit_round_trip_emits_rack_kit_and_plays_back_with_choke_groups() {
                         decay_ms,
                         sustain: 0.0,
                         release_ms: 10.0,
+                        cubic_limit: 0.0,
                         trigger_mode: TriggerMode::OneShot,
                         delay_ms: 0.0,
                         bursts: 1,
@@ -1483,6 +1492,7 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
                         decay_ms: 3.0,
                         sustain: 0.0,
                         release_ms: 3.0,
+                        cubic_limit: 0.0,
                         trigger_mode: TriggerMode::OneShot,
                         delay_ms: 0.0,
                         bursts: 1,
@@ -1572,6 +1582,7 @@ fn rack_resonator_string_and_nonlinear_plate_roundtrip_and_render() {
                         decay_ms: 35.0,
                         sustain: 0.0,
                         release_ms: 10.0,
+                        cubic_limit: 0.0,
                         trigger_mode: TriggerMode::OneShot,
                         delay_ms: 0.0,
                         bursts: 1,
@@ -1685,7 +1696,8 @@ fn rack_param_descriptors_and_module_metadata_stay_aligned() {
         assert_eq!(ZoneParam::parse(zparam.name()), Some(zparam));
     }
 
-    assert_eq!(ModuleKindTag::ALL.len(), 11);
+    assert_eq!(ModuleKindTag::ALL.len(), 12);
+    assert_eq!(ModuleKindTag::ADDABLE.len(), 11);
     for (idx, &mparam) in ModuleParam::ALL.iter().enumerate() {
         assert_eq!(mparam as usize, idx);
         assert_eq!(ModuleParam::from_slot(idx), Some(mparam));
@@ -1705,6 +1717,63 @@ fn rack_param_descriptors_and_module_metadata_stay_aligned() {
         }
     }
 
+    assert_eq!(
+        ModuleKindTag::Vco.params(),
+        &[
+            ModuleParam::Waveform,
+            ModuleParam::Reach,
+            ModuleParam::Shape,
+            ModuleParam::Chirality,
+            ModuleParam::PulseWidth,
+            ModuleParam::Tune,
+            ModuleParam::Fine,
+            ModuleParam::Phase,
+            ModuleParam::Level,
+            ModuleParam::VcoPitchTrack,
+            ModuleParam::FixedHz,
+            ModuleParam::UnisonVoices,
+            ModuleParam::UnisonDetune,
+            ModuleParam::UnisonWidth,
+        ]
+    );
+    assert_eq!(
+        ModuleKindTag::Aero.params(),
+        &[
+            ModuleParam::AeroMode,
+            ModuleParam::Geometry,
+            ModuleParam::Atoms,
+            ModuleParam::VcoPitchTrack,
+            ModuleParam::Tune,
+            ModuleParam::Fine,
+            ModuleParam::FixedHz,
+            ModuleParam::Drive,
+            ModuleParam::Embouchure,
+            ModuleParam::BeatPressure,
+            ModuleParam::Brightness,
+            ModuleParam::Absorption,
+            ModuleParam::Radiation,
+            ModuleParam::Kerr,
+            ModuleParam::TriadAmount,
+            ModuleParam::Spread,
+            ModuleParam::Level,
+        ]
+    );
+    assert_eq!(
+        ModuleKindTag::Env.params(),
+        &[
+            ModuleParam::EnvMode,
+            ModuleParam::Attack,
+            ModuleParam::Hold,
+            ModuleParam::Decay,
+            ModuleParam::Sustain,
+            ModuleParam::Release,
+            ModuleParam::CubicLimit,
+            ModuleParam::TriggerMode,
+            ModuleParam::DelayMs,
+            ModuleParam::Bursts,
+            ModuleParam::BurstSpacingMs,
+        ]
+    );
     assert_eq!(
         ModuleKindTag::Filter.params(),
         &[

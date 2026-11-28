@@ -1,12 +1,12 @@
-//! The 11 orthogonal Eurorack modules (`Vco`, `Sampler`, `Noise`, `Env`, `Lfo`,
+//! The 12 orthogonal Eurorack modules (`Vco`, `Aero`, `Sampler`, `Noise`, `Env`, `Lfo`,
 //! `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`), port compatibility, and cable attenuverter SPOTs.
 
 use crate::dsp::env::{EnvMode, ModularEnvParams};
 use crate::mixer::{DriveMode, DrivePatch};
 use crate::rack::params::{ModuleParam, LFO_DIVISIONS};
 use crate::rack::types::{
-    FilterMode, InPort, LfoShape, NoiseColor, PitchTracking, ResonatorMode, TriggerMode, Unit,
-    Waveform,
+    AeroMode, BodyGeometry, FilterMode, InPort, LfoShape, NoiseColor, PitchTracking, ResonatorMode,
+    TriggerMode, Unit, Waveform,
 };
 use crate::sampler::{
     normalize_slices, parse_filename_midi, ParamDescriptor, SampleData, SampleLoopMode,
@@ -16,10 +16,37 @@ use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 
 fn default_vco_waveform() -> Waveform {
-    Waveform::Saw
+    Waveform::MobiusJet
+}
+fn default_vco_reach() -> f32 {
+    0.92
 }
 fn default_half() -> f32 {
     0.5
+}
+fn default_aero_atoms() -> u8 {
+    12
+}
+fn default_aero_drive() -> f32 {
+    0.6
+}
+fn default_aero_embouchure() -> f32 {
+    0.55
+}
+fn default_aero_beat_pa() -> f32 {
+    1_500.0
+}
+fn default_aero_absorption() -> f32 {
+    0.045
+}
+fn default_aero_radiation() -> f32 {
+    0.2
+}
+fn default_aero_spread() -> f32 {
+    0.35
+}
+fn default_aero_level() -> f32 {
+    0.85
 }
 fn default_vco_level() -> f32 {
     0.75
@@ -107,9 +134,10 @@ fn default_resonator_position() -> f32 {
 }
 
 crate::define_choice_enum! {
-    /// Discriminant tag for the 11 modular Eurorack [`ModuleKind`] variants.
+    /// Discriminant tag for the 12 modular Eurorack [`ModuleKind`] variants.
     pub enum ModuleKindTag {
         Vco => ("vco", "VCO", ["osc", "oscillator"]),
+        Aero => ("aero", "Aero", ["wind", "flue", "reed", "pipe", "brass"]),
         Sampler => ("sampler", "Sampler", ["smp", "sample"]),
         Noise => ("noise", "Noise", ["noi"]),
         Env => ("env", "Env", ["envelope", "adsr"]),
@@ -128,6 +156,7 @@ impl ModuleKindTag {
     /// All module kinds a user can freely add to a zone (`Out` is singular per zone).
     pub const ADDABLE: &'static [Self] = &[
         Self::Vco,
+        Self::Aero,
         Self::Sampler,
         Self::Noise,
         Self::Env,
@@ -142,6 +171,7 @@ impl ModuleKindTag {
     pub fn short_badge(self) -> &'static str {
         match self {
             Self::Vco => "VCO",
+            Self::Aero => "AERO",
             Self::Sampler => "SMP",
             Self::Noise => "NOISE",
             Self::Env => "ENV",
@@ -162,7 +192,7 @@ impl ModuleKindTag {
     /// Semantic Patchbay column (`0=SOURCES`, `1=MODULATORS`, `2=PROCESSORS`, `3=VCA/OUT`).
     pub const fn column(self) -> u8 {
         match self {
-            Self::Vco | Self::Sampler | Self::Noise => 0,
+            Self::Vco | Self::Aero | Self::Sampler | Self::Noise => 0,
             Self::Env | Self::Lfo => 1,
             Self::Filter | Self::Drive | Self::LoFi | Self::Resonator => 2,
             Self::Vca | Self::Out => 3,
@@ -178,6 +208,7 @@ impl ModuleKindTag {
     pub const fn in_ports(self) -> &'static [InPort] {
         match self {
             Self::Vco => &[InPort::PitchCv, InPort::FmIn, InPort::PwCv],
+            Self::Aero => &[InPort::PitchCv, InPort::TrigIn, InPort::Cv],
             Self::Sampler => &[InPort::PitchCv, InPort::TrigIn],
             Self::Noise | Self::Lfo => &[],
             Self::Env => &[InPort::TrigIn],
@@ -216,9 +247,12 @@ impl ModuleKindTag {
         match self {
             Self::Vco => &[
                 ModuleParam::Waveform,
+                ModuleParam::Reach,
+                ModuleParam::Shape,
+                ModuleParam::Chirality,
+                ModuleParam::PulseWidth,
                 ModuleParam::Tune,
                 ModuleParam::Fine,
-                ModuleParam::PulseWidth,
                 ModuleParam::Phase,
                 ModuleParam::Level,
                 ModuleParam::VcoPitchTrack,
@@ -226,6 +260,25 @@ impl ModuleKindTag {
                 ModuleParam::UnisonVoices,
                 ModuleParam::UnisonDetune,
                 ModuleParam::UnisonWidth,
+            ],
+            Self::Aero => &[
+                ModuleParam::AeroMode,
+                ModuleParam::Geometry,
+                ModuleParam::Atoms,
+                ModuleParam::VcoPitchTrack,
+                ModuleParam::Tune,
+                ModuleParam::Fine,
+                ModuleParam::FixedHz,
+                ModuleParam::Drive,
+                ModuleParam::Embouchure,
+                ModuleParam::BeatPressure,
+                ModuleParam::Brightness,
+                ModuleParam::Absorption,
+                ModuleParam::Radiation,
+                ModuleParam::Kerr,
+                ModuleParam::TriadAmount,
+                ModuleParam::Spread,
+                ModuleParam::Level,
             ],
             Self::Sampler => &[
                 ModuleParam::RootMidi,
@@ -253,6 +306,7 @@ impl ModuleKindTag {
                 ModuleParam::Decay,
                 ModuleParam::Sustain,
                 ModuleParam::Release,
+                ModuleParam::CubicLimit,
                 ModuleParam::TriggerMode,
                 ModuleParam::DelayMs,
                 ModuleParam::Bursts,
@@ -310,6 +364,7 @@ impl ModuleKindTag {
     pub fn default_kind(self) -> ModuleKind {
         match self {
             Self::Vco => ModuleKind::Vco(VcoModule::default()),
+            Self::Aero => ModuleKind::Aero(AeroModule::default()),
             Self::Sampler => ModuleKind::Sampler(SamplerModule::default()),
             Self::Noise => ModuleKind::Noise(NoiseModule::default()),
             Self::Env => ModuleKind::Env(EnvModule::default()),
@@ -324,13 +379,21 @@ impl ModuleKindTag {
     }
 }
 
-/// Bandlimited PolyBLEP/PolyBLAMP VCO with unison (1..=7), optional fixed-frequency mode,
-/// start phase, through-zero linear FM (`FmIn`), pitch CV (`PitchCv`), and PWM (`PwCv`).
+/// Pure `1x`-rate cubic algebraic & Hardy-space VCO with pitch-guarded harmonic reach,
+/// curvature/dipole/formant shaping, M/S quadrature chirality, unison (1..=7), optional
+/// fixed-frequency mode, start phase, `1x` through-zero linear FM (`FmIn`), pitch CV
+/// (`PitchCv`), and dual-purpose PWM/reach CV (`PwCv`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct VcoModule {
     #[serde(default = "default_vco_waveform")]
     pub waveform: Waveform,
+    #[serde(default = "default_vco_reach")]
+    pub reach: f32,
+    #[serde(default = "default_half")]
+    pub shape: f32,
+    #[serde(default)]
+    pub chirality: f32,
     #[serde(default)]
     pub tune_semitones: f32,
     #[serde(default)]
@@ -356,7 +419,10 @@ pub struct VcoModule {
 impl Default for VcoModule {
     fn default() -> Self {
         Self {
-            waveform: Waveform::Saw,
+            waveform: Waveform::MobiusJet,
+            reach: 0.92,
+            shape: 0.5,
+            chirality: 0.0,
             tune_semitones: 0.0,
             fine_cents: 0.0,
             pulse_width: 0.5,
@@ -367,6 +433,72 @@ impl Default for VcoModule {
             unison_voices: 1,
             unison_detune_cents: 12.0,
             unison_width: 0.7,
+        }
+    }
+}
+
+/// Unified single-voice physical wind source (`FlueJet` convective air jet or `BrassReed`
+/// symplectic mechanical blade + rolling-shallot Bernoulli valve) coupled two-way with a
+/// modal acoustic bore (`1..=48` modes).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AeroModule {
+    #[serde(default)]
+    pub mode: AeroMode,
+    #[serde(default)]
+    pub geometry: BodyGeometry,
+    #[serde(default = "default_aero_atoms")]
+    pub atoms: u8,
+    #[serde(default)]
+    pub pitch_tracking: PitchTracking,
+    #[serde(default)]
+    pub tune_semitones: f32,
+    #[serde(default)]
+    pub fine_cents: f32,
+    #[serde(default = "default_fixed_hz")]
+    pub fixed_hz: f32,
+    #[serde(default = "default_aero_drive")]
+    pub drive: f32,
+    #[serde(default = "default_aero_embouchure")]
+    pub embouchure: f32,
+    #[serde(default = "default_aero_beat_pa")]
+    pub p_beat_pa: f32,
+    #[serde(default = "default_half")]
+    pub brightness: f32,
+    #[serde(default = "default_aero_absorption")]
+    pub absorption: f32,
+    #[serde(default = "default_aero_radiation")]
+    pub radiation: f32,
+    #[serde(default)]
+    pub kerr_semitones: f32,
+    #[serde(default)]
+    pub triad_amount: f32,
+    #[serde(default = "default_aero_spread")]
+    pub spread: f32,
+    #[serde(default = "default_aero_level")]
+    pub level: f32,
+}
+
+impl Default for AeroModule {
+    fn default() -> Self {
+        Self {
+            mode: AeroMode::FlueJet,
+            geometry: BodyGeometry::Harmonic,
+            atoms: 12,
+            pitch_tracking: PitchTracking::Chromatic,
+            tune_semitones: 0.0,
+            fine_cents: 0.0,
+            fixed_hz: 440.0,
+            drive: 0.6,
+            embouchure: 0.55,
+            p_beat_pa: 1_500.0,
+            brightness: 0.5,
+            absorption: 0.045,
+            radiation: 0.2,
+            kerr_semitones: 0.0,
+            triad_amount: 0.0,
+            spread: 0.35,
+            level: 0.85,
         }
     }
 }
@@ -745,7 +877,8 @@ impl Default for NoiseModule {
     }
 }
 
-/// Composable ADSR / Hold-Decay envelope generator with pre-delay and multi-burst retriggering.
+/// Composable ADSR / Hold-Decay / 0-Hz Capacitor envelope generator with cubic self-limiting,
+/// additive accent stacking, pre-delay, and multi-burst retriggering.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvModule {
@@ -761,6 +894,8 @@ pub struct EnvModule {
     pub sustain: f32,
     #[serde(default = "default_env_release")]
     pub release_ms: f32,
+    #[serde(default)]
+    pub cubic_limit: f32,
     #[serde(default)]
     pub trigger_mode: TriggerMode,
     #[serde(default)]
@@ -780,6 +915,7 @@ impl Default for EnvModule {
             decay_ms: 250.0,
             sustain: 0.7,
             release_ms: 180.0,
+            cubic_limit: 0.0,
             trigger_mode: TriggerMode::Gate,
             delay_ms: 0.0,
             bursts: 1,
@@ -799,6 +935,7 @@ impl EnvModule {
             decay_ms: self.decay_ms,
             sustain: self.sustain,
             release_ms: self.release_ms,
+            cubic_limit: self.cubic_limit,
             trigger_mode: self.trigger_mode,
             delay_ms: self.delay_ms,
             bursts: self.bursts,
@@ -1057,11 +1194,12 @@ impl Default for OutModule {
     }
 }
 
-/// The 11 orthogonal Eurorack module kinds composing every Cadence instrument zone.
+/// The 12 orthogonal Eurorack module kinds composing every Cadence instrument zone.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModuleKind {
     Vco(VcoModule),
+    Aero(AeroModule),
     Sampler(SamplerModule),
     Noise(NoiseModule),
     Env(EnvModule),
@@ -1079,6 +1217,7 @@ impl ModuleKind {
     pub const fn tag(&self) -> ModuleKindTag {
         match self {
             Self::Vco(_) => ModuleKindTag::Vco,
+            Self::Aero(_) => ModuleKindTag::Aero,
             Self::Sampler(_) => ModuleKindTag::Sampler,
             Self::Noise(_) => ModuleKindTag::Noise,
             Self::Env(_) => ModuleKindTag::Env,
@@ -1166,6 +1305,9 @@ impl ModuleKind {
         match (self, param) {
             // VCO
             (Self::Vco(m), ModuleParam::Waveform) => Some(m.waveform.to_index() as f32),
+            (Self::Vco(m), ModuleParam::Reach) => Some(m.reach),
+            (Self::Vco(m), ModuleParam::Shape) => Some(m.shape),
+            (Self::Vco(m), ModuleParam::Chirality) => Some(m.chirality),
             (Self::Vco(m), ModuleParam::Tune) => Some(m.tune_semitones),
             (Self::Vco(m), ModuleParam::Fine) => Some(m.fine_cents),
             (Self::Vco(m), ModuleParam::PulseWidth) => Some(m.pulse_width),
@@ -1176,6 +1318,24 @@ impl ModuleKind {
             (Self::Vco(m), ModuleParam::UnisonVoices) => Some(f32::from(m.unison_voices)),
             (Self::Vco(m), ModuleParam::UnisonDetune) => Some(m.unison_detune_cents),
             (Self::Vco(m), ModuleParam::UnisonWidth) => Some(m.unison_width),
+            // Aero
+            (Self::Aero(m), ModuleParam::AeroMode) => Some(m.mode.to_index() as f32),
+            (Self::Aero(m), ModuleParam::Geometry) => Some(m.geometry.to_index() as f32),
+            (Self::Aero(m), ModuleParam::Atoms) => Some(f32::from(m.atoms)),
+            (Self::Aero(m), ModuleParam::VcoPitchTrack) => Some(m.pitch_tracking.to_index() as f32),
+            (Self::Aero(m), ModuleParam::Tune) => Some(m.tune_semitones),
+            (Self::Aero(m), ModuleParam::Fine) => Some(m.fine_cents),
+            (Self::Aero(m), ModuleParam::FixedHz) => Some(m.fixed_hz),
+            (Self::Aero(m), ModuleParam::Drive) => Some(m.drive),
+            (Self::Aero(m), ModuleParam::Embouchure) => Some(m.embouchure),
+            (Self::Aero(m), ModuleParam::BeatPressure) => Some(m.p_beat_pa),
+            (Self::Aero(m), ModuleParam::Brightness) => Some(m.brightness),
+            (Self::Aero(m), ModuleParam::Absorption) => Some(m.absorption),
+            (Self::Aero(m), ModuleParam::Radiation) => Some(m.radiation),
+            (Self::Aero(m), ModuleParam::Kerr) => Some(m.kerr_semitones),
+            (Self::Aero(m), ModuleParam::TriadAmount) => Some(m.triad_amount),
+            (Self::Aero(m), ModuleParam::Spread) => Some(m.spread),
+            (Self::Aero(m), ModuleParam::Level) => Some(m.level),
             // Sampler
             (Self::Sampler(m), p) => m.read_native(p),
             // Noise
@@ -1190,6 +1350,7 @@ impl ModuleKind {
             (Self::Env(m), ModuleParam::Decay) => Some(m.decay_ms),
             (Self::Env(m), ModuleParam::Sustain) => Some(m.sustain),
             (Self::Env(m), ModuleParam::Release) => Some(m.release_ms),
+            (Self::Env(m), ModuleParam::CubicLimit) => Some(m.cubic_limit),
             (Self::Env(m), ModuleParam::TriggerMode) => Some(m.trigger_mode.to_index() as f32),
             (Self::Env(m), ModuleParam::DelayMs) => Some(m.delay_ms),
             (Self::Env(m), ModuleParam::Bursts) => Some(f32::from(m.bursts)),
@@ -1262,6 +1423,9 @@ impl ModuleKind {
             (Self::Vco(m), ModuleParam::Waveform) => {
                 m.waveform = Waveform::from_index(value.round().max(0.0) as usize)
             }
+            (Self::Vco(m), ModuleParam::Reach) => m.reach = value,
+            (Self::Vco(m), ModuleParam::Shape) => m.shape = value,
+            (Self::Vco(m), ModuleParam::Chirality) => m.chirality = value,
             (Self::Vco(m), ModuleParam::Tune) => m.tune_semitones = value,
             (Self::Vco(m), ModuleParam::Fine) => m.fine_cents = value,
             (Self::Vco(m), ModuleParam::PulseWidth) => m.pulse_width = value,
@@ -1274,6 +1438,30 @@ impl ModuleKind {
             (Self::Vco(m), ModuleParam::UnisonVoices) => m.unison_voices = value.round() as u8,
             (Self::Vco(m), ModuleParam::UnisonDetune) => m.unison_detune_cents = value,
             (Self::Vco(m), ModuleParam::UnisonWidth) => m.unison_width = value,
+            // Aero
+            (Self::Aero(m), ModuleParam::AeroMode) => {
+                m.mode = AeroMode::from_index(value.round().max(0.0) as usize)
+            }
+            (Self::Aero(m), ModuleParam::Geometry) => {
+                m.geometry = BodyGeometry::from_index(value.round().max(0.0) as usize)
+            }
+            (Self::Aero(m), ModuleParam::Atoms) => m.atoms = value.round() as u8,
+            (Self::Aero(m), ModuleParam::VcoPitchTrack) => {
+                m.pitch_tracking = PitchTracking::from_index(value.round().max(0.0) as usize)
+            }
+            (Self::Aero(m), ModuleParam::Tune) => m.tune_semitones = value,
+            (Self::Aero(m), ModuleParam::Fine) => m.fine_cents = value,
+            (Self::Aero(m), ModuleParam::FixedHz) => m.fixed_hz = value,
+            (Self::Aero(m), ModuleParam::Drive) => m.drive = value,
+            (Self::Aero(m), ModuleParam::Embouchure) => m.embouchure = value,
+            (Self::Aero(m), ModuleParam::BeatPressure) => m.p_beat_pa = value,
+            (Self::Aero(m), ModuleParam::Brightness) => m.brightness = value,
+            (Self::Aero(m), ModuleParam::Absorption) => m.absorption = value,
+            (Self::Aero(m), ModuleParam::Radiation) => m.radiation = value,
+            (Self::Aero(m), ModuleParam::Kerr) => m.kerr_semitones = value,
+            (Self::Aero(m), ModuleParam::TriadAmount) => m.triad_amount = value,
+            (Self::Aero(m), ModuleParam::Spread) => m.spread = value,
+            (Self::Aero(m), ModuleParam::Level) => m.level = value,
             // Noise
             (Self::Noise(m), ModuleParam::NoiseColor) => {
                 m.color = NoiseColor::from_index(value.round().max(0.0) as usize)
@@ -1290,6 +1478,7 @@ impl ModuleKind {
             (Self::Env(m), ModuleParam::Decay) => m.decay_ms = value,
             (Self::Env(m), ModuleParam::Sustain) => m.sustain = value,
             (Self::Env(m), ModuleParam::Release) => m.release_ms = value,
+            (Self::Env(m), ModuleParam::CubicLimit) => m.cubic_limit = value,
             (Self::Env(m), ModuleParam::TriggerMode) => {
                 m.trigger_mode = TriggerMode::from_index(value.round().max(0.0) as usize)
             }
@@ -1520,9 +1709,13 @@ pub const fn cable_amount_range(target_kind: ModuleKindTag, to_port: InPort) -> 
         (_, InPort::TrigIn) => (-2.0, 2.0),
         (ModuleKindTag::Filter, InPort::Cv) => (-6.0, 6.0),
         (ModuleKindTag::Vca, InPort::Cv) => (-2.0, 2.0),
-        (ModuleKindTag::Drive | ModuleKindTag::Resonator | ModuleKindTag::Out, InPort::Cv) => {
-            (-1.0, 1.0)
-        }
+        (
+            ModuleKindTag::Aero
+            | ModuleKindTag::Drive
+            | ModuleKindTag::Resonator
+            | ModuleKindTag::Out,
+            InPort::Cv,
+        ) => (-1.0, 1.0),
         _ => (-2.0, 2.0),
     }
 }
@@ -1549,7 +1742,7 @@ pub const fn cable_default_amount(target_kind: ModuleKindTag, to_port: InPort) -
         (_, InPort::TrigIn) => 1.0,
         (ModuleKindTag::Filter, InPort::Cv) => 2.0,
         (ModuleKindTag::Vca, InPort::Cv) => 1.0,
-        (ModuleKindTag::Drive | ModuleKindTag::Out, InPort::Cv) => 0.5,
+        (ModuleKindTag::Aero | ModuleKindTag::Drive | ModuleKindTag::Out, InPort::Cv) => 0.5,
         (ModuleKindTag::Resonator, InPort::Cv) => 0.35,
         _ => 1.0,
     }
@@ -1711,11 +1904,27 @@ mod tests {
         assert_choice_contract::<ModuleKindTag>();
         assert_choice_contract::<SampleLoopMode>();
         assert_choice_contract::<EnvMode>();
+        assert_choice_contract::<AeroMode>();
+        assert_choice_contract::<BodyGeometry>();
+        assert_choice_contract::<Waveform>();
+        assert_choice_contract::<TriggerMode>();
+
+        assert_eq!(ModuleKindTag::ALL.len(), 12);
+        assert_eq!(ModuleKindTag::ADDABLE.len(), 11);
+        assert!(ModuleKindTag::ADDABLE.contains(&ModuleKindTag::Aero));
+        assert!(!ModuleKindTag::ADDABLE.contains(&ModuleKindTag::Out));
 
         assert_eq!(ModuleKindTag::parse("oscillator"), Some(ModuleKindTag::Vco));
+        assert_eq!(ModuleKindTag::parse("wind"), Some(ModuleKindTag::Aero));
+        assert_eq!(ModuleKindTag::parse("flue"), Some(ModuleKindTag::Aero));
+        assert_eq!(ModuleKindTag::parse("reed"), Some(ModuleKindTag::Aero));
         assert_eq!(
             ModuleKindTag::parse("bitcrusher"),
             Some(ModuleKindTag::LoFi)
+        );
+        assert_eq!(
+            serde_json::to_string(&ModuleKindTag::Aero).unwrap(),
+            "\"aero\""
         );
         assert_eq!(
             serde_json::to_string(&ModuleKindTag::LoFi).unwrap(),
@@ -1726,6 +1935,27 @@ mod tests {
         assert_eq!(SampleLoopMode::parse("pp"), Some(SampleLoopMode::PingPong));
         assert_eq!(EnvMode::parse("0"), Some(EnvMode::Adsr));
         assert_eq!(EnvMode::parse("perc"), Some(EnvMode::HoldDecay));
+        assert_eq!(EnvMode::parse("2"), Some(EnvMode::Capacitor));
+        assert_eq!(EnvMode::parse("cap"), Some(EnvMode::Capacitor));
+        assert_eq!(EnvMode::parse("c13"), Some(EnvMode::Capacitor));
+        assert_eq!(EnvMode::parse("303"), Some(EnvMode::Capacitor));
+
+        let vco = VcoModule::default();
+        assert_eq!(vco.waveform, Waveform::MobiusJet);
+        assert!((vco.reach - 0.92).abs() < 1e-6);
+        assert!((vco.shape - 0.5).abs() < 1e-6);
+        assert!((vco.chirality - 0.0).abs() < 1e-6);
+
+        let aero = AeroModule::default();
+        assert_eq!(aero.mode, AeroMode::FlueJet);
+        assert_eq!(aero.geometry, BodyGeometry::Harmonic);
+        assert_eq!(aero.atoms, 12);
+        let aero_json = serde_json::to_string(&aero).unwrap();
+        assert_eq!(
+            serde_json::from_str::<AeroModule>(&aero_json).unwrap(),
+            aero
+        );
+        assert!(serde_json::from_str::<AeroModule>(r#"{"unknown_field": 1}"#).is_err());
     }
 
     #[test]

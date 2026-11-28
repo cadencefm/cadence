@@ -5,8 +5,8 @@ use super::{
     VoiceModule,
 };
 use crate::modular_voice::ModuleParams;
-use cadence_core::dsp::{ideal_waveform_f64, phase_wrap, LogSmoother, XorShift32};
-use cadence_core::rack::{LfoModule, LfoShape, ModuleKind, ModuleKindTag, ModuleParam, Waveform};
+use cadence_core::dsp::{lfo_shape_sample_f64, phase_wrap, LogSmoother, XorShift32};
+use cadence_core::rack::{LfoModule, LfoShape, ModuleKind, ModuleKindTag, ModuleParam};
 
 #[derive(Clone, Copy, Debug)]
 pub(in crate::modular_voice) struct LfoNode {
@@ -124,12 +124,10 @@ impl VoiceModule for LfoNode {
     #[inline]
     fn process(&mut self, _inputs: &NodeInputs, ctx: &mut ProcessCtx<'_>) -> [f64; 2] {
         let lfo = self.current;
-        let bipolar = match lfo.shape {
-            LfoShape::Sine => ideal_waveform_f64(Waveform::Sine, self.phase, 0.5),
-            LfoShape::Triangle => ideal_waveform_f64(Waveform::Triangle, self.phase, 0.5),
-            LfoShape::Saw => ideal_waveform_f64(Waveform::Saw, self.phase, 0.5),
-            LfoShape::Square => ideal_waveform_f64(Waveform::Pulse, self.phase, 0.5),
-            LfoShape::SampleHold => self.hold,
+        let bipolar = if lfo.shape == LfoShape::SampleHold {
+            self.hold
+        } else {
+            lfo_shape_sample_f64(lfo.shape, self.phase)
         };
         let val = if lfo.bipolar {
             bipolar

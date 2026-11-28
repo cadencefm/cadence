@@ -268,7 +268,7 @@ fn poly_air_rack() -> RackPatch {
                     1,
                     "VCO",
                     ModuleKind::Vco(VcoModule {
-                        waveform: Waveform::Saw,
+                        waveform: Waveform::MobiusJet,
                         unison_voices: 3,
                         unison_detune_cents: 12.0,
                         unison_width: 0.75,

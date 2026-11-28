@@ -116,7 +116,7 @@ fn build_hybrid_kit_project(sample_rel: &str) -> Project {
                 1,
                 "VCO",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     level: 0.75,
                     ..VcoModule::default()
                 }),
@@ -147,6 +147,7 @@ fn build_hybrid_kit_project(sample_rel: &str) -> Project {
                     decay_ms: 250.0,
                     sustain: 0.6,
                     release_ms: 80.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::Gate,
                     delay_ms: 0.0,
                     bursts: 1,
@@ -212,6 +213,7 @@ fn build_hybrid_kit_project(sample_rel: &str) -> Project {
                     decay_ms: 500.0,
                     sustain: 1.0,
                     release_ms: 50.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::Gate,
                     delay_ms: 0.0,
                     bursts: 1,

@@ -54,6 +54,8 @@ fn zone_source_accent(z: &RackZoneView, theme: &Theme) -> Color {
         theme.accent.routing
     } else if z.source_tag == "SYNTH" {
         theme.accent.focus
+    } else if z.source_tag == "AERO" {
+        theme.accent.aero
     } else if z.source_tag == "NOISE" {
         theme.accent.warning_key
     } else {

@@ -6,7 +6,9 @@ use cadence_app::view::{
     PatchbayCableView, PatchbayColumnView, PatchbayDeckView, PatchbayNodeView, RackDeckView,
     RackModulePillView, RackTab, RackZoneView, UiModeKind,
 };
-use cadence_core::rack::{InPort, ModuleKindTag};
+use cadence_core::rack::{
+    AeroMode, BodyGeometry, EnvMode, InPort, ModuleKindTag, TriggerMode, Waveform,
+};
 use cadence_core::sampler::SampleLoopMode;
 
 fn sample_wave() -> Vec<f32> {
@@ -218,13 +220,13 @@ fn base_rack_view(tab: RackTab, visual: ModuleVisualView) -> InstrumentDeckView 
 }
 
 #[test]
-fn all_twelve_module_visuals_and_three_tabs_emit_balanced_display_lists() {
+fn all_module_visuals_and_three_tabs_emit_balanced_display_lists() {
     let theme = Theme::cadence_dark();
     let wave = sample_wave();
     let visuals = vec![
         ModuleVisualView::PinnedOverview {
             pin_count: 6,
-            osc_label: Some("VCO 1 · Saw".into()),
+            osc_label: Some("VCO 1 · Mobius Jet".into()),
             osc_curve: wave.clone(),
             filter_label: Some("Filter · LP12 · 1.2 kHz".into()),
             filter_curve: vec![0.0; 32],
@@ -237,12 +239,38 @@ fn all_twelve_module_visuals_and_three_tabs_emit_balanced_display_lists() {
         ModuleVisualView::Vco {
             module_id: 1,
             name: "VCO 1".into(),
-            label: "VCO 1 · Saw · FM".into(),
-            waveform_label: "Saw",
+            label: "VCO 1 · Mobius PWM · FM".into(),
+            waveform: Waveform::MobiusPwm,
+            waveform_label: "Mobius PWM",
+            reach: 0.92,
+            shape: 0.55,
+            chirality: 0.40,
+            pulse_width: 0.35,
             curve: wave.clone(),
             fm_active: true,
             unison_voices: 3,
             active: true,
+            live_waveform: wave.clone(),
+        },
+        ModuleVisualView::Aero {
+            module_id: 12,
+            name: "Brass Reed".into(),
+            mode: AeroMode::BrassReed,
+            geometry: BodyGeometry::Stopped,
+            atoms: 12,
+            base_hz: 220.0,
+            drive: 0.72,
+            embouchure: 0.58,
+            p_beat_pa: 2_200.0,
+            brightness: 0.65,
+            absorption: 0.05,
+            radiation: 0.25,
+            kerr_semitones: 2.0,
+            triad_amount: 0.40,
+            spread: 0.35,
+            mode_bars: (0..12)
+                .map(|i| (0.18 + i as f32 * 0.06, (1.0 - i as f32 * 0.06).max(0.15)))
+                .collect(),
             live_waveform: wave.clone(),
         },
         ModuleVisualView::Sampler {
@@ -272,11 +300,14 @@ fn all_twelve_module_visuals_and_three_tabs_emit_balanced_display_lists() {
         },
         ModuleVisualView::Env {
             module_id: 4,
-            name: "Clap Env".into(),
-            label: "Clap Env · HoldDecay · 4x".into(),
-            mode_label: "HoldDecay",
-            curve: vec![(0.0, 0.0), (0.1, 1.0), (0.3, 0.2), (0.5, 1.0), (1.0, 0.0)],
-            bursts: 4,
+            name: "Cap Env".into(),
+            label: "Cap Env · 3x · chg 2.0ms · dec 180ms".into(),
+            mode: EnvMode::Capacitor,
+            mode_label: "Capacitor",
+            trigger_mode: TriggerMode::Additive,
+            cubic_limit: 2.5,
+            curve: vec![(0.0, 0.0), (0.1, 1.0), (0.3, 0.4), (0.5, 1.0), (1.0, 0.0)],
+            bursts: 3,
             live_waveform: wave.clone(),
         },
         ModuleVisualView::Lfo {
@@ -511,6 +542,148 @@ fn all_twelve_module_visuals_and_three_tabs_emit_balanced_display_lists() {
     assert!(dl_scroll.base.texts.iter().any(|t| t.text == "◀"));
     assert!(dl_scroll.base.texts.iter().any(|t| t.text == "▶"));
     assert_eq!(dl_scroll.current_clip(), dl_scroll.viewport);
+
+    // Cubic VCO badges across all 8 waveforms, Capacitor+Additive Env badges, and Flue/Brass Aero badges.
+    for wf in Waveform::ALL {
+        let mut dl = DisplayList::new(1200.0, 640.0, 1.0);
+        let view = base_rack_view(
+            RackTab::Panel,
+            ModuleVisualView::Vco {
+                module_id: 1,
+                name: "VCO".into(),
+                label: format!("VCO · {}", wf.label()),
+                waveform: *wf,
+                waveform_label: wf.label(),
+                reach: 0.90,
+                shape: 0.50,
+                chirality: 0.35,
+                pulse_width: 0.30,
+                curve: (0..96)
+                    .map(|i| {
+                        cadence_core::dsp::ideal_waveform(
+                            *wf,
+                            (i as f32 / 96.0) * 2.0,
+                            0.90,
+                            0.50,
+                            0.30,
+                        )
+                    })
+                    .collect(),
+                fm_active: false,
+                unison_voices: 1,
+                active: true,
+                live_waveform: sample_wave(),
+            },
+        );
+        draw_instrument(
+            &mut dl,
+            Rect::new(0.0, 0.0, 1200.0, 640.0),
+            &view,
+            true,
+            UiModeKind::Normal,
+            &theme,
+        );
+        assert_eq!(dl.current_clip(), dl.viewport);
+        assert!(dl.base.texts.iter().any(|t| t.text == wf.label()));
+        assert!(dl.base.texts.iter().any(|t| t.text.starts_with("CHI")));
+        if *wf == Waveform::MobiusPwm {
+            assert!(dl.base.texts.iter().any(|t| t.text.starts_with("PWM")));
+        }
+        if *wf != Waveform::Sine {
+            assert!(dl.base.texts.iter().any(|t| t.text.starts_with("RCH")));
+        }
+    }
+
+    let mut dl_env = DisplayList::new(1200.0, 640.0, 1.0);
+    let env_view = base_rack_view(
+        RackTab::Panel,
+        ModuleVisualView::Env {
+            module_id: 4,
+            name: "Cap Env".into(),
+            label: "Cap Env · chg 2.0ms · dec 180ms".into(),
+            mode: EnvMode::Capacitor,
+            mode_label: "Capacitor",
+            trigger_mode: TriggerMode::Additive,
+            cubic_limit: 2.5,
+            curve: vec![(0.0, 0.0), (0.1, 1.0), (1.0, 0.0)],
+            bursts: 2,
+            live_waveform: sample_wave(),
+        },
+    );
+    draw_instrument(
+        &mut dl_env,
+        Rect::new(0.0, 0.0, 1200.0, 640.0),
+        &env_view,
+        true,
+        UiModeKind::Normal,
+        &theme,
+    );
+    assert_eq!(dl_env.current_clip(), dl_env.viewport);
+    for expected in ["ENV", "CAPACITOR", "ADDITIVE", "LIM 2.5"] {
+        assert!(
+            dl_env.base.texts.iter().any(|t| t.text == expected),
+            "Env Capacitor visual must emit '{expected}' badge"
+        );
+    }
+
+    for (mode, mode_pill, geom, geom_pill) in [
+        (
+            AeroMode::FlueJet,
+            "FLUE JET",
+            BodyGeometry::Harmonic,
+            "HARMONIC",
+        ),
+        (
+            AeroMode::BrassReed,
+            "BRASS REED",
+            BodyGeometry::Stopped,
+            "STOPPED",
+        ),
+    ] {
+        let mut dl_aero = DisplayList::new(1200.0, 640.0, 1.0);
+        let aero_view = base_rack_view(
+            RackTab::Panel,
+            ModuleVisualView::Aero {
+                module_id: 12,
+                name: "Wind".into(),
+                mode,
+                geometry: geom,
+                atoms: 12,
+                base_hz: 220.0,
+                drive: 0.70,
+                embouchure: 0.55,
+                p_beat_pa: 2_000.0,
+                brightness: 0.60,
+                absorption: 0.05,
+                radiation: 0.25,
+                kerr_semitones: 2.0,
+                triad_amount: 0.40,
+                spread: 0.35,
+                mode_bars: (0..12)
+                    .map(|i| (0.2 + i as f32 * 0.06, 1.0 / (i + 1) as f32))
+                    .collect(),
+                live_waveform: sample_wave(),
+            },
+        );
+        draw_instrument(
+            &mut dl_aero,
+            Rect::new(0.0, 0.0, 1200.0, 640.0),
+            &aero_view,
+            true,
+            UiModeKind::Normal,
+            &theme,
+        );
+        assert_eq!(dl_aero.current_clip(), dl_aero.viewport);
+        for expected in ["AERO", mode_pill, geom_pill, "KERR +2.0st", "TRIAD 40%"] {
+            assert!(
+                dl_aero.base.texts.iter().any(|t| t.text == expected),
+                "Aero visual must emit '{expected}' badge"
+            );
+        }
+        if mode == AeroMode::BrassReed {
+            assert!(dl_aero.base.texts.iter().any(|t| t.text == "BEAT 2000Pa"));
+        }
+    }
 }
 
 #[test]

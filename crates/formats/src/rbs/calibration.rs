@@ -75,9 +75,9 @@ pub(super) fn rbs_303_accent(v: u8) -> f32 {
 
 pub(super) fn rbs_303_waveform_f32(v: u8) -> f32 {
     let wf = if v == 0 {
-        Waveform::Saw
+        Waveform::MobiusJet
     } else {
-        Waveform::Pulse
+        Waveform::MobiusPwm
     };
     wf.to_index() as f32
 }
@@ -178,7 +178,7 @@ pub(super) const RBS_DRUM_CHANNEL_GAIN_SCALE: f32 = 0.94;
 /// Unity Echo return strip paired with a headroom-calibrated post-fader send scale so
 /// multi-channel sends and high tempo-synced feedback do not overload the Echo bus.
 pub(super) const RBS_ECHO_RETURN_GAIN: f32 = 1.0;
-pub(super) const RBS_ECHO_SEND_SCALE: f32 = 0.76;
+pub(super) const RBS_ECHO_SEND_SCALE: f32 = 0.48;
 pub(super) const RBS_MASTER_GAIN_SCALE: f32 = 0.88;
 pub(super) const RBS_MASTER_GAIN_MAX: f32 = 0.96;
 /// Nominal source headroom (dB) on imported TB-303 Racks so dual-303 mixes with automated
@@ -331,13 +331,24 @@ pub(super) fn rack_patch_for_303(
         for m in &mut zone.modules {
             if m.id == targets.vco_id {
                 if let ModuleKind::Vco(vco) = &mut m.kind {
-                    vco.level = 1.0;
+                    vco.reach = 0.94;
+                    vco.shape = 0.50;
                     vco.pulse_width = 0.50;
+                    vco.level = 1.0;
                 }
             } else if m.id == targets.filter_id {
                 if let ModuleKind::Filter(flt) = &mut m.kind {
                     flt.mode = FilterMode::DiodeLadder;
                     flt.drive = RBS_303_DRIVE;
+                }
+            } else if m.id == targets.filter_env_id {
+                if let ModuleKind::Env(env) = &mut m.kind {
+                    env.mode = EnvMode::Capacitor;
+                    env.attack_ms = 2.2;
+                    env.hold_ms = 4.0;
+                    env.sustain = 0.0;
+                    env.cubic_limit = 0.45;
+                    env.trigger_mode = TriggerMode::OneShot;
                 }
             }
         }
@@ -623,12 +634,7 @@ pub(super) fn ensure_zone_filter(zone: &mut RackZone) -> Option<u16> {
                 mode: FilterMode::ImLpf2,
                 cutoff_hz: 20_000.0,
                 resonance: 0.0,
-                drive: 0.0,
-                kerr_semitones: 0.0,
-                spread: 0.0,
-                key_tracking: 0.0,
-                vel_amount: 0.0,
-                mix: 1.0,
+                ..FilterModule::default()
             }),
         ),
     )
@@ -660,9 +666,7 @@ pub(super) fn ensure_zone_decay_env(zone: &mut RackZone) -> Option<u16> {
             sustain: 0.0,
             release_ms: 15.0,
             trigger_mode: TriggerMode::OneShot,
-            delay_ms: 0.0,
-            bursts: 1,
-            burst_spacing_ms: 10.0,
+            ..EnvModule::default()
         }),
     );
     let out_pos = zone

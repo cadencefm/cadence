@@ -13,17 +13,17 @@ use cadence_core::mixer::DriveMode;
 use cadence_core::params::{InstrumentParam, ValueMode};
 use cadence_core::presets::PresetCatalog;
 use cadence_core::rack::{
-    DriveModule, EnvModule, FilterMode, FilterModule, InPort, LfoModule, LfoShape, LoFiModule,
-    ModuleKind, ModuleParam, NoiseColor, NoiseModule, OutModule, PanelPin, PatchCable,
-    PitchTracking, RackModule, RackPatch, RackZone, ResonatorMode, ResonatorModule, SamplerModule,
-    TriggerMode, VcaModule, VcoModule, VoiceSettings, Waveform,
+    AeroMode, AeroModule, BodyGeometry, DriveModule, EnvModule, FilterMode, FilterModule, InPort,
+    LfoModule, LfoShape, LoFiModule, ModuleKind, ModuleParam, NoiseColor, NoiseModule, OutModule,
+    PanelPin, PatchCable, PitchTracking, RackModule, RackPatch, RackZone, ResonatorMode,
+    ResonatorModule, SamplerModule, TriggerMode, VcaModule, VcoModule, VoiceSettings, Waveform,
 };
 use cadence_core::runtime::MidiMessage;
 use cadence_core::sampler::{SampleLibrary, SampleLoopMode};
 use cadence_gui::decks::build_display_list;
 use cadence_gui::theme::Theme;
 
-/// Showcase Eurorack modular Rack containing all 11 module kinds + a feedback `z-1` cable.
+/// Showcase Eurorack modular Rack containing all 12 module kinds + a feedback `z-1` cable.
 fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
     let zone = RackZone {
         id: 1,
@@ -42,10 +42,13 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
                 1,
                 "VCO 1",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusPwm,
+                    reach: 0.92,
+                    shape: 0.55,
+                    chirality: 0.40,
                     tune_semitones: 0.0,
                     fine_cents: 0.0,
-                    pulse_width: 0.5,
+                    pulse_width: 0.32,
                     phase_deg: 0.0,
                     level: 0.9,
                     unison_voices: 3,
@@ -61,6 +64,45 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
                     tune_semitones: 12.0,
                     level: 0.7,
                     ..VcoModule::default()
+                }),
+            ),
+            RackModule::new(
+                13,
+                "Flue Pipe",
+                ModuleKind::Aero(AeroModule {
+                    mode: AeroMode::FlueJet,
+                    geometry: BodyGeometry::Harmonic,
+                    atoms: 14,
+                    drive: 0.68,
+                    embouchure: 0.58,
+                    brightness: 0.62,
+                    absorption: 0.045,
+                    radiation: 0.22,
+                    kerr_semitones: 1.5,
+                    triad_amount: 0.35,
+                    spread: 0.40,
+                    level: 0.85,
+                    ..AeroModule::default()
+                }),
+            ),
+            RackModule::new(
+                14,
+                "Brass Horn",
+                ModuleKind::Aero(AeroModule {
+                    mode: AeroMode::BrassReed,
+                    geometry: BodyGeometry::Stopped,
+                    atoms: 12,
+                    drive: 0.74,
+                    embouchure: 0.62,
+                    p_beat_pa: 2_200.0,
+                    brightness: 0.68,
+                    absorption: 0.055,
+                    radiation: 0.28,
+                    kerr_semitones: -2.0,
+                    triad_amount: 0.45,
+                    spread: 0.42,
+                    level: 0.85,
+                    ..AeroModule::default()
                 }),
             ),
             RackModule::new(
@@ -89,18 +131,19 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
             ),
             RackModule::new(
                 5,
-                "Clap Env",
+                "Cap Env",
                 ModuleKind::Env(EnvModule {
-                    mode: EnvMode::HoldDecay,
-                    attack_ms: 1.5,
+                    mode: EnvMode::Capacitor,
+                    attack_ms: 2.0,
                     hold_ms: 4.0,
-                    decay_ms: 140.0,
+                    decay_ms: 180.0,
                     sustain: 0.0,
-                    release_ms: 60.0,
-                    trigger_mode: TriggerMode::OneShot,
+                    release_ms: 80.0,
+                    cubic_limit: 2.5,
+                    trigger_mode: TriggerMode::Additive,
                     delay_ms: 0.0,
-                    bursts: 4,
-                    burst_spacing_ms: 12.0,
+                    bursts: 3,
+                    burst_spacing_ms: 14.0,
                 }),
             ),
             RackModule::new(
@@ -199,6 +242,9 @@ fn build_full_modular_rack(sample_rel_path: &str) -> RackPatch {
             PatchCable::new(11, 2, 10, InPort::Cv, 0.85),
             PatchCable::new(14, 10, 12, InPort::In, 0.85),
             PatchCable::new(12, 12, 11, InPort::In, 1.0),
+            PatchCable::new(15, 13, 7, InPort::In, 0.55),
+            PatchCable::new(16, 14, 7, InPort::In, 0.50),
+            PatchCable::new(17, 5, 13, InPort::Cv, 0.60),
             // Cycle back-edge rendered as dashed `z-1` feedback cable
             PatchCable::new(13, 8, 1, InPort::FmIn, -0.32),
         ],
@@ -381,22 +427,41 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
         );
         assert_ne!(px_pinned_dark, px_pinned_light);
 
-        // 2. All 11 module faceplates render distinctly (including FM-active VCO & Resonator).
-        let module_cases: &[(&str, &str)] = &[
-            ("VCO 1", "rack-03-panel-vco-fm.png"),
-            ("Brass Smp", "rack-04-panel-sampler.png"),
-            ("Pink Air", "rack-05-panel-noise.png"),
-            ("Clap Env", "rack-06-panel-env-burst.png"),
-            ("Sync LFO", "rack-07-panel-lfo.png"),
-            ("Diode Filter", "rack-08-panel-filter-mod.png"),
-            ("Shock Drive", "rack-09-panel-drive.png"),
-            ("Crush LoFi", "rack-10-panel-lofi.png"),
-            ("Ring VCA", "rack-11-panel-vca-ringmod.png"),
-            ("Bronze Plate", "rack-12-panel-resonator.png"),
-            ("Out", "rack-13-panel-out.png"),
+        // 2. All 12 module faceplates render distinctly (including cubic VCO, Flue/Brass Aero,
+        //    Capacitor+Additive Env, and Resonator) in Dark and Light themes where highlighted.
+        let module_cases: &[(&str, &str, Option<&str>)] = &[
+            (
+                "VCO 1",
+                "rack-03-panel-vco-fm-dark.png",
+                Some("rack-03b-panel-vco-fm-light.png"),
+            ),
+            (
+                "Flue Pipe",
+                "rack-03c-panel-aero-flue-dark.png",
+                Some("rack-03d-panel-aero-flue-light.png"),
+            ),
+            (
+                "Brass Horn",
+                "rack-03e-panel-aero-brass-dark.png",
+                Some("rack-03f-panel-aero-brass-light.png"),
+            ),
+            ("Brass Smp", "rack-04-panel-sampler.png", None),
+            ("Pink Air", "rack-05-panel-noise.png", None),
+            (
+                "Cap Env",
+                "rack-06-panel-env-capacitor-dark.png",
+                Some("rack-06b-panel-env-capacitor-light.png"),
+            ),
+            ("Sync LFO", "rack-07-panel-lfo.png", None),
+            ("Diode Filter", "rack-08-panel-filter-mod.png", None),
+            ("Shock Drive", "rack-09-panel-drive.png", None),
+            ("Crush LoFi", "rack-10-panel-lofi.png", None),
+            ("Ring VCA", "rack-11-panel-vca-ringmod.png", None),
+            ("Bronze Plate", "rack-12-panel-resonator.png", None),
+            ("Out", "rack-13-panel-out.png", None),
         ];
         let mut prev_px = px_pinned_dark;
-        for &(mod_name, file) in module_cases {
+        for &(mod_name, file, light_file) in module_cases {
             let slot = {
                 let probe = app.frame_view(&snap, STATUS);
                 probe
@@ -420,8 +485,13 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
                     DeckView::Instrument(iv) => match &iv.visual {
                         InstrumentVisualView::Rack(r) => matches!(
                             &r.visual,
-                            ModuleVisualView::Vco { fm_active: true, label, curve, .. }
-                                if label.contains("FM") && curve.len() >= 96
+                            ModuleVisualView::Vco {
+                                fm_active: true,
+                                waveform: Waveform::MobiusPwm,
+                                label,
+                                curve,
+                                ..
+                            } if label.contains("FM") && curve.len() >= 96
                         ),
                         _ => false,
                     },
@@ -429,8 +499,32 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
                 });
                 assert!(is_fm, "VCO 1 must display active FM curve & FM label");
             }
+            if mod_name == "Brass Horn" {
+                let is_brass = fv.decks.iter().any(|d| match &d.view {
+                    DeckView::Instrument(iv) => match &iv.visual {
+                        InstrumentVisualView::Rack(r) => matches!(
+                            &r.visual,
+                            ModuleVisualView::Aero {
+                                mode: AeroMode::BrassReed,
+                                geometry: BodyGeometry::Stopped,
+                                mode_bars,
+                                ..
+                            } if !mode_bars.is_empty()
+                        ),
+                        _ => false,
+                    },
+                    _ => false,
+                });
+                assert!(is_brass, "Brass Horn must project BrassReed Aero visual");
+            }
             let px = render_checked(gpu, file, &fv, &dark, 0.20);
             assert_ne!(px, prev_px, "{file} must render distinctly from previous");
+            if let Some(lf) = light_file {
+                let mut fv_light = fv;
+                fv_light.chrome.theme = ThemeId::StudioLight;
+                let px_light = render_checked(gpu, lf, &fv_light, &light, 0.20);
+                assert_ne!(px, px_light, "{lf} must differ from dark theme");
+            }
             prev_px = px;
         }
 
@@ -441,7 +535,8 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
         if let Some((inst_id, zone_id)) = app.active_patchbay_target() {
             let mut tel = cadence_core::runtime::RackActivityTelemetry::for_zone(inst_id, zone_id);
             for (i, peak) in [
-                0.88_f32, 0.72, 0.45, 0.92, 0.64, 0.78, 1.12, 0.56, 0.68, 0.74, 0.82,
+                0.88_f32, 0.72, 0.45, 0.92, 0.64, 0.78, 1.12, 0.56, 0.68, 0.74, 0.82, 0.65, 0.76,
+                0.84,
             ]
             .into_iter()
             .enumerate()
@@ -450,6 +545,7 @@ fn gpu_renders_rack_panel_all_modules_patchbay_and_midi_learn_badges() {
             }
             for (i, peak) in [
                 0.84_f32, 0.66, 0.42, 0.75, 0.58, 0.88, 0.72, 0.61, 0.52, 0.79, 0.64, 0.70, 0.68,
+                0.73, 0.77, 0.81, 0.59,
             ]
             .into_iter()
             .enumerate()

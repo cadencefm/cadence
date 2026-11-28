@@ -2,7 +2,7 @@
 //! - Header + mode tabs (`Panel | Patchbay | Zones`), active zone badge, channel output badge,
 //!   and contextual shortcut hints.
 //! - `Panel`: scrollable horizontal module pill strip (`Quick` pins + zone modules) + dedicated
-//!   live GPU visualizers for all 12 `ModuleVisualView` variants (`PinnedOverview`, `Vco`,
+//!   live GPU visualizers for all 13 `ModuleVisualView` variants (`PinnedOverview`, `Vco`, `Aero`,
 //!   `Sampler`, `Noise`, `Env`, `Lfo`, `Filter`, `Vca`, `Drive`, `LoFi`, `Resonator`, `Out`) + control list.
 //! - `Patchbay`: multi-column Eurorack node-and-cable graph delegated strictly to
 //!   [`crate::decks::cable_graph`] (SPOT) with semantic cable colors, inline attenuverter pills,
@@ -127,6 +127,7 @@ fn draw_rack_mode_bar(dl: &mut DisplayList, bar: Rect, rack: &RackDeckView, them
 pub(super) fn module_tag_accent(tag: ModuleKindTag, theme: &Theme) -> Color {
     match tag {
         ModuleKindTag::Vco => theme.accent.routing,
+        ModuleKindTag::Aero => theme.accent.aero,
         ModuleKindTag::Sampler => theme.accent.focus,
         ModuleKindTag::Noise => theme.accent.routing.mix(theme.text.secondary, 0.35),
         ModuleKindTag::Env => theme.accent.playhead,

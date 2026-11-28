@@ -123,7 +123,7 @@ fn cathedral_pad_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     fine_cents: -8.0,
                     level: 0.42,
                     ..VcoModule::default()
@@ -133,7 +133,9 @@ fn cathedral_pad_rack() -> RackPatch {
                 2,
                 "VCO B",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Triangle,
+                    waveform: Waveform::BareCubic,
+                    reach: 0.35,
+                    shape: 0.0,
                     fine_cents: 8.0,
                     level: 0.46,
                     ..VcoModule::default()
@@ -262,7 +264,9 @@ fn glass_marimba_rack() -> RackPatch {
                 2,
                 "VCO B",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Triangle,
+                    waveform: Waveform::BareCubic,
+                    reach: 0.35,
+                    shape: 0.0,
                     tune_semitones: 12.0,
                     fine_cents: 3.0,
                     level: 0.30,
@@ -392,7 +396,9 @@ fn crystal_chime_rack() -> RackPatch {
                 2,
                 "VCO B",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Triangle,
+                    waveform: Waveform::BareCubic,
+                    reach: 0.35,
+                    shape: 0.0,
                     tune_semitones: 12.0,
                     fine_cents: -4.0,
                     level: 0.24,
@@ -518,7 +524,7 @@ fn cello_bass_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     level: 0.58,
                     ..VcoModule::default()
                 }),

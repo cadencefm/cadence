@@ -544,25 +544,42 @@ impl App {
                 | ZoneParam::PitchTracking
                 | ZoneParam::PhaseReset => "named mode or on/off",
             },
-            ParamAddress::Module { param, .. } => match param.unit() {
-                Unit::Hz => "Hz or kHz (e.g. 1200hz, 1.8khz)",
-                Unit::Ms => "ms or s (e.g. 25ms, 0.4s)",
-                Unit::Db => "dB (e.g. -6db, +3db, 0db)",
-                Unit::Pan => "L50 / C / R50, -1..+1, or -100%..+100%",
-                Unit::Semitones => "semitones (e.g. -12, +7)",
-                Unit::Cents => "cents (e.g. -12, +7.5)",
-                Unit::Degrees => "degrees (0..360)",
-                Unit::Octaves => "octaves (e.g. +2.0)",
-                Unit::Note => "MIDI 0–127 or note name (e.g. C3, F#4)",
-                Unit::Bits => "bits (2..24)",
-                Unit::Percent => "0..1 or 0%..100%",
-                Unit::Plain => {
-                    if param.is_discrete() {
-                        "named mode or index"
-                    } else {
-                        "numeric value or % (e.g. 0.5, 50%)"
-                    }
+            ParamAddress::Module { param, .. } => match param {
+                ModuleParam::Waveform => {
+                    "mobius_jet / mobius_pwm / bare_cubic / hardy_saw / sine / szego / dipole / poisson (or index)"
                 }
+                ModuleParam::EnvMode => "adsr / hold_decay / capacitor (or index)",
+                ModuleParam::TriggerMode => "gate / one_shot / additive (or index)",
+                ModuleParam::AeroMode => "flue_jet / brass_reed (or index)",
+                ModuleParam::Geometry => {
+                    "harmonic / stopped / membrane / bar / plate / cluster (or index)"
+                }
+                ModuleParam::Atoms => "integer bore modes (1..48)",
+                ModuleParam::CubicLimit => "cubic limit (0..10, e.g. 0, 2.5)",
+                ModuleParam::Absorption => "damping decimal (0..0.5, e.g. 0.045)",
+                _ => match param.unit() {
+                    Unit::Hz => "Hz or kHz (e.g. 1200hz, 1.8khz)",
+                    Unit::Ms => "ms or s (e.g. 25ms, 0.4s)",
+                    Unit::Db => "dB (e.g. -6db, +3db, 0db)",
+                    Unit::Pan => "L50 / C / R50, -1..+1, or -100%..+100%",
+                    Unit::Semitones => "semitones (e.g. -12, +7)",
+                    Unit::Cents => "cents (e.g. -12, +7.5)",
+                    Unit::Degrees => "degrees (0..360)",
+                    Unit::Octaves => "octaves (e.g. +2.0)",
+                    Unit::Note => "MIDI 0–127 or note name (e.g. C3, F#4)",
+                    Unit::Bits => "bits (2..24)",
+                    Unit::Percent => "0..1 or 0%..100%",
+                    Unit::BipolarPercent => "-1..+1 or -100%..+100% (e.g. -50%, +25%, 0)",
+                    Unit::Pascals => "Pa or kPa (200..8000 Pa, e.g. 1500pa, 1.5kpa)",
+                    Unit::Decimal => "decimal value (e.g. 0.045, 2.5)",
+                    Unit::Plain => {
+                        if param.is_discrete() {
+                            "named mode or index"
+                        } else {
+                            "numeric value or % (e.g. 0.5, 50%)"
+                        }
+                    }
+                },
             },
             ParamAddress::Cable {
                 instrument,
@@ -579,9 +596,8 @@ impl App {
                         InPort::PitchCv => "semitones (e.g. +12st, -24st, 0)",
                         InPort::In => "0..2 or 0%..200% (e.g. 1.0, 100%)",
                         InPort::Cv => "attenuverter (-200%..+200% or octaves)",
-                        InPort::FmIn | InPort::PwCv | InPort::TrigIn => {
-                            "depth (-100%..+100% or 0..1)"
-                        }
+                        InPort::FmIn | InPort::PwCv => "depth (-100%..+100% or 0..1)",
+                        InPort::TrigIn => "trigger scale (-2.0..+2.0, default 1.0)",
                     }
                 } else {
                     "cable attenuverter amount (e.g. 100%, +50%, -0.5)"

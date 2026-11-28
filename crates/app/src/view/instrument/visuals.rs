@@ -1,19 +1,21 @@
 //! Pre-sampled DSP visualization builders for each Rack module kind and the pinned overview.
 use super::{sanitize_wave, ModuleVisualView, RACK_ENV_POINTS};
 use crate::App;
+use cadence_core::dsp::cubic::modal::body_ratio;
+use cadence_core::dsp::cubic::MAX_ATOMS;
 use cadence_core::dsp::{
     drive_transfer_sample, eval_modular_env_curve, filter_magnitude_db, filter_mix_magnitude_db,
-    fm_depth_from_amount, ideal_waveform, lofi_transfer_sample, log_to_norm, midi_to_hz,
-    norm_to_log, phase_wrap, resonator_mode_descriptors, sanitize_sample_rate,
+    fm_depth_from_amount, ideal_waveform, lfo_shape_sample, lofi_transfer_sample, log_to_norm,
+    midi_to_hz, norm_to_log, phase_wrap, resonator_mode_descriptors, sanitize_sample_rate,
     semitones_to_ratio_f64, unison_detune_ratio, NYQUIST_SAFE_RATIO,
 };
 use cadence_core::material::Id;
 use cadence_core::params::{format_hz, InstrumentParam, RackParam};
 use cadence_core::rack::{
-    module_sample_key, DriveModule, EnvModule, FilterMode, FilterModule, InPort, LfoModule,
-    LfoShape, LoFiModule, ModuleKind, ModuleKindTag, NoiseColor, NoiseModule, OutModule,
-    PitchTracking, RackModule, RackPatch, RackZone, ResonatorModule, SamplerModule, VcaModule,
-    VcoModule, Waveform,
+    module_sample_key, AeroMode, AeroModule, DriveModule, EnvMode, EnvModule, FilterMode,
+    FilterModule, InPort, LfoModule, LfoShape, LoFiModule, ModuleKind, ModuleKindTag, NoiseColor,
+    NoiseModule, OutModule, PitchTracking, RackModule, RackPatch, RackZone, ResonatorModule,
+    SamplerModule, VcaModule, VcoModule,
 };
 use cadence_core::runtime::AudioSnapshot;
 
@@ -68,19 +70,21 @@ fn sample_vco_curve(vco: &VcoModule, fm_source: Option<(&VcoModule, f32)>) -> (V
                 let mod_sig = f64::from(ideal_waveform(
                     mod_vco.waveform,
                     phase_wrap(raw_t * fm_ratio + phase_b) as f32,
+                    mod_vco.reach,
+                    mod_vco.shape,
                     mod_vco.pulse_width,
                 ));
                 let phase = phase_wrap(raw_t + phase_a + mod_sig * fm_depth) as f32;
-                ideal_waveform(vco.waveform, phase, vco.pulse_width)
+                ideal_waveform(vco.waveform, phase, vco.reach, vco.shape, vco.pulse_width)
             })
             .collect();
         (curve, true)
     } else {
-        // Half-open [0, 2) sampling prevents right-edge phase == 1.0 wrap spikes on Saw/Pulse.
+        // Half-open [0, 2) sampling prevents right-edge phase == 1.0 wrap discontinuities.
         let curve = (0..RACK_WAVE_POINTS)
             .map(|i| {
                 let phase = phase_wrap((i as f64 / RACK_WAVE_POINTS as f64) * 2.0 + phase_a) as f32;
-                ideal_waveform(vco.waveform, phase, vco.pulse_width)
+                ideal_waveform(vco.waveform, phase, vco.reach, vco.shape, vco.pulse_width)
             })
             .collect();
         (curve, false)
@@ -95,14 +99,11 @@ fn sample_lfo_curve(shape: LfoShape, bipolar: bool) -> Vec<f32> {
             let t = (i as f64 / RACK_WAVE_POINTS as f64) * 2.0;
             let phase = phase_wrap(t) as f32;
             let raw = match shape {
-                LfoShape::Sine => ideal_waveform(Waveform::Sine, phase, 0.5),
-                LfoShape::Triangle => ideal_waveform(Waveform::Triangle, phase, 0.5),
-                LfoShape::Saw => ideal_waveform(Waveform::Saw, phase, 0.5),
-                LfoShape::Square => ideal_waveform(Waveform::Pulse, phase, 0.5),
                 LfoShape::SampleHold => {
                     let step = ((t * 4.0).floor() as usize).min(SH_STEPS.len() - 1);
                     SH_STEPS[step]
                 }
+                other => lfo_shape_sample(other, phase),
             };
             if bipolar {
                 raw.clamp(-1.0, 1.0)
@@ -182,6 +183,9 @@ impl App {
             (ModuleKind::Vco(_), ModuleKind::Vco(v)) => {
                 self.build_vco_visual(&ctx, base_mod, v, live_waveform)
             }
+            (ModuleKind::Aero(_), ModuleKind::Aero(a)) => {
+                build_aero_visual(&ctx, base_mod, a, live_waveform)
+            }
             (ModuleKind::Sampler(_), ModuleKind::Sampler(s)) => {
                 self.build_sampler_visual(&ctx, base_mod, s, live_waveform)
             }
@@ -216,6 +220,51 @@ impl App {
         }
     }
 
+    fn resolve_vco_fm_source(
+        &self,
+        ctx: &VisualCtx<'_>,
+        target_module_id: u16,
+    ) -> Option<(VcoModule, f32)> {
+        ctx.zone.cables.iter().find_map(|c| {
+            if c.to_module == target_module_id && c.to_port == InPort::FmIn {
+                let eff_amt = self
+                    .resolve_live_rack_param(
+                        ctx.inst_id,
+                        InstrumentParam::Cable {
+                            zone: ctx.zone.id,
+                            cable: c.id,
+                        },
+                        ctx.query_time,
+                    )
+                    .map(|norm| {
+                        cadence_core::rack::denormalize_cable_amount(
+                            ModuleKindTag::Vco,
+                            InPort::FmIn,
+                            norm,
+                        )
+                    })
+                    .unwrap_or(c.amount);
+                let src = ctx.zone.module(c.from_module)?;
+                if !matches!(src.kind, ModuleKind::Vco(_)) {
+                    return None;
+                }
+                let (eff_src, _) = self.live_effective_module(
+                    ctx.inst_id,
+                    ctx.rack,
+                    ctx.zone.id,
+                    src,
+                    ctx.query_time,
+                );
+                match eff_src.kind {
+                    ModuleKind::Vco(sv) => Some((sv, eff_amt)),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        })
+    }
+
     fn build_pinned_overview_visual(
         &self,
         ctx: &VisualCtx<'_>,
@@ -237,17 +286,8 @@ impl App {
                 let ModuleKind::Vco(v) = &eff.kind else {
                     unreachable!()
                 };
-                let fm_src = ctx.zone.cables.iter().find_map(|c| {
-                    (c.to_module == m.id && c.to_port == InPort::FmIn).then(|| {
-                        ctx.zone
-                            .module(c.from_module)
-                            .and_then(|src| match &src.kind {
-                                ModuleKind::Vco(sv) => Some((sv, c.amount)),
-                                _ => None,
-                            })
-                    })?
-                });
-                let (curve, fm) = sample_vco_curve(v, fm_src);
+                let fm_src = self.resolve_vco_fm_source(ctx, m.id);
+                let (curve, fm) = sample_vco_curve(v, fm_src.as_ref().map(|(sv, amt)| (sv, *amt)));
                 let lbl = if fm {
                     format!("{} · {} · FM", m.name, v.waveform.label())
                 } else {
@@ -357,14 +397,19 @@ impl App {
                     unreachable!()
                 };
                 let curve = eval_modular_env_curve(e.to_dsp_params(), RACK_ENV_POINTS);
-                let lbl = format!(
-                    "{} · {:.0}/{:.0}/{:.0}%/{:.0}",
-                    m.name,
-                    e.attack_ms,
-                    e.decay_ms,
-                    e.sustain * 100.0,
-                    e.release_ms
-                );
+                let lbl = match e.mode {
+                    EnvMode::Capacitor => {
+                        format!("{} · Cap {:.1}/{:.0}ms", m.name, e.attack_ms, e.decay_ms)
+                    }
+                    _ => format!(
+                        "{} · {:.0}/{:.0}/{:.0}%/{:.0}",
+                        m.name,
+                        e.attack_ms,
+                        e.decay_ms,
+                        e.sustain * 100.0,
+                        e.release_ms
+                    ),
+                };
                 (Some(lbl), curve)
             })
             .unwrap_or((None, Vec::new()));
@@ -390,36 +435,8 @@ impl App {
         v: &VcoModule,
         live_waveform: Vec<f32>,
     ) -> ModuleVisualView {
-        let fm_src = ctx.zone.cables.iter().find_map(|c| {
-            if c.to_module == base_mod.id && c.to_port == InPort::FmIn {
-                let eff_amt = self
-                    .resolve_live_rack_param(
-                        ctx.inst_id,
-                        InstrumentParam::Cable {
-                            zone: ctx.zone.id,
-                            cable: c.id,
-                        },
-                        ctx.query_time,
-                    )
-                    .map(|norm| {
-                        cadence_core::rack::denormalize_cable_amount(
-                            ModuleKindTag::Vco,
-                            InPort::FmIn,
-                            norm,
-                        )
-                    })
-                    .unwrap_or(c.amount);
-                ctx.zone
-                    .module(c.from_module)
-                    .and_then(|src| match &src.kind {
-                        ModuleKind::Vco(sv) => Some((sv, eff_amt)),
-                        _ => None,
-                    })
-            } else {
-                None
-            }
-        });
-        let (curve, fm_active) = sample_vco_curve(v, fm_src);
+        let fm_src = self.resolve_vco_fm_source(ctx, base_mod.id);
+        let (curve, fm_active) = sample_vco_curve(v, fm_src.as_ref().map(|(sv, amt)| (sv, *amt)));
         let label = if fm_active {
             format!("{} · {} · FM", base_mod.name, v.waveform.label())
         } else {
@@ -434,7 +451,12 @@ impl App {
             module_id: base_mod.id,
             name: base_mod.name.clone(),
             label,
+            waveform: v.waveform,
             waveform_label: v.waveform.label(),
+            reach: v.reach,
+            shape: v.shape,
+            chirality: v.chirality,
+            pulse_width: v.pulse_width,
             curve,
             fm_active,
             unison_voices: v.unison_voices,
@@ -525,6 +547,85 @@ impl App {
     }
 }
 
+fn build_aero_visual(
+    ctx: &VisualCtx<'_>,
+    base_mod: &RackModule,
+    a: &AeroModule,
+    live_waveform: Vec<f32>,
+) -> ModuleVisualView {
+    let semi = f64::from(a.tune_semitones) + f64::from(a.fine_cents) * 0.01;
+    let base_hz = match a.pitch_tracking {
+        PitchTracking::Fixed => {
+            (f64::from(a.fixed_hz.max(20.0)) * semitones_to_ratio_f64(semi)).clamp(20.0, 12_000.0)
+        }
+        PitchTracking::Chromatic => {
+            midi_to_hz(f64::from(ctx.zone.root_midi) + semi).clamp(20.0, 12_000.0)
+        }
+    };
+    let geom = a.geometry.to_cubic();
+    let req_n = usize::from(a.atoms).clamp(1, MAX_ATOMS);
+    let mut n = req_n;
+    while n > 1 && base_hz * body_ratio(geom, n - 1, req_n) > 0.44 * ctx.sr {
+        n -= 1;
+    }
+    let brightness = f64::from(a.brightness.clamp(0.0, 1.0));
+    let absorption = f64::from(a.absorption.clamp(0.0, 0.5));
+    let radiation = f64::from(a.radiation.clamp(0.0, 1.0));
+    let tilt_exp = -1.45 + 2.55 * brightness;
+    let denom_n = n.saturating_sub(1).max(1) as f64;
+    let mut raw_modes = Vec::with_capacity(n);
+    let mut max_amp = 1e-9_f64;
+    for k in 0..n {
+        let ratio = body_ratio(geom, k, req_n);
+        let freq_hz = (base_hz * ratio).clamp(20.0, 20_000.0) as f32;
+        let freq_norm = log_to_norm(freq_hz, 20.0, 20_000.0);
+        let raw_amp = match a.mode {
+            AeroMode::FlueJet => {
+                let drv_w = ((k + 1) as f64).powf(-0.78);
+                let rad_w = ratio.powf(tilt_exp);
+                let damp = 1.0
+                    + (0.4 + 2.0 * absorption) * 0.18 * (k as f64)
+                    + 0.15 * radiation * ratio.powf(0.45);
+                (drv_w * rad_w / damp).max(0.0)
+            }
+            AeroMode::BrassReed => {
+                let mode_sc = 0.78_f64.powi(k as i32);
+                let bright_shelf = 1.0 + 0.9 * brightness * (k as f64 / denom_n);
+                let damp = 1.0
+                    + (0.4 + 2.0 * absorption) * 0.15 * (k as f64)
+                    + 0.12 * radiation * ratio.powf(0.45);
+                (mode_sc * bright_shelf / damp).max(0.0)
+            }
+        };
+        max_amp = max_amp.max(raw_amp);
+        raw_modes.push((freq_norm, raw_amp));
+    }
+    let mode_bars = raw_modes
+        .into_iter()
+        .map(|(x, raw)| (x, (raw / max_amp).clamp(0.0, 1.0) as f32))
+        .collect();
+
+    ModuleVisualView::Aero {
+        module_id: base_mod.id,
+        name: base_mod.name.clone(),
+        mode: a.mode,
+        geometry: a.geometry,
+        atoms: a.atoms,
+        base_hz: base_hz as f32,
+        drive: a.drive,
+        embouchure: a.embouchure,
+        p_beat_pa: a.p_beat_pa,
+        brightness: a.brightness,
+        absorption: a.absorption,
+        radiation: a.radiation,
+        kerr_semitones: a.kerr_semitones,
+        triad_amount: a.triad_amount,
+        spread: a.spread,
+        mode_bars,
+        live_waveform,
+    }
+}
+
 fn build_noise_visual(
     ctx: &VisualCtx<'_>,
     base_mod: &RackModule,
@@ -581,7 +682,19 @@ fn build_env_visual(
     live_waveform: Vec<f32>,
 ) -> ModuleVisualView {
     let curve = eval_modular_env_curve(e.to_dsp_params(), RACK_ENV_POINTS);
-    let label = if e.bursts > 1 {
+    let label = if e.mode == EnvMode::Capacitor {
+        if e.bursts > 1 {
+            format!(
+                "{} · {}x · chg {:.1}ms · dec {:.0}ms",
+                base_mod.name, e.bursts, e.attack_ms, e.decay_ms
+            )
+        } else {
+            format!(
+                "{} · chg {:.1}ms · dec {:.0}ms",
+                base_mod.name, e.attack_ms, e.decay_ms
+            )
+        }
+    } else if e.bursts > 1 {
         format!(
             "{} · {} · {}x · {:.0}/{:.0}ms",
             base_mod.name,
@@ -605,7 +718,10 @@ fn build_env_visual(
         module_id: base_mod.id,
         name: base_mod.name.clone(),
         label,
+        mode: e.mode,
         mode_label: e.mode.label(),
+        trigger_mode: e.trigger_mode,
+        cubic_limit: e.cubic_limit,
         curve,
         bursts: e.bursts,
         live_waveform,
@@ -678,7 +794,10 @@ fn build_vca_visual(
         ctx.zone.module(c.from_module).is_some_and(|src| {
             matches!(
                 src.kind,
-                ModuleKind::Vco(_) | ModuleKind::Sampler(_) | ModuleKind::Noise(_)
+                ModuleKind::Vco(_)
+                    | ModuleKind::Aero(_)
+                    | ModuleKind::Sampler(_)
+                    | ModuleKind::Noise(_)
             )
         })
     });

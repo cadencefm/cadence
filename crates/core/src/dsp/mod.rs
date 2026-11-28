@@ -75,9 +75,10 @@ pub use noise::{
     SECONDARY_WEYL_SALT_32,
 };
 pub use osc::{
-    fm_depth_from_amount, ideal_waveform, ideal_waveform_f64, oscillator_sample, phase_wrap,
-    poly_blamp, poly_blep, step_vco_bank, step_vco_bank_fm_2x, unison_detune_ratio,
-    unison_gain_comp, unison_offsets, UnisonVoiceOffset, VcoStepParams, MAX_UNISON,
+    cubic_oscillator_stereo, fm_depth_from_amount, ideal_waveform, ideal_waveform_f64,
+    lfo_shape_sample, lfo_shape_sample_f64, ms_quadrature_encode, oscillator_sample, phase_wrap,
+    step_vco_bank, unison_detune_ratio, unison_gain_comp, unison_offsets, UnisonVoiceOffset,
+    VcoStepParams, CUBIC_MAX_CURVATURE, MAX_UNISON, VCO_MAX_REACH,
 };
 pub use resample::resample_stereo;
 pub use resonator::{
@@ -91,8 +92,8 @@ pub use saturate::{
     asymmetric_drive_shape, asymmetric_drive_shape_f64, drive_shape_mode, drive_shape_mode_asym,
     drive_shape_mode_asym_f64, drive_shape_mode_f64, drive_transfer_sample, soft_clip_drive,
     soft_clip_drive_f64, soft_knee_guard_f64, voice_guard_f64, Drive, DriveShaperCoeffs,
-    Halfband2x, SoftClipCoeffs, DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB,
-    DRIVE_MIN_TONE_HZ, VOICE_GUARD_CEILING, VOICE_GUARD_HEADROOM, VOICE_GUARD_KNEE,
+    SoftClipCoeffs, DRIVE_MAX_OUTPUT_DB, DRIVE_MAX_TONE_HZ, DRIVE_MIN_OUTPUT_DB, DRIVE_MIN_TONE_HZ,
+    VOICE_GUARD_CEILING, VOICE_GUARD_HEADROOM, VOICE_GUARD_KNEE,
 };
 pub use slice::{
     compute_waveform_peaks_window, default_zero_snap_radius, detect_grid_slices,

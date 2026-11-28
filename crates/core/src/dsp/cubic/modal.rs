@@ -632,11 +632,108 @@ pub(crate) fn finite_or(v: f64, fallback: f64) -> f64 {
 }
 
 #[inline]
-pub(crate) fn triad_max_detuning(geometry: BodyGeometry) -> f64 {
+fn triad_max_detuning(geometry: BodyGeometry) -> f64 {
     if geometry == BodyGeometry::Harmonic {
         1e-6
     } else {
         f64::INFINITY
+    }
+}
+
+#[inline]
+pub(crate) fn triad_half_gh(triad_amount: f64, w_body: f64, n: usize, h: f64) -> f64 {
+    let tri_amt = finite_or(triad_amount, 0.0).max(0.0);
+    if tri_amt > 0.0 && n >= 3 {
+        0.5 * tri_amt * tri_amt * 14.0 * w_body * (n as f64).sqrt() * h
+    } else {
+        0.0
+    }
+}
+
+/// Cached 3-body Zakharov resonant triads and coupling step parameters shared by
+/// modal resonators and aeroacoustic bores.
+#[derive(Clone, Debug)]
+pub(crate) struct TriadCache {
+    triads: ResonantTriads,
+    valid: bool,
+    geometry: BodyGeometry,
+    req_n: usize,
+    n: usize,
+    half_gh: f64,
+    axis: TriadAxis,
+}
+
+impl TriadCache {
+    pub(crate) const fn empty() -> Self {
+        Self {
+            triads: ResonantTriads::empty(),
+            valid: false,
+            geometry: BodyGeometry::Harmonic,
+            req_n: 0,
+            n: 0,
+            half_gh: 0.0,
+            axis: TriadAxis::Sum,
+        }
+    }
+
+    /// Rebuild cached resonant triads in place whenever geometry or mode count changes,
+    /// and update the active coupling step `half_gh` and axis weighting.
+    pub(crate) fn ensure(
+        &mut self,
+        geometry: BodyGeometry,
+        req_n: usize,
+        n: usize,
+        omega: &[f64; MAX_ATOMS],
+        half_gh: f64,
+        axis: TriadAxis,
+    ) {
+        let n = n.min(MAX_ATOMS);
+        if !self.valid || self.geometry != geometry || self.req_n != req_n || self.n != n {
+            if n >= 3 {
+                build_resonant_triads_into(
+                    &omega[..n],
+                    3,
+                    triad_max_detuning(geometry),
+                    &mut self.triads,
+                );
+            } else {
+                self.triads.len = 0;
+            }
+            self.valid = true;
+            self.geometry = geometry;
+            self.req_n = req_n;
+            self.n = n;
+        }
+        self.half_gh = half_gh;
+        self.axis = axis;
+    }
+
+    /// Apply a forward or reverse lossless SO(3) Cayley-Rodrigues triad pass when active.
+    #[inline]
+    pub(crate) fn apply_pass(
+        &self,
+        x: &[f64; MAX_ATOMS],
+        y: &mut [f64; MAX_ATOMS],
+        n: usize,
+        half_step: bool,
+        reverse: bool,
+    ) {
+        let step_gh = if half_step {
+            0.5 * self.half_gh
+        } else {
+            self.half_gh
+        };
+        if step_gh > 0.0 {
+            let m = n.min(MAX_ATOMS);
+            triad_rodrigues_pass(
+                &x[..m],
+                &mut y[..m],
+                &self.triads,
+                step_gh,
+                self.axis,
+                reverse,
+            );
+        }
     }
 }
 
@@ -723,13 +820,7 @@ pub struct ModalBank {
     old_x: [f64; MAX_ATOMS],
     old_y: [f64; MAX_ATOMS],
 
-    triads: ResonantTriads,
-    tri_valid: bool,
-    tri_geometry: BodyGeometry,
-    tri_req_n: usize,
-    tri_n: usize,
-    tri_half_gh: f64,
-    tri_axis: TriadAxis,
+    triads: TriadCache,
 }
 
 impl ModalBank {
@@ -772,13 +863,7 @@ impl ModalBank {
             pan_s: [0.0; MAX_ATOMS],
             old_x: [0.0; MAX_ATOMS],
             old_y: [0.0; MAX_ATOMS],
-            triads: ResonantTriads::empty(),
-            tri_valid: false,
-            tri_geometry: BodyGeometry::Harmonic,
-            tri_req_n: 0,
-            tri_n: 0,
-            tri_half_gh: 0.0,
-            tri_axis: TriadAxis::Sum,
+            triads: TriadCache::empty(),
         }
     }
 
@@ -888,34 +973,15 @@ impl ModalBank {
         self.passive = 0.035 * w_body * self.coupling * h;
         self.output_gain = 0.42;
 
-        if !self.tri_valid
-            || self.tri_geometry != config.geometry
-            || self.tri_req_n != req_n
-            || self.tri_n != n
-        {
-            if n >= 3 {
-                build_resonant_triads_into(
-                    &self.omega[..n],
-                    3,
-                    triad_max_detuning(config.geometry),
-                    &mut self.triads,
-                );
-            } else {
-                self.triads.len = 0;
-            }
-            self.tri_valid = true;
-            self.tri_geometry = config.geometry;
-            self.tri_req_n = req_n;
-            self.tri_n = n;
-        }
-
-        self.tri_axis = config.triad_axis;
-        let tri_amt = finite_or(config.triad_amount, 0.0).max(0.0);
-        self.tri_half_gh = if tri_amt > 0.0 && n >= 3 {
-            0.5 * tri_amt * tri_amt * 14.0 * w_body * (n as f64).sqrt() * h
-        } else {
-            0.0
-        };
+        let half_gh = triad_half_gh(config.triad_amount, w_body, n, h);
+        self.triads.ensure(
+            config.geometry,
+            req_n,
+            n,
+            &self.omega,
+            half_gh,
+            config.triad_axis,
+        );
     }
 
     /// Update modal angular frequencies and rotation factors smoothly during pitch glides
@@ -1153,27 +1219,10 @@ impl ModalBank {
                 self.joint_free_step(k, true, 1.0);
             }
             self.couple(false, 1.0);
-            if self.tri_half_gh > 0.0 {
-                triad_rodrigues_pass(
-                    &self.x[..n],
-                    &mut self.y[..n],
-                    &self.triads,
-                    self.tri_half_gh,
-                    self.tri_axis,
-                    false,
-                );
-            }
+            self.triads
+                .apply_pass(&self.x, &mut self.y, n, false, false);
         } else {
-            if self.tri_half_gh > 0.0 {
-                triad_rodrigues_pass(
-                    &self.x[..n],
-                    &mut self.y[..n],
-                    &self.triads,
-                    self.tri_half_gh,
-                    self.tri_axis,
-                    true,
-                );
-            }
+            self.triads.apply_pass(&self.x, &mut self.y, n, false, true);
             self.couple(true, 1.0);
             for k in (0..n).rev() {
                 self.joint_free_step(k, true, 1.0);
@@ -1197,7 +1246,6 @@ impl ModalBank {
             return self.step_free_decay();
         }
         let n = self.n;
-        let half_tri = 0.5 * self.tri_half_gh;
         let half_imp = 0.5 * strike_pulse * drive * velocity * (2.0 / strike_time) * self.h_full;
 
         for k in 0..n {
@@ -1207,24 +1255,8 @@ impl ModalBank {
         for k in 0..n {
             self.y[k] += half_imp * self.hit_w[k];
         }
-        if half_tri > 0.0 {
-            triad_rodrigues_pass(
-                &self.x[..n],
-                &mut self.y[..n],
-                &self.triads,
-                half_tri,
-                self.tri_axis,
-                false,
-            );
-            triad_rodrigues_pass(
-                &self.x[..n],
-                &mut self.y[..n],
-                &self.triads,
-                half_tri,
-                self.tri_axis,
-                true,
-            );
-        }
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, false);
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, true);
         for k in (0..n).rev() {
             self.y[k] += half_imp * self.hit_w[k];
         }
@@ -1243,31 +1275,14 @@ impl ModalBank {
             return self.step_free_decay();
         }
         let n = self.n;
-        let half_tri = 0.5 * self.tri_half_gh;
 
         for k in 0..n {
             self.joint_free_step(k, false, 0.0);
         }
         self.couple(false, 0.5);
         self.drive_port_pass(in_re, in_im, 0.5, false);
-        if half_tri > 0.0 {
-            triad_rodrigues_pass(
-                &self.x[..n],
-                &mut self.y[..n],
-                &self.triads,
-                half_tri,
-                self.tri_axis,
-                false,
-            );
-            triad_rodrigues_pass(
-                &self.x[..n],
-                &mut self.y[..n],
-                &self.triads,
-                half_tri,
-                self.tri_axis,
-                true,
-            );
-        }
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, false);
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, true);
         self.drive_port_pass(in_re, in_im, 0.5, true);
         self.couple(true, 0.5);
         for k in (0..n).rev() {

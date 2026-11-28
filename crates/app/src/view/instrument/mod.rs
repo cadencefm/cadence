@@ -7,7 +7,10 @@ use cadence_core::dsp::sanitize_sample;
 use cadence_core::material::Id;
 use cadence_core::mixer::{ChannelRef, DriveMode};
 use cadence_core::params::{format_hz, format_pan, InstrumentParam, ParamAddress};
-use cadence_core::rack::{InPort, ModuleKind, ModuleKindTag, PitchTracking, RackModule, RackPatch};
+use cadence_core::rack::{
+    AeroMode, BodyGeometry, EnvMode, InPort, ModuleKind, ModuleKindTag, PitchTracking, RackModule,
+    RackPatch, TriggerMode, Waveform,
+};
 use cadence_core::runtime::AudioSnapshot;
 use cadence_core::sampler::SampleLoopMode;
 
@@ -94,12 +97,37 @@ pub enum ModuleVisualView {
         module_id: u16,
         name: String,
         label: String,
+        waveform: Waveform,
         waveform_label: &'static str,
-        /// Two cycles (or extended sub-harmonic ratio window under FM) sampled in `[-1.2, 1.2]`.
+        reach: f32,
+        shape: f32,
+        chirality: f32,
+        pulse_width: f32,
+        /// Two cycles (or extended sub-harmonic ratio window under FM) sampled via `ideal_waveform`.
         curve: Vec<f32>,
         fm_active: bool,
         unison_voices: u8,
         active: bool,
+        live_waveform: Vec<f32>,
+    },
+    Aero {
+        module_id: u16,
+        name: String,
+        mode: AeroMode,
+        geometry: BodyGeometry,
+        atoms: u8,
+        base_hz: f32,
+        drive: f32,
+        embouchure: f32,
+        p_beat_pa: f32,
+        brightness: f32,
+        absorption: f32,
+        radiation: f32,
+        kerr_semitones: f32,
+        triad_amount: f32,
+        spread: f32,
+        /// `(freq_norm, amp_norm)` bore partials derived via `body_ratio` and `brightness`/`absorption`.
+        mode_bars: Vec<(f32, f32)>,
         live_waveform: Vec<f32>,
     },
     Sampler {
@@ -132,7 +160,10 @@ pub enum ModuleVisualView {
         module_id: u16,
         name: String,
         label: String,
+        mode: EnvMode,
         mode_label: &'static str,
+        trigger_mode: TriggerMode,
+        cubic_limit: f32,
         /// Normalized `(x in 0..=1, y in 0..=1)` breakpoints strictly via `eval_modular_env_curve`.
         curve: Vec<(f32, f32)>,
         bursts: u8,
@@ -431,6 +462,18 @@ pub(super) fn sanitize_wave(samples: &[f32]) -> Vec<f32> {
 pub(super) fn module_card_detail(module: &RackModule) -> String {
     match &module.kind {
         ModuleKind::Vco(v) => format!("{} · {:+.0}st", v.waveform.label(), v.tune_semitones),
+        ModuleKind::Aero(a) => {
+            if a.pitch_tracking == PitchTracking::Fixed {
+                format!(
+                    "{} · {} · {}",
+                    a.mode.label(),
+                    a.geometry.label(),
+                    format_hz(a.fixed_hz)
+                )
+            } else {
+                format!("{} · {} · {}m", a.mode.label(), a.geometry.label(), a.atoms)
+            }
+        }
         ModuleKind::Sampler(s) => s
             .path
             .as_deref()

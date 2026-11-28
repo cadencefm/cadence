@@ -28,6 +28,9 @@
             "kind": {
               "type": "vco",
               "waveform": "sine",
+              "reach": 0.92,
+              "shape": 0.5,
+              "chirality": 0.0,
               "tune_semitones": 0.0,
               "fine_cents": 0.0,
               "pulse_width": 0.5,
@@ -46,6 +49,9 @@
             "kind": {
               "type": "vco",
               "waveform": "sine",
+              "reach": 0.92,
+              "shape": 0.5,
+              "chirality": 0.0,
               "tune_semitones": -12.0,
               "fine_cents": 0.0,
               "pulse_width": 0.5,
@@ -94,6 +100,7 @@
               "decay_ms": 220.0,
               "sustain": 0.9,
               "release_ms": 120.0,
+              "cubic_limit": 0.0,
               "trigger_mode": "gate",
               "delay_ms": 0.0,
               "bursts": 1,

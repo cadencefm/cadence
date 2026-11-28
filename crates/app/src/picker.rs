@@ -200,6 +200,23 @@ impl Picker {
     }
 }
 
+pub(crate) fn module_kind_description(tag: ModuleKindTag) -> &'static str {
+    match tag {
+        ModuleKindTag::Vco => "Cubic 1x oscillator · 8 algebraic/Hardy waves · Reach/Shape/Chi/FM",
+        ModuleKindTag::Aero => "Physical wind source · Flue Jet & Brass Reed modal bore",
+        ModuleKindTag::Sampler => "Sample player · WAV loop/slice/pitch",
+        ModuleKindTag::Noise => "Noise source · White/Pink",
+        ModuleKindTag::Env => "ADSR / Hold-Decay / 0-Hz Capacitor envelope (CV modulator)",
+        ModuleKindTag::Lfo => "Low-frequency oscillator (free/sync CV)",
+        ModuleKindTag::Filter => "LP12–24 / Diode 303 / SVF filter · Cutoff/Res/Kerr/Spread",
+        ModuleKindTag::Vca => "Voltage-controlled amplifier / RingMod",
+        ModuleKindTag::Drive => "Cubic 1x waveshaper · Atomic Jet / Shock Port",
+        ModuleKindTag::LoFi => "Bitcrusher & sample-rate reducer",
+        ModuleKindTag::Resonator => "Modal physical resonator · String/Bar/Membrane/Plate",
+        ModuleKindTag::Out => "Voice output stage",
+    }
+}
+
 impl App {
     fn replace_picker_items(&self, what: Replace) -> Vec<(Id, String, String)> {
         match what {
@@ -544,24 +561,11 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, &tag)| {
-                let desc = match tag {
-                    ModuleKindTag::Vco => "Oscillator · Sine/Tri/Saw/Pulse · FM & PW",
-                    ModuleKindTag::Sampler => "Sample player · WAV loop/slice/pitch",
-                    ModuleKindTag::Noise => "Noise source · White/Pink",
-                    ModuleKindTag::Env => "ADSR / Hold-Decay envelope (CV modulator)",
-                    ModuleKindTag::Lfo => "Low-frequency oscillator (free/sync CV)",
-                    ModuleKindTag::Filter => {
-                        "LP12–24 / Diode 303 / SVF filter · Cutoff/Res/Kerr/Spread"
-                    }
-                    ModuleKindTag::Vca => "Voltage-controlled amplifier / RingMod",
-                    ModuleKindTag::Drive => "Cubic 1x waveshaper · Atomic Jet / Shock Port",
-                    ModuleKindTag::LoFi => "Bitcrusher & sample-rate reducer",
-                    ModuleKindTag::Resonator => {
-                        "Modal physical resonator · String/Bar/Membrane/Plate"
-                    }
-                    ModuleKindTag::Out => "Voice output stage",
-                };
-                (i as Id, tag.label().to_string(), desc.to_string())
+                (
+                    i as Id,
+                    tag.label().to_string(),
+                    module_kind_description(tag).to_string(),
+                )
             })
             .collect();
         self.open_picker(Picker {
@@ -577,7 +581,8 @@ impl App {
             searching: false,
             cursor: 0,
         });
-        self.status = "Add module · j/k select · 1–9, 0 or Enter add · Esc cancel".into();
+        self.status =
+            "Add module · j/k select · / filter · 1–9, 0 or Enter add · Esc cancel".into();
         Ok(Outcome::default())
     }
 

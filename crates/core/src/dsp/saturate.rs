@@ -9,9 +9,9 @@ use crate::dsp::biquad::{DcBlocker, TptOnePoleLpf};
 use crate::dsp::cubic::math::{atomic_jet, atomic_pair_scalar};
 use crate::dsp::math::{
     clamp_freq_hz, control_stride_last_tick, control_stride_mask, db_to_lin, db_to_lin_f64,
-    flush_denormal_f64, mix_stereo_f64, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame,
-    sanitize_sample, sanitize_sample_f64, sanitize_sample_rate, BypassFader, BypassStep,
-    LogSmoother, Smoother, LIN_FLOOR_F64, NYQUIST_SAFE_RATIO,
+    mix_stereo_f64, one_pole_coeff_ms, sanitize_clamp_f64, sanitize_frame, sanitize_sample,
+    sanitize_sample_f64, sanitize_sample_rate, BypassFader, BypassStep, LogSmoother, Smoother,
+    LIN_FLOOR_F64, NYQUIST_SAFE_RATIO,
 };
 use crate::mixer::{DriveMode, DrivePatch};
 
@@ -332,119 +332,6 @@ pub fn drive_transfer_sample(x: f32, patch: &DrivePatch) -> f32 {
         db_to_lin(sanitize_sample(patch.output_db).clamp(DRIVE_MIN_OUTPUT_DB, DRIVE_MAX_OUTPUT_DB));
     let mix = sanitize_sample(patch.mix).clamp(0.0, 1.0);
     x * (1.0 - mix) + shaped * out_gain * mix
-}
-
-/// 9th-order elliptic polyphase allpass halfband 2× oversampler coefficients (`65 dB` stopband).
-///
-/// Transfer function `H(z) = 0.5 · (A0(z²) + z⁻¹ · A1(z²))`, where each branch cascades two
-/// first-order allpass sections `(a + z⁻²) / (1 + a·z⁻²)`.
-/// Passband ripple is `< 0.005 dB` up to `0.43·fs` (`19 kHz` at `44.1 kHz`) with `>= 65 dB`
-/// image/alias suppression above `0.59·fs`.
-const HALFBAND_A0: [f64; 2] = [0.089_432_841_682, 0.576_520_547_749];
-const HALFBAND_A1: [f64; 2] = [0.310_201_463_863, 0.850_257_852_675];
-
-/// Zero-allocation stereo polyphase allpass halfband 2× upsampler + downsampler.
-///
-/// Uses Direct-Form II Transposed first-order allpass stages (1 `f64` state per stage per
-/// channel, 144 bytes total for stereo up+down) so passband frequencies up to `19 kHz`
-/// pass with `< 0.01 dB` ripple while double-rate foldback aliases are suppressed by `> 40 dB`.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Halfband2x {
-    up_a0: [[f64; 2]; 2],
-    up_a1: [[f64; 2]; 2],
-    dn_a0: [[f64; 2]; 2],
-    dn_a1: [[f64; 2]; 2],
-    dn_odd_prev: [f64; 2],
-}
-
-impl Halfband2x {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn reset(&mut self) {
-        *self = Self::default();
-    }
-
-    #[inline]
-    fn cascade(state: &mut [f64; 2], coeffs: &[f64; 2], mut x: f64) -> f64 {
-        for i in 0..2 {
-            let a = coeffs[i];
-            let y = a * x + state[i];
-            state[i] = flush_denormal_f64(x - a * y);
-            x = y;
-        }
-        x
-    }
-
-    /// Upsample one mono base-rate sample (channel 0) into `(even, odd)` double-rate samples.
-    #[inline]
-    pub fn upsample_mono(&mut self, input: f64) -> (f64, f64) {
-        let x0 = sanitize_sample_f64(input);
-        let even = Self::cascade(&mut self.up_a0[0], &HALFBAND_A0, x0);
-        let odd = Self::cascade(&mut self.up_a1[0], &HALFBAND_A1, x0);
-        (even, odd)
-    }
-
-    /// Upsample one stereo base-rate frame into `(even, odd)` double-rate frames.
-    #[inline]
-    pub fn upsample_stereo(&mut self, input: [f64; 2]) -> ([f64; 2], [f64; 2]) {
-        let x0 = sanitize_sample_f64(input[0]);
-        let x1 = sanitize_sample_f64(input[1]);
-        let even = [
-            Self::cascade(&mut self.up_a0[0], &HALFBAND_A0, x0),
-            Self::cascade(&mut self.up_a0[1], &HALFBAND_A0, x1),
-        ];
-        let odd = [
-            Self::cascade(&mut self.up_a1[0], &HALFBAND_A1, x0),
-            Self::cascade(&mut self.up_a1[1], &HALFBAND_A1, x1),
-        ];
-        (even, odd)
-    }
-
-    /// Downsample one `(even, odd)` double-rate frame pair back into one stereo base-rate frame.
-    #[inline]
-    pub fn downsample_stereo(&mut self, even: [f64; 2], odd: [f64; 2]) -> [f64; 2] {
-        let e0 = sanitize_sample_f64(even[0]);
-        let e1 = sanitize_sample_f64(even[1]);
-        let o0 = sanitize_sample_f64(odd[0]);
-        let o1 = sanitize_sample_f64(odd[1]);
-        let out = [
-            0.5 * (Self::cascade(&mut self.dn_a0[0], &HALFBAND_A0, e0)
-                + Self::cascade(&mut self.dn_a1[0], &HALFBAND_A1, self.dn_odd_prev[0])),
-            0.5 * (Self::cascade(&mut self.dn_a0[1], &HALFBAND_A0, e1)
-                + Self::cascade(&mut self.dn_a1[1], &HALFBAND_A1, self.dn_odd_prev[1])),
-        ];
-        self.dn_odd_prev = [o0, o1];
-        out
-    }
-
-    /// Process one stereo frame at 2× oversampling through a double-rate stereo closure `f`.
-    #[inline]
-    pub fn process_stereo_with(
-        &mut self,
-        input: [f64; 2],
-        mut f: impl FnMut([f64; 2]) -> [f64; 2],
-    ) -> [f64; 2] {
-        let (u_even, u_odd) = self.upsample_stereo(input);
-        let y_even = f(u_even);
-        let y_odd = f(u_odd);
-        self.downsample_stereo(y_even, y_odd)
-    }
-
-    /// True once all internal filter states have decayed below the silence floor.
-    #[inline]
-    pub fn quiet(&self) -> bool {
-        const EPS: f64 = 1e-10;
-        self.up_a0
-            .iter()
-            .chain(self.up_a1.iter())
-            .chain(self.dn_a0.iter())
-            .chain(self.dn_a1.iter())
-            .flatten()
-            .chain(self.dn_odd_prev.iter())
-            .all(|v| v.abs() < EPS)
-    }
 }
 
 /// Pure `1×`-rate cubic multi-mode saturation insert composing [`DriveShaperCoeffs`]
@@ -1010,29 +897,6 @@ mod tests {
         assert_eq!(voice_guard_f64(f64::NAN), 0.0);
         assert_eq!(voice_guard_f64(f64::INFINITY), 0.0);
         assert_eq!(voice_guard_f64(f64::NEG_INFINITY), 0.0);
-    }
-
-    #[test]
-    fn halfband_2x_preserves_flat_passband() {
-        let sr44 = 44_100.0;
-        for &freq_hz in &[200.0_f64, 5_000.0, 14_000.0, 18_000.0, 19_000.0] {
-            let mut hb = Halfband2x::new();
-            let mut in_sq = 0.0_f64;
-            let mut out_sq = 0.0_f64;
-            for i in 0..4_096 {
-                let x = (TAU * freq_hz * i as f64 / sr44).sin();
-                let y = hb.process_stereo_with([x, x], |s| s);
-                if i >= 1_024 {
-                    in_sq += x * x;
-                    out_sq += y[0] * y[0];
-                }
-            }
-            let diff_db = crate::dsp::lin_to_db_f64((out_sq / in_sq).sqrt());
-            assert!(
-                diff_db.abs() < 0.02,
-                "Halfband2x must be flat at {freq_hz} Hz @ 44.1 kHz, got {diff_db:+.4} dB"
-            );
-        }
     }
 
     #[test]

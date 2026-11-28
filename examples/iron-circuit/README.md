@@ -42,7 +42,7 @@ Once open:
 - **Unified Modular `Rack` Architecture Across All Roles (7 instruments, 29 MIT repo-relative samples):**
   - **Dual Multi-Zone Kit `Rack`s:** `TR-808` (16 zones, `../../factory-samples/tr-808/`) and `TR-909` (11 zones, `../../factory-samples/tr-909/`) with choke groups, equal-power zone panning, per-zone `ZoneParam` P-locks (conga pan & clap filter), and continuous `909 OH` cutoff modulation.
   - **Standalone `Sampler` `Rack`s:** `Electro Stab` (`../../examples/demo/samples/brass-pad.wav`, filtered/chorused Detroit chord stab) plus dedicated `808 Kick` sampler driving sidechain `Duck` cleanly without false triggers from percussion.
-  - **Sculpted Synth `Rack`s:** `Acid 303` (saw into 4-pole nonlinear `DiodeLadder` with mono legato glide & velocity accents), `Fold Bass` (triangle+sine mono bass), and `Gate Pad` (wide 2-voice unison saw/pulse Am9 pad).
+  - **Sculpted Synth `Rack`s:** `Acid 303` (`MobiusJet` into 4-pole nonlinear `DiodeLadder` with mono legato glide & velocity accents), `Fold Bass` (`BareCubic` + `Sine` mono bass), and `Gate Pad` (wide 2-voice unison `MobiusJet`/`MobiusPwm` Am9 pad).
 - **Nested `Group → Group` DAG Routing (12 channels + Master):**
   - `808 Kit` + `909 Kit` → **`Percussion` Group** (`Compressor` + `Drive(AtomicJet)`) → **`Rhythm` Group** (joined by `Fold Bass`, `Eq` + `Compressor`) → `Master`.
   - `Acid 303` + `Electro Stab` + `Gate Pad` → **`Synths` Group** (`Eq`, sidechain `Duck` off `808 Kick`) → `Master`.

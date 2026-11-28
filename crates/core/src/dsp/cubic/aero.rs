@@ -14,10 +14,12 @@ use super::math::{
     MAX_ATOMS, NOMINAL_CHEST_PA, SQRT3, TAU,
 };
 use super::modal::{
-    body_ratio, build_resonant_triads_into, couple_pairs, finite_or, joint_free_mode,
-    sanitize_fundamental, triad_max_detuning, triad_rodrigues_pass, BodyGeometry, CoupleParams,
-    FreeStepCoeffs, PairTopology, ResonantTriads, TriadAxis,
+    body_ratio, couple_pairs, finite_or, joint_free_mode, sanitize_fundamental, triad_half_gh,
+    BodyGeometry, CoupleParams, FreeStepCoeffs, PairTopology, TriadAxis, TriadCache,
 };
+
+/// Dimensionless energy floor below which an ungated aeroacoustic bore tail is considered quiet.
+const AERO_QUIET_FLOOR: f64 = 1e-14;
 
 #[inline]
 fn sanitize_seed(seed: u64) -> u64 {
@@ -120,13 +122,7 @@ pub struct FlueJet {
     pan_c: [f64; MAX_ATOMS],
     pan_s: [f64; MAX_ATOMS],
 
-    triads: ResonantTriads,
-    tri_valid: bool,
-    tri_geometry: BodyGeometry,
-    tri_req_n: usize,
-    tri_n: usize,
-    tri_half_gh: f64,
-    tri_axis: TriadAxis,
+    triads: TriadCache,
 }
 
 impl FlueJet {
@@ -173,13 +169,7 @@ impl FlueJet {
             read: [0.0; MAX_ATOMS],
             pan_c: [1.0; MAX_ATOMS],
             pan_s: [0.0; MAX_ATOMS],
-            triads: ResonantTriads::empty(),
-            tri_valid: false,
-            tri_geometry: BodyGeometry::Harmonic,
-            tri_req_n: 0,
-            tri_n: 0,
-            tri_half_gh: 0.0,
-            tri_axis: TriadAxis::Sum,
+            triads: TriadCache::empty(),
         }
     }
 
@@ -299,34 +289,15 @@ impl FlueJet {
         self.passive = 0.035 * w_body * coupling * h;
         self.output_gain = 1.15;
 
-        if !self.tri_valid
-            || self.tri_geometry != config.geometry
-            || self.tri_req_n != req_n
-            || self.tri_n != n
-        {
-            if n >= 3 {
-                build_resonant_triads_into(
-                    &self.omega[..n],
-                    3,
-                    triad_max_detuning(config.geometry),
-                    &mut self.triads,
-                );
-            } else {
-                self.triads.len = 0;
-            }
-            self.tri_valid = true;
-            self.tri_geometry = config.geometry;
-            self.tri_req_n = req_n;
-            self.tri_n = n;
-        }
-
-        self.tri_axis = config.triad_axis;
-        let tri_amt = finite_or(config.triad_amount, 0.0).max(0.0);
-        self.tri_half_gh = if tri_amt > 0.0 && n >= 3 {
-            0.5 * tri_amt * tri_amt * 14.0 * w_body * (n as f64).sqrt() * h
-        } else {
-            0.0
-        };
+        let half_gh = triad_half_gh(config.triad_amount, w_body, n, h);
+        self.triads.ensure(
+            config.geometry,
+            req_n,
+            n,
+            &self.omega,
+            half_gh,
+            config.triad_axis,
+        );
     }
 
     /// Reset jet, bore state, gate, and PRNG to clean silence while preserving configuration.
@@ -406,7 +377,6 @@ impl FlueJet {
     /// instead of the internal PRNG.
     pub fn step_with_noise(&mut self, noise_sample: f64) -> [f64; 2] {
         let n = self.n;
-        let half_tri = 0.5 * self.tri_half_gh;
         let couple = CoupleParams {
             n,
             topology: self.pair_topology,
@@ -418,16 +388,7 @@ impl FlueJet {
             self.joint_free_half(k);
         }
         couple_pairs(&mut self.x, &mut self.y, couple, false, 0.5);
-        if half_tri > 0.0 {
-            triad_rodrigues_pass(
-                &self.x[..n],
-                &mut self.y[..n],
-                &self.triads,
-                half_tri,
-                self.tri_axis,
-                false,
-            );
-        }
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, false);
 
         let mut qx = self.jet_c * self.qx - self.jet_s * self.qy;
         let mut qy = self.jet_s * self.qx + self.jet_c * self.qy;
@@ -456,16 +417,7 @@ impl FlueJet {
         self.qx = self.jet_c * qx - self.jet_s * qy;
         self.qy = self.jet_s * qx + self.jet_c * qy;
 
-        if half_tri > 0.0 {
-            triad_rodrigues_pass(
-                &self.x[..n],
-                &mut self.y[..n],
-                &self.triads,
-                half_tri,
-                self.tri_axis,
-                true,
-            );
-        }
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, true);
         couple_pairs(&mut self.x, &mut self.y, couple, true, 0.5);
         for k in (0..n).rev() {
             self.joint_free_half(k);
@@ -498,6 +450,13 @@ impl FlueJet {
             en += self.x[k] * self.x[k] + self.y[k] * self.y[k];
         }
         en
+    }
+
+    /// True when the blowing gate is closed and combined jet and bore energy has decayed
+    /// below `1e-14`.
+    #[inline]
+    pub fn is_quiet(&self) -> bool {
+        !self.gate && self.energy() < AERO_QUIET_FLOOR
     }
 }
 
@@ -609,13 +568,7 @@ pub struct BrassReed {
     pan_c: [f64; MAX_ATOMS],
     pan_s: [f64; MAX_ATOMS],
 
-    triads: ResonantTriads,
-    tri_valid: bool,
-    tri_geometry: BodyGeometry,
-    tri_req_n: usize,
-    tri_n: usize,
-    tri_half_gh: f64,
-    tri_axis: TriadAxis,
+    triads: TriadCache,
 }
 
 impl BrassReed {
@@ -661,13 +614,7 @@ impl BrassReed {
             read: [0.0; MAX_ATOMS],
             pan_c: [1.0; MAX_ATOMS],
             pan_s: [0.0; MAX_ATOMS],
-            triads: ResonantTriads::empty(),
-            tri_valid: false,
-            tri_geometry: BodyGeometry::Harmonic,
-            tri_req_n: 0,
-            tri_n: 0,
-            tri_half_gh: 0.0,
-            tri_axis: TriadAxis::Manley,
+            triads: TriadCache::empty(),
         }
     }
 
@@ -799,34 +746,15 @@ impl BrassReed {
         self.passive = 0.035 * w_body * coupling * h;
         self.output_gain = 0.32;
 
-        if !self.tri_valid
-            || self.tri_geometry != config.geometry
-            || self.tri_req_n != req_n
-            || self.tri_n != n
-        {
-            if n >= 3 {
-                build_resonant_triads_into(
-                    &self.omega[..n],
-                    3,
-                    triad_max_detuning(config.geometry),
-                    &mut self.triads,
-                );
-            } else {
-                self.triads.len = 0;
-            }
-            self.tri_valid = true;
-            self.tri_geometry = config.geometry;
-            self.tri_req_n = req_n;
-            self.tri_n = n;
-        }
-
-        self.tri_axis = config.triad_axis;
-        let tri_amt = finite_or(config.triad_amount, 0.0).max(0.0);
-        self.tri_half_gh = if tri_amt > 0.0 && n >= 3 {
-            (0.5 * tri_amt * tri_amt * 14.0 * w_body * (n as f64).sqrt() * h) / self.z_ref0
-        } else {
-            0.0
-        };
+        let half_gh = triad_half_gh(config.triad_amount, w_body, n, h) / self.z_ref0;
+        self.triads.ensure(
+            config.geometry,
+            req_n,
+            n,
+            &self.omega,
+            half_gh,
+            config.triad_axis,
+        );
     }
 
     /// Reset bore, reed tongue, gate, and wind plenum to nominal idle state while preserving
@@ -916,7 +844,6 @@ impl BrassReed {
         let dt = self.h_full;
         let h_half = self.h_half;
         let c_air = self.c_air;
-        let half_tri = 0.5 * self.tri_half_gh;
         let couple = CoupleParams {
             n,
             topology: self.pair_topology,
@@ -949,16 +876,7 @@ impl BrassReed {
         }
 
         // 4. Triad(h/2, fwd) — lossless SO(3) isometry
-        if half_tri > 0.0 {
-            triad_rodrigues_pass(
-                &self.x[..n],
-                &mut self.y[..n],
-                &self.triads,
-                half_tri,
-                self.tri_axis,
-                false,
-            );
-        }
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, false);
 
         // 5. ValveFree(h/2): exact bare-cubic radial contraction + rotation
         let vr0 = self.zv_re;
@@ -1038,16 +956,7 @@ impl BrassReed {
         ledger.diss_valve += ev1 - 0.5 * (self.zv_re * self.zv_re + self.zv_im * self.zv_im);
 
         // 8. Triad(h/2, rev) — lossless SO(3) isometry
-        if half_tri > 0.0 {
-            triad_rodrigues_pass(
-                &self.x[..n],
-                &mut self.y[..n],
-                &self.triads,
-                half_tri,
-                self.tri_axis,
-                true,
-            );
-        }
+        self.triads.apply_pass(&self.x, &mut self.y, n, true, true);
 
         // 9. Pair(h/2, rev)
         if self.passive > 0.0 && n >= 2 {
@@ -1125,5 +1034,133 @@ impl BrassReed {
     pub fn bore_audibility(&self) -> f64 {
         let e_ref = 0.5 * self.z_ref0 * self.z_ref0;
         self.bore_energy_joules() / e_ref.max(1e-30)
+    }
+
+    /// True when the reed valve gate is closed and pitch-normalized bore energy
+    /// ([`Self::bore_audibility`]) has decayed below `1e-14`.
+    ///
+    /// While `!self.gate`, the pneumatic plenum continues recharging toward supply pressure
+    /// and the mechanical reed blade is decoupled from both the bore modes and stereo readout,
+    /// so voice-tail silence is governed strictly by bore acoustic energy.
+    #[inline]
+    pub fn is_quiet(&self) -> bool {
+        !self.gate && self.bore_audibility() < AERO_QUIET_FLOOR
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flue_jet_and_brass_reed_bore_tail_quiet_lifecycle() {
+        let sr = 48_000.0;
+
+        // FlueJet: quiet when idle, active while gated, rings after release, then retires cleanly.
+        let mut flue = FlueJet::new_boxed(
+            sr,
+            FlueJetConfig {
+                fundamental_hz: 440.0,
+                atoms: 8,
+                drive: 0.75,
+                velocity: 0.9,
+                radiation: 0.25,
+                triad_amount: 0.3,
+                ..FlueJetConfig::default()
+            },
+        );
+        assert!(!flue.gate());
+        assert!(flue.is_quiet());
+
+        flue.set_gate(true);
+        assert!(flue.gate());
+        assert!(!flue.is_quiet());
+        for _ in 0..8_000 {
+            flue.step();
+        }
+        assert!(flue.energy() > 1e-4);
+
+        flue.set_gate(false);
+        assert!(!flue.gate());
+        assert!(
+            !flue.is_quiet(),
+            "FlueJet must preserve audible bore tail right after gate-off"
+        );
+
+        let mut flue_quiet_step = None;
+        for step in 0..(sr as usize * 5) {
+            flue.step();
+            if flue.is_quiet() {
+                flue_quiet_step = Some(step);
+                break;
+            }
+        }
+        assert!(
+            flue_quiet_step.is_some(),
+            "FlueJet bore tail failed to reach is_quiet() within 5s (energy={:.3e})",
+            flue.energy()
+        );
+        let [fl, fr] = flue.read_stereo();
+        assert!(fl.abs().max(fr.abs()) < 1e-6);
+
+        flue.set_gate(true);
+        flue.step();
+        flue.reset();
+        assert!(!flue.gate());
+        assert!(flue.is_quiet());
+
+        // BrassReed: quiet when idle/reset despite pressurized plenum, rings after release, retires cleanly.
+        let mut reed = BrassReed::new_boxed(
+            sr,
+            BrassReedConfig {
+                fundamental_hz: 220.0,
+                atoms: 10,
+                drive: 0.8,
+                velocity: 0.95,
+                radiation: 0.5,
+                triad_amount: 0.3,
+                ..BrassReedConfig::default()
+            },
+        );
+        assert!(!reed.gate());
+        assert!(reed.plenum_energy_joules() > 1.0);
+        assert!(reed.is_quiet());
+
+        reed.set_gate(true);
+        assert!(reed.gate());
+        assert!(!reed.is_quiet());
+        for _ in 0..6_000 {
+            reed.step();
+        }
+        assert!(reed.bore_audibility() > 1e-3);
+
+        reed.set_gate(false);
+        assert!(!reed.gate());
+        assert!(
+            !reed.is_quiet(),
+            "BrassReed must preserve audible bore tail right after gate-off"
+        );
+
+        let mut reed_quiet_step = None;
+        for step in 0..(sr as usize * 4) {
+            reed.step();
+            if reed.is_quiet() {
+                reed_quiet_step = Some(step);
+                break;
+            }
+        }
+        assert!(
+            reed_quiet_step.is_some(),
+            "BrassReed bore tail failed to reach is_quiet() within 4s (audibility={:.3e})",
+            reed.bore_audibility()
+        );
+        let [rl, rr] = reed.read_stereo();
+        assert!(rl.abs().max(rr.abs()) < 1e-6);
+
+        reed.set_gate(true);
+        reed.step();
+        reed.reset();
+        assert!(!reed.gate());
+        assert!(reed.is_quiet());
     }
 }

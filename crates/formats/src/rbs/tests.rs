@@ -192,6 +192,49 @@ fn build_synthetic_rbs_42() -> Vec<u8> {
     )
 }
 
+fn assert_tb303_cubic_rack(
+    rack: &cadence_core::rack::RackPatch,
+    expected_wf: cadence_core::rack::Waveform,
+) {
+    use cadence_core::rack::{EnvMode, FilterMode, ModuleKind, TriggerMode};
+
+    let targets = calibration::resolve_tb303_targets(rack).expect("TB-303 targets");
+    let zone = &rack.zones[0];
+    let vco = zone
+        .modules
+        .iter()
+        .find_map(|m| match &m.kind {
+            ModuleKind::Vco(v) if m.id == targets.vco_id => Some(v),
+            _ => None,
+        })
+        .expect("TB-303 VCO");
+    assert_eq!(vco.waveform, expected_wf);
+    assert!((vco.reach - 0.94).abs() < 1e-6);
+    assert!((vco.shape - 0.50).abs() < 1e-6);
+    assert!((vco.pulse_width - 0.50).abs() < 1e-6);
+    assert!((vco.level - 1.0).abs() < 1e-6);
+    assert!(zone.modules.iter().any(|m| {
+        matches!(
+            m.kind,
+            ModuleKind::Filter(f)
+                if m.id == targets.filter_id && f.mode == FilterMode::DiodeLadder
+        )
+    }));
+    let filter_env = zone
+        .modules
+        .iter()
+        .find_map(|m| match &m.kind {
+            ModuleKind::Env(e) if m.id == targets.filter_env_id => Some(e),
+            _ => None,
+        })
+        .expect("TB-303 Filter Env");
+    assert_eq!(filter_env.mode, EnvMode::Capacitor);
+    assert!((filter_env.attack_ms - 2.2).abs() < 1e-6);
+    assert!((filter_env.hold_ms - 4.0).abs() < 1e-6);
+    assert!((filter_env.cubic_limit - 0.45).abs() < 1e-6);
+    assert_eq!(filter_env.trigger_mode, TriggerMode::OneShot);
+}
+
 #[test]
 fn synthetic_rbs_42_parses_converts_validates_and_compiles() {
     let bytes = build_synthetic_rbs_42();
@@ -236,16 +279,10 @@ fn synthetic_rbs_42_parses_converts_validates_and_compiles() {
         dist_dev.kind,
         EffectKind::Drive(p) if p.mode == cadence_core::mixer::DriveMode::ShockPort
     ));
-    assert!(project.instruments[0].rack.zones[0]
-        .modules
-        .iter()
-        .any(|m| {
-            matches!(
-                m.kind,
-                cadence_core::rack::ModuleKind::Filter(f)
-                    if f.mode == cadence_core::rack::FilterMode::DiodeLadder
-            )
-        }));
+    assert_tb303_cubic_rack(
+        &project.instruments[0].rack,
+        cadence_core::rack::Waveform::MobiusJet,
+    );
     // Must compile cleanly into a valid executable ScoreWindow!
     let score = project.compile().unwrap();
     assert_eq!(score.bars(), 4);
@@ -1384,7 +1421,17 @@ fn tb303_velocity_threshold_vintage_drive_and_decay_ramp_mode() {
     use cadence_core::dsp::{acid_accent_amount, ACID_ACCENT_THRESHOLD};
     use cadence_core::material::ModulationTarget;
     use cadence_core::params::{InstrumentParam, ValueMode};
-    use cadence_core::rack::ModuleParam;
+    use cadence_core::rack::{ModuleParam, Waveform};
+
+    // TB-303 waveform selector maps Saw (0) -> MobiusJet and Square (!= 0) -> MobiusPwm.
+    assert_eq!(
+        calibration::rbs_303_waveform_f32(0),
+        Waveform::MobiusJet.to_index() as f32
+    );
+    assert_eq!(
+        calibration::rbs_303_waveform_f32(1),
+        Waveform::MobiusPwm.to_index() as f32
+    );
 
     // TB-303 normal velocity sits cleanly below DiodeLadder accent threshold; accent hits 1.0.
     assert!(f64::from(calibration::RBS_303_NORMAL_VEL) < ACID_ACCENT_THRESHOLD);
@@ -1394,8 +1441,8 @@ fn tb303_velocity_threshold_vintage_drive_and_decay_ramp_mode() {
     );
     assert!((acid_accent_amount(f64::from(calibration::RBS_303_ACCENT_VEL)) - 1.0).abs() < 1e-6);
 
-    // Vintage mode scales TB-303 filter decay cleanly on the Filter Env module;
-    // Decay (ctrl 6) automates as smooth ValueMode::Ramp.
+    // Vintage mode scales TB-303 Capacitor filter decay cleanly on the Filter Env module;
+    // Decay (ctrl 6) automates as smooth ValueMode::Ramp, Waveform (ctrl 8) as ValueMode::Hold.
     let mut song = RbsSong {
         song_mode: true,
         loop_on: true,
@@ -1404,6 +1451,7 @@ fn tb303_velocity_threshold_vintage_drive_and_decay_ramp_mode() {
         ..RbsSong::default()
     };
     song.tb303[0].patterns[0].steps[0].rest = false;
+    song.tb303[1].params[8] = 1; // Square -> MobiusPwm
     song.tracks[1] = vec![
         TrackEvent {
             pos: 0,
@@ -1421,14 +1469,29 @@ fn tb303_velocity_threshold_vintage_drive_and_decay_ramp_mode() {
             value: 20,
         },
         TrackEvent {
+            pos: 0,
+            ctrl: 8,
+            value: 0,
+        },
+        TrackEvent {
             pos: 32,
             ctrl: 6,
             value: 115,
+        },
+        TrackEvent {
+            pos: 32,
+            ctrl: 8,
+            value: 1,
         },
     ];
     let modern = song.to_cadence_project("Modern").unwrap();
     song.vintage = true;
     let vintage = song.to_cadence_project("Vintage").unwrap();
+
+    // Verify TB-303 A (saw -> MobiusJet) and TB-303 B (square -> MobiusPwm) static settings
+    // plus Capacitor filter envelope invariants.
+    assert_tb303_cubic_rack(&modern.instruments[0].rack, Waveform::MobiusJet);
+    assert_tb303_cubic_rack(&modern.instruments[1].rack, Waveform::MobiusPwm);
 
     // Verify IFF GLOB[482] = 1 parses `vintage = true` end-to-end through `import_rbs_bytes`.
     let mut iff_bytes = build_synthetic_rbs_42();
@@ -1515,6 +1578,76 @@ fn tb303_velocity_threshold_vintage_drive_and_decay_ramp_mode() {
         vin_pts.last().unwrap().value < mod_pts.last().unwrap().value,
         "Vintage TB-303 automated Decay curve must stay shorter than Modern"
     );
+
+    // Song-Mode Waveform switch (ctrl 8: 0 -> 1) emits Hold automation from MobiusJet to MobiusPwm.
+    let wave_mod = modern
+        .modulations
+        .iter()
+        .find(|m| {
+            m.target
+                == ModulationTarget::Instrument {
+                    instrument: modern.instruments[0].id,
+                    parameter: InstrumentParam::Module {
+                        zone: mod_targets.zone_id,
+                        module: mod_targets.vco_id,
+                        param: ModuleParam::Waveform,
+                    },
+                }
+        })
+        .expect("303A Wave modulation");
+    assert_eq!(
+        modern.value_mode(wave_mod.pattern).unwrap(),
+        ValueMode::Hold
+    );
+    let PatternKind::Values {
+        points: wave_pts, ..
+    } = &modern.pattern(wave_mod.pattern).unwrap().kind
+    else {
+        panic!("expected Values pattern");
+    };
+    assert_eq!(wave_pts.len(), 2);
+    assert!(
+        (wave_pts[0].value
+            - ModuleParam::Waveform.normalize(Waveform::MobiusJet.to_index() as f32))
+        .abs()
+            < 1e-5
+    );
+    assert!(
+        (wave_pts[1].value
+            - ModuleParam::Waveform.normalize(Waveform::MobiusPwm.to_index() as f32))
+        .abs()
+            < 1e-5
+    );
+
+    // Custom catalog `acid-303` presets with non-default VCO reach/shape or ADSR filter env
+    // are normalized to crisp Mobius VCO and Capacitor filter envelope invariants.
+    let mut custom_303 = cadence_core::rack::RackPatch::acid_303();
+    for m in &mut custom_303.zones[0].modules {
+        match &mut m.kind {
+            cadence_core::rack::ModuleKind::Vco(v) => {
+                v.reach = 0.50;
+                v.shape = 0.20;
+            }
+            cadence_core::rack::ModuleKind::Env(e) if m.name == "Filter Env" => {
+                e.mode = cadence_core::rack::EnvMode::Adsr;
+                e.trigger_mode = cadence_core::rack::TriggerMode::Gate;
+                e.cubic_limit = 0.0;
+            }
+            _ => {}
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let synth_dir = tmp.path().join("synth");
+    std::fs::create_dir_all(&synth_dir).unwrap();
+    cadence_core::presets::InstrumentPreset::new("Acid 303", Some("Bass".into()), custom_303)
+        .save(&synth_dir.join("acid-303.json"))
+        .unwrap();
+    let catalog = cadence_core::presets::PresetCatalog::from_roots(&[tmp.path().to_path_buf()]);
+    let mut notices = Vec::new();
+    let params = [1, 0, 64, 48, 90, 80, 64, 100, 1]; // Square -> MobiusPwm
+    let calibrated = calibration::rack_patch_for_303(&params, false, &catalog, &mut notices);
+    assert!(notices.is_empty(), "unexpected notices: {notices:?}");
+    assert_tb303_cubic_rack(&calibrated, Waveform::MobiusPwm);
 }
 
 #[test]

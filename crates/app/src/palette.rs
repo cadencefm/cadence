@@ -109,6 +109,7 @@ enum PaletteAction {
     NewProject,
     Workflow(WorkflowKind),
     QuickAddEffect(&'static str),
+    AddRackModule(cadence_core::rack::ModuleKindTag),
     ClearMeters,
     OpenFileHub(FileHubTab),
     SaveMidiProfileHub,
@@ -499,6 +500,40 @@ impl App {
             "ni",
             PaletteAction::Workflow(WorkflowKind::Instrument),
         );
+        if self
+            .active_instrument()
+            .or(self.selected_instrument)
+            .is_some()
+        {
+            for &tag in cadence_core::rack::ModuleKindTag::ADDABLE {
+                let desc = crate::picker::module_kind_description(tag);
+                let extra_kw = match tag {
+                    cadence_core::rack::ModuleKindTag::Vco => {
+                        "osc oscillator cubic mobius hardy szego dipole poisson"
+                    }
+                    cadence_core::rack::ModuleKindTag::Aero => {
+                        "wind flue jet brass reed pipe bore acoustic modal"
+                    }
+                    cadence_core::rack::ModuleKindTag::Env => {
+                        "envelope adsr hold decay capacitor additive c13"
+                    }
+                    _ => "",
+                };
+                push(
+                    &mut entries,
+                    "RACK",
+                    format!("Add Rack Module: {}", tag.label()),
+                    format!("Add to {active_inst_label} · {desc}"),
+                    format!(
+                        "rack module mod add {} {} {desc} {extra_kw}",
+                        tag.slug(),
+                        tag.label()
+                    ),
+                    "gi: a",
+                    PaletteAction::AddRackModule(tag),
+                );
+            }
+        }
 
         // 3. Transport & Takes
         push(
@@ -2041,6 +2076,15 @@ impl App {
                 channel: self.selected_channel,
                 kind: kind.into(),
             }),
+            PaletteAction::AddRackModule(kind) => {
+                let (instrument, zone) = self.require_active_rack_and_zone()?;
+                self.apply(Action::RackAddModule {
+                    instrument,
+                    zone,
+                    kind,
+                    name: None,
+                })
+            }
             PaletteAction::ClearMeters => self.apply(Action::ClearMeters { channel: None }),
             PaletteAction::OpenFileHub(tab) => {
                 self.open_file_hub(tab);

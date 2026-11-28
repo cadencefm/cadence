@@ -552,10 +552,12 @@ impl App {
                     .iter()
                     .filter_map(|m| matches!(m.kind, ModuleKind::Sampler(_)).then_some(m.id))
                     .collect();
-                let has_synth = z
-                    .modules
-                    .iter()
-                    .any(|m| matches!(m.kind, ModuleKind::Vco(_) | ModuleKind::Noise(_)));
+                let has_synth = z.modules.iter().any(|m| {
+                    matches!(
+                        m.kind,
+                        ModuleKind::Vco(_) | ModuleKind::Aero(_) | ModuleKind::Noise(_)
+                    )
+                });
                 Some((z.name.clone(), midi, z.id, samplers, has_synth))
             })
         else {

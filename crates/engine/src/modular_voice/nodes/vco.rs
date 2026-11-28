@@ -1,4 +1,5 @@
-//! Bandlimited PolyBLEP/PolyBLAMP VCO voice node with unison and 2x oversampled through-zero FM.
+//! Native `1x`-sample-rate cubic and Hardy-space VCO voice node with automatic pitch-aware
+//! Nyquist reach guarding, M/S quadrature chirality, unison, and `1x` through-zero linear FM.
 
 use super::{
     resolve_tracked_pitch_hz, tracked_pitch_arg, tracked_pitch_arg_to_hz,
@@ -7,11 +8,13 @@ use super::{
 };
 use crate::modular_voice::ModuleParams;
 use cadence_core::dsp::{
-    mix_seed, phase_wrap, sanitize_clamp_f64, smooth_step_f32, step_vco_bank, step_vco_bank_fm_2x,
-    unison_gain_comp, unison_offsets, Halfband2x, LogSmoother, VcoStepParams, XorShift32,
-    MAX_UNISON, NYQUIST_SAFE_RATIO,
+    mix_seed, phase_wrap, sanitize_clamp_f64, smooth_step_f32, step_vco_bank, unison_gain_comp,
+    unison_offsets, LogSmoother, VcoStepParams, XorShift32, MAX_UNISON, NYQUIST_SAFE_RATIO,
+    VCO_MAX_REACH,
 };
-use cadence_core::rack::{ModuleKind, ModuleKindTag, ModuleParam, PitchTracking, VcoModule};
+use cadence_core::rack::{
+    ModuleKind, ModuleKindTag, ModuleParam, PitchTracking, VcoModule, Waveform,
+};
 
 const VCO_MIN_HZ: f64 = 0.01;
 const VCO_FALLBACK_HZ: f64 = 440.0;
@@ -25,12 +28,11 @@ pub(in crate::modular_voice) struct VcoNode {
     current: VcoModule,
     pub target: VcoModule,
     phases: [f64; MAX_UNISON],
-    fm_os: Halfband2x,
-    prev_fm_2x: f64,
+    prev_fm_cycles: f64,
+    fm_primed: bool,
     unison_ratios: [f64; MAX_UNISON],
     unison_pan: [[f64; 2]; MAX_UNISON],
     fixed_hz: LogSmoother,
-    has_fm_in: bool,
     cached_unison_key: (u8, u32, u32),
     cached_pitch_key: (PitchTracking, u64, u64, u64),
     cached_base_hz: f64,
@@ -43,12 +45,11 @@ impl VcoNode {
             current: params,
             target: params,
             phases: [0.0; MAX_UNISON],
-            fm_os: Halfband2x::new(),
-            prev_fm_2x: 0.0,
+            prev_fm_cycles: 0.0,
+            fm_primed: false,
             unison_ratios: [1.0; MAX_UNISON],
             unison_pan: [[1.0; 2]; MAX_UNISON],
             fixed_hz: LogSmoother::new(f64::from(params.fixed_hz), 20.0),
-            has_fm_in: false,
             cached_unison_key: (0, u32::MAX, u32::MAX),
             cached_pitch_key: (PitchTracking::Chromatic, u64::MAX, u64::MAX, u64::MAX),
             cached_base_hz: 440.0,
@@ -161,6 +162,15 @@ impl VoiceModule for VcoNode {
         let ModuleKind::Vco(s) = src else {
             return;
         };
+        if !locks.is_module_locked(module_id, ModuleParam::Reach) {
+            self.target.reach = s.reach;
+        }
+        if !locks.is_module_locked(module_id, ModuleParam::Shape) {
+            self.target.shape = s.shape;
+        }
+        if !locks.is_module_locked(module_id, ModuleParam::Chirality) {
+            self.target.chirality = s.chirality;
+        }
         if !locks.is_module_locked(module_id, ModuleParam::Tune) {
             self.target.tune_semitones = s.tune_semitones;
         }
@@ -198,11 +208,10 @@ impl VoiceModule for VcoNode {
         }
 
         let keep_phase = ctx.eff_retarget && (ctx.eff_legato || !ctx.phase_reset);
-        self.has_fm_in = ctx.has_fm_in;
         if !ctx.eff_retarget {
             self.phases = Self::compute_fresh_phases(target, ctx);
-            self.fm_os = Halfband2x::new();
-            self.prev_fm_2x = 0.0;
+            self.prev_fm_cycles = 0.0;
+            self.fm_primed = false;
             self.fixed_hz = LogSmoother::new(f64::from(target.fixed_hz), 20.0);
         } else {
             self.fixed_hz.set_target(f64::from(target.fixed_hz));
@@ -211,8 +220,8 @@ impl VoiceModule for VcoNode {
             }
             if !keep_phase {
                 self.phases = Self::compute_fresh_phases(target, ctx);
-                self.fm_os.reset();
-                self.prev_fm_2x = 0.0;
+                self.prev_fm_cycles = 0.0;
+                self.fm_primed = false;
             }
         }
         self.update_unison();
@@ -221,6 +230,9 @@ impl VoiceModule for VcoNode {
     #[inline]
     fn smooth_step(&mut self, s64: f64) {
         let s32 = s64 as f32;
+        smooth_step_f32(&mut self.current.reach, self.target.reach, s32);
+        smooth_step_f32(&mut self.current.shape, self.target.shape, s32);
+        smooth_step_f32(&mut self.current.chirality, self.target.chirality, s32);
         smooth_step_f32(
             &mut self.current.tune_semitones,
             self.target.tune_semitones,
@@ -277,36 +289,51 @@ impl VoiceModule for VcoNode {
                 VCO_FALLBACK_HZ,
             );
         }
-        let base_hz = self.cached_base_hz;
-        let pw = sanitize_clamp_f64(f64::from(vco.pulse_width) + inputs.pw_cv, 0.02, 0.98, 0.5);
-        let unison_count = usize::from(vco.unison_voices.clamp(1, MAX_UNISON as u8));
-        let level = f64::from(vco.level) * unison_gain_comp(unison_count);
-
-        let step_params = VcoStepParams {
-            waveform: vco.waveform,
-            unison_count,
-            base_hz,
-            sample_rate: sr,
-            pw,
-            level,
-        };
-        if self.has_fm_in {
-            step_vco_bank_fm_2x(
-                step_params,
-                &mut self.fm_os,
-                &mut self.phases,
-                &mut self.prev_fm_2x,
-                &self.unison_ratios,
-                &self.unison_pan,
-                inputs.fm_cycles,
+        let base_freq_hz = self.cached_base_hz;
+        let (pw, reach) = if vco.waveform == Waveform::MobiusPwm {
+            (
+                sanitize_clamp_f64(f64::from(vco.pulse_width) + inputs.pw_cv, 0.05, 0.95, 0.5),
+                sanitize_clamp_f64(f64::from(vco.reach), 0.0, VCO_MAX_REACH, 0.92),
             )
         } else {
-            step_vco_bank(
-                step_params,
-                &mut self.phases,
-                &self.unison_ratios,
-                &self.unison_pan,
+            (
+                sanitize_clamp_f64(f64::from(vco.pulse_width), 0.05, 0.95, 0.5),
+                sanitize_clamp_f64(
+                    f64::from(vco.reach) + inputs.pw_cv,
+                    0.0,
+                    VCO_MAX_REACH,
+                    0.92,
+                ),
             )
-        }
+        };
+        let shape = sanitize_clamp_f64(f64::from(vco.shape), 0.0, 1.0, 0.5);
+        let chirality = sanitize_clamp_f64(f64::from(vco.chirality), -1.0, 1.0, 0.0);
+        let voices = usize::from(vco.unison_voices.clamp(1, MAX_UNISON as u8));
+        let level = f64::from(vco.level) * unison_gain_comp(voices);
+        let fm_cycles = if self.fm_primed {
+            inputs.fm_cycles - self.prev_fm_cycles
+        } else {
+            self.fm_primed = true;
+            0.0
+        };
+        self.prev_fm_cycles = inputs.fm_cycles;
+
+        step_vco_bank(
+            VcoStepParams {
+                waveform: vco.waveform,
+                base_freq_hz,
+                sample_rate: sr,
+                reach,
+                shape,
+                chirality,
+                pw,
+                fm_cycles,
+                level,
+                voices,
+            },
+            &mut self.phases,
+            &self.unison_ratios,
+            &self.unison_pan,
+        )
     }
 }

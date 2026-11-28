@@ -1001,6 +1001,9 @@ mod tests {
         assert_choice_contract::<crate::mixer::DriveMode>();
         assert_choice_contract::<crate::mixer::EffectKindTag>();
         assert_choice_contract::<crate::rack::Waveform>();
+        assert_choice_contract::<crate::rack::AeroMode>();
+        assert_choice_contract::<crate::rack::BodyGeometry>();
+        assert_choice_contract::<crate::rack::EnvMode>();
         assert_choice_contract::<crate::rack::FilterMode>();
         assert_choice_contract::<crate::rack::ResonatorMode>();
         assert_choice_contract::<crate::rack::LfoShape>();

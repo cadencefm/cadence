@@ -1,4 +1,5 @@
-//! ADSR / Hold-Decay modular envelope voice node with pre-delay, multi-burst, and external TrigIn.
+//! ADSR / Hold-Decay / 0-Hz Capacitor modular envelope voice node with cubic self-limiting,
+//! additive charge stacking, pre-delay, multi-burst, and external TrigIn.
 
 use super::{
     write_copy_module_normalized, NodeInputs, ProcessCtx, TriggerCtx, TriggerState, VoiceLocks,
@@ -71,6 +72,9 @@ impl VoiceModule for EnvNode {
         if !locks.is_module_locked(module_id, ModuleParam::Sustain) {
             self.target.sustain = s.sustain;
         }
+        if !locks.is_module_locked(module_id, ModuleParam::CubicLimit) {
+            self.target.cubic_limit = s.cubic_limit;
+        }
     }
 
     #[inline]
@@ -130,6 +134,7 @@ impl VoiceModule for EnvNode {
     fn smooth_step(&mut self, s64: f64) {
         let s32 = s64 as f32;
         smooth_step_f32(&mut self.current.sustain, self.target.sustain, s32);
+        smooth_step_f32(&mut self.current.cubic_limit, self.target.cubic_limit, s32);
     }
 
     #[inline]
@@ -142,6 +147,14 @@ impl VoiceModule for EnvNode {
                 self.env.release();
             }
             self.prev_trig = inputs.trig_in;
+        }
+        let cubic_limit = if env_p.cubic_limit.is_finite() {
+            env_p.cubic_limit.clamp(0.0, 10.0)
+        } else {
+            0.0
+        };
+        if cubic_limit.to_bits() != self.env.params().cubic_limit.to_bits() {
+            self.env.set_cubic_limit(cubic_limit);
         }
         let v = self.env.next(env_p.sustain);
         [v, v]
@@ -156,7 +169,10 @@ impl VoiceModule for EnvNode {
 
     #[inline]
     fn on_force_release(&mut self, sample_rate: f64, _rel_coeff: f64) {
-        if self.current.trigger_mode == TriggerMode::OneShot {
+        if matches!(
+            self.current.trigger_mode,
+            TriggerMode::OneShot | TriggerMode::Additive
+        ) {
             self.env.choke(sample_rate);
         } else {
             self.env.release();

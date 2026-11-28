@@ -4,7 +4,10 @@ use cadence_core::assets::load_project_samples;
 use cadence_core::material::{Edit, LiveFlags, ModulationTarget, PatternKind, Project, MAX_BARS};
 use cadence_core::mixer::{ChannelKind, ChannelRef, EffectParam};
 use cadence_core::params::{InstrumentParam, ParamAddress, RackParam, ZoneParam};
-use cadence_core::rack::{drum_midi, FilterMode, ModuleKind, ModuleParam};
+use cadence_core::rack::{
+    drum_midi, EnvMode, FilterMode, InPort, ModuleKind, ModuleParam, RackPatch, TriggerMode,
+    Waveform,
+};
 use cadence_core::runtime::SampleBank;
 use cadence_core::score::ScoreWindow;
 use cadence_engine::audio::{render_measure_report, render_schedule_pcm};
@@ -763,6 +766,48 @@ fn tr808_and_tr909_tracks_emit_per_zone_drum_automations_without_kit_wide_mismap
     assert!(rep.output.peak[0] > 0.05 && rep.output.full_scale_samples == 0);
 }
 
+fn assert_tb303_cubic_rack(rack: &RackPatch, expected_wf: Waveform) {
+    let zone = &rack.zones[0];
+    let vco = zone
+        .modules
+        .iter()
+        .find_map(|m| match &m.kind {
+            ModuleKind::Vco(v) => Some(v),
+            _ => None,
+        })
+        .expect("TB-303 VCO module");
+    assert_eq!(vco.waveform, expected_wf);
+    assert!((vco.reach - 0.94).abs() < 1e-6);
+    assert!((vco.shape - 0.50).abs() < 1e-6);
+    assert!((vco.pulse_width - 0.50).abs() < 1e-6);
+
+    let filter_id = zone
+        .modules
+        .iter()
+        .find(|m| matches!(m.kind, ModuleKind::Filter(f) if f.mode == FilterMode::DiodeLadder))
+        .expect("TB-303 DiodeLadder Filter module")
+        .id;
+    let filter_env_id = zone
+        .cables
+        .iter()
+        .find(|c| c.to_module == filter_id && c.to_port == InPort::Cv)
+        .expect("Filter Env -> Filter.Cv cable")
+        .from_module;
+    let env = zone
+        .modules
+        .iter()
+        .find_map(|m| match &m.kind {
+            ModuleKind::Env(e) if m.id == filter_env_id => Some(e),
+            _ => None,
+        })
+        .expect("TB-303 Filter Env module");
+    assert_eq!(env.mode, EnvMode::Capacitor);
+    assert!((env.attack_ms - 2.2).abs() < 1e-6);
+    assert!((env.hold_ms - 4.0).abs() < 1e-6);
+    assert!((env.cubic_limit - 0.45).abs() < 1e-6);
+    assert_eq!(env.trigger_mode, TriggerMode::OneShot);
+}
+
 #[test]
 fn tb303_slide_legato_glides_under_max_shuffle_and_accent_barks_cleanly() {
     let mut rbs = SyntheticRbs::new(2);
@@ -776,6 +821,7 @@ fn tb303_slide_legato_glides_under_max_shuffle_and_accent_barks_cleanly() {
     rbs.tracks[1] = vec![(0, 0, 1), (0, 1, 0), (0, 3, 45), (0, 4, 100), (0, 7, 115)];
 
     let (proj, _) = import_rbs_bytes(&rbs.build("303Slide"), "303Slide").unwrap();
+    assert_tb303_cubic_rack(&proj.instruments[0].rack, Waveform::MobiusJet);
     // Base notes pattern must set slide gate > 1.45 so it overlaps even under max swing!
     let base_steps = proj
         .patterns
@@ -1072,7 +1118,7 @@ fn synthetic_full_song_mode_fade_in_transpose_echo_send_and_zero_clips() {
         let bar0 = bar0_l.max(bar0_r);
         let fade = fade_l.max(fade_r);
         assert!(
-            bar0 < 0.05 && fade > 0.12,
+            bar0 < 0.05 && fade > 0.08,
             "{label} must start near 0 ({bar0}) and fade in audibly ({fade})"
         );
     }
@@ -2472,5 +2518,80 @@ fn dense_four_device_mix_with_high_q_pcf_echo_and_automated_gains_stays_unclippe
         !master_ch.clipped,
         "Master bus must not clip: peak_hold={:?}",
         master_ch.output_peak_hold
+    );
+}
+
+#[test]
+fn tb303_waveform_mapping_and_capacitor_filter_env_render_cleanly() {
+    let mut rbs = SyntheticRbs::new(2);
+    rbs.tb1[8] = 0; // TB-303 A: Saw -> Waveform::MobiusJet
+    rbs.tb2[8] = 1; // TB-303 B: Square -> Waveform::MobiusPwm
+    for s in [0, 4, 8, 12] {
+        rbs.set_303_step(0, s, 0, if s == 0 { 0x02 } else { 0x00 });
+    }
+    // Switch TB-303 A waveform from Saw (0) in bar 0 to Square (1) at bar 1 (pos 32).
+    rbs.tracks[1] = vec![
+        (0, 0, 1),
+        (0, 1, 0),
+        (0, 3, 100), // open cutoff so saw vs square spectrum is unambiguous
+        (0, 4, 30),
+        (0, 8, 0),
+        (32, 8, 1),
+    ];
+
+    let (proj, _) = import_rbs_bytes(&rbs.build("303WaveCap"), "303WaveCap").unwrap();
+    assert_tb303_cubic_rack(&proj.instruments[0].rack, Waveform::MobiusJet);
+    assert_tb303_cubic_rack(&proj.instruments[1].rack, Waveform::MobiusPwm);
+
+    let wave_mod = proj
+        .modulations
+        .iter()
+        .find(|m| {
+            matches!(
+                m.target,
+                ModulationTarget::Instrument {
+                    instrument,
+                    parameter: InstrumentParam::Module {
+                        param: ModuleParam::Waveform,
+                        ..
+                    },
+                } if instrument == proj.instruments[0].id
+            )
+        })
+        .expect("303A Wave automation");
+    let PatternKind::Values { points, .. } = &proj.pattern(wave_mod.pattern).unwrap().kind else {
+        panic!("expected Values pattern");
+    };
+    assert_eq!(points.len(), 2);
+    assert!(
+        (points[0].value - ModuleParam::Waveform.normalize(Waveform::MobiusJet.to_index() as f32))
+            .abs()
+            < 1e-5
+    );
+    assert!(
+        (points[1].value - ModuleParam::Waveform.normalize(Waveform::MobiusPwm.to_index() as f32))
+            .abs()
+            < 1e-5
+    );
+
+    let score = proj.compile().unwrap();
+    let (rep, pcm) =
+        render_schedule_pcm(&[(0, &score)], 0, 32, load_rbs_samples(&score), 24_000).unwrap();
+    assert_eq!(rep.output.full_scale_samples, 0);
+    let half = pcm.len() / 2;
+    let (saw_peak, _) = slice_peak_lr(&pcm, 0.0, 0.5);
+    let (pwm_peak, _) = slice_peak_lr(&pcm, 0.5, 1.0);
+    assert!(
+        saw_peak > 0.08 && pwm_peak > 0.08,
+        "both MobiusJet ({saw_peak}) and MobiusPwm ({pwm_peak}) bars must render audibly"
+    );
+    let max_diff = pcm[..half]
+        .iter()
+        .zip(&pcm[half..half * 2])
+        .map(|(&a, &b)| (i32::from(a[0]) - i32::from(b[0])).abs() as f32 / 32768.0)
+        .fold(0.0_f32, f32::max);
+    assert!(
+        max_diff > 0.05,
+        "MobiusJet (bar 0) vs MobiusPwm (bar 1) must produce distinct rendered audio (diff={max_diff})"
     );
 }

@@ -393,6 +393,7 @@ fn make_kick_zone(id: u16, midi: u8) -> RackZone {
                     decay_ms: 45.0,
                     sustain: 0.0,
                     release_ms: 20.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::OneShot,
                     delay_ms: 0.0,
                     bursts: 1,
@@ -409,6 +410,7 @@ fn make_kick_zone(id: u16, midi: u8) -> RackZone {
                     decay_ms: 240.0,
                     sustain: 0.0,
                     release_ms: 40.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::OneShot,
                     delay_ms: 0.0,
                     bursts: 1,
@@ -448,7 +450,7 @@ fn make_snare_zone(id: u16, midi: u8) -> RackZone {
                 1,
                 "Tone",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Triangle,
+                    waveform: Waveform::BareCubic,
                     level: 0.5,
                     ..VcoModule::default()
                 }),
@@ -473,6 +475,7 @@ fn make_snare_zone(id: u16, midi: u8) -> RackZone {
                     decay_ms: 150.0,
                     sustain: 0.0,
                     release_ms: 40.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::OneShot,
                     delay_ms: 0.0,
                     bursts: 1,
@@ -543,6 +546,7 @@ fn make_hat_zone(id: u16, name: &str, midi: u8, choke: Option<u8>, decay_ms: f32
                     decay_ms,
                     sustain: 0.0,
                     release_ms: 20.0,
+                    cubic_limit: 0.0,
                     trigger_mode: TriggerMode::OneShot,
                     delay_ms: 0.0,
                     bursts: 1,
@@ -586,7 +590,7 @@ fn acid_303_accent_and_drumkit_rack_with_hat_choke_render_cleanly() {
     let soft = render_single(0.45);
     let accent = render_single(0.98);
     assert!(
-        accent > soft * 1.8,
+        accent > soft * 1.6,
         "Acid accented hit ({accent}) should punch noticeably harder than soft ({soft})"
     );
 

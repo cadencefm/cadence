@@ -694,7 +694,7 @@ fn acid_303_rack() -> RackPatch {
                 1,
                 "VCO",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     level: 0.92,
                     ..VcoModule::default()
                 }),
@@ -790,7 +790,9 @@ fn fold_bass_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Triangle,
+                    waveform: Waveform::BareCubic,
+                    reach: 0.35,
+                    shape: 0.0,
                     level: 0.88,
                     ..VcoModule::default()
                 }),
@@ -891,7 +893,7 @@ fn gate_pad_rack() -> RackPatch {
                 1,
                 "VCO A",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Saw,
+                    waveform: Waveform::MobiusJet,
                     fine_cents: -9.0,
                     level: 0.48,
                     unison_voices: 2,
@@ -904,7 +906,7 @@ fn gate_pad_rack() -> RackPatch {
                 2,
                 "VCO B",
                 ModuleKind::Vco(VcoModule {
-                    waveform: Waveform::Pulse,
+                    waveform: Waveform::MobiusPwm,
                     fine_cents: 9.0,
                     pulse_width: 0.38,
                     level: 0.42,
